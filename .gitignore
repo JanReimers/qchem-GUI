@@ -1,0 +1,9 @@
+# Python virtualenv (recreate with: uv venv -p 3.12 .venv && uv pip install -r requirements.txt)
+.venv/
+
+# Rendered demo artifacts (regenerate with: python scripts/make_artifacts.py)
+out/
+
+# Python caches
+__pycache__/
+*.pyc
