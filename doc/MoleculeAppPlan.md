@@ -46,6 +46,17 @@ convergence**, **side-by-side 3D** (synchronized cameras), **difference density*
 Δρ = ρ_A − ρ_B as its own ScalarField. This is why `ComputeBackend` must hand back
 *self-describing snapshots*, not mutate one global state.
 
+**Run-as-async-result (forward-compat for remote/cluster compute).** A `Run`
+carries a lifecycle — `pending → running → ready / failed` — so the GUI NEVER
+assumes compute is instant/synchronous. Local backends resolve immediately; a
+future `RemoteBackend` (cluster job → HDF5) resolves over the network — *same
+interface*. This is the one thing painful to retrofit, and it's needed anyway for
+the OptimizerAssistant (jobs that land in the Run Browser when done). Remote
+transport itself (SSH/SLURM/REST, staging, auth) is DEFERRED — it's an additive
+backend behind `ComputeBackend`, never a rewrite. The model is **Qt-agnostic**
+(observer callbacks, backend injected by factory) — DIP all the way down. Staged
+path: in-process (now) → CI box as a local compute server → remote cluster.
+
 ### Pillar 3 — OptimizerAssistant (multi-factor)
 **Constraint:** compute must be **parameterized + batchable**, producing many Runs
 without blocking the UI.
