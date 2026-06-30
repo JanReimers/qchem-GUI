@@ -78,6 +78,57 @@ Compute     interactive (small) ·· batched/queued (heavy) → HDF5 Run → ins
 
 ---
 
+## UI shell & workspace model (resolved 2026)
+
+**Reject the GaussView shell** (Office-ribbon + MDI interior desktop + everything-
+in-popout-dialogs). Take its *feature completeness* (Part 2), not its look. Aim at
+the modern dockable-panel idiom — ParaView / Blender / VS Code class.
+
+### Shell: single window, dockable panels
+- **One top-level window; panels dock / tab / split** (Qt `QDockWidget`). The 3D
+  viewport is a first-class *panel*, never a popout. Splitting it → two densities
+  side by side (the compare workflow) is trivial. NO MDI child windows.
+- **Inline inspector, not modal dialogs.** A docked Properties/Inspector panel
+  edits the selected object live (field, iso level, slice, run config). Replaces
+  the popout-dialog swarm; the molecule is never covered by a blocking dialog.
+- **Lean contextual toolbar + a command palette** (Ctrl-P, searchable) instead of
+  icon-ribbon rows. The menu bar stays as the complete, accessible command index —
+  but is NOT duplicated wholesale into toolbars.
+- **Detach is opt-in** (pop a panel out for a second monitor), docked by default.
+
+### Panel inventory (molecule app)
+3D Viewport (PyVista) · Run Browser · SCF Convergence (pyqtgraph) · Inspector/
+Properties · Structure table (atoms, bond lengths/angles) · Compare · [later:
+Spectra, Charges]. Reference look: ParaView/Blender, not Office.
+
+### Layouts — light, not a feature
+One well-designed **default** dock layout + a **"Compare"** variant. Rely on Qt's
+native drag-rearrange + "Save Layout" — that gives multi-layout essentially free
+without building a layout-editor. **Named perspectives** and the **nested-notebook**
+(category×item tabs, one-visible-at-a-time) are DEFERRED to the Battery Studio,
+where the plot/parameter volume (MC time-series, species/U/electrolyte params)
+justifies them. The molecule app's handful of views does not.
+
+### Workspace = project (the `.qproj.h5` unit)
+A **Workspace** is a collection of `Run`s + view state, saved as one `.qproj.h5`.
+Two axes of multiplicity, deliberately kept apart:
+- **Runs → inside one workspace, as DATA.** The Run Browser lists every run
+  (method/basis/AE-PP/energy); select one to drive the panels, check several for
+  Compare (split viewports + Δρ). The common case — *same system, different
+  method* — is one project. This is the MDI replacement: many things open, as a
+  data list + splits, not child windows.
+- **Projects → separate OS windows.** Genuinely unrelated work (a water study vs a
+  battery cathode) opens its own real top-level window; the OS/WM handles alt-tab,
+  snapping, multi-monitor. One window = one `.qproj.h5`.
+
+### Update discipline (carry-over)
+**Lazy, visible-only repaints** — never update a hidden tab/panel (Qt `isVisible()`
+gate). Minor for the molecule app (few cheap live plots; density does NOT stream
+during SCF — not useful), but the durable principle that makes the Battery app's
+many time-series scale.
+
+---
+
 ## Part 2 — GaussView-derived feature backlog (molecules)
 
 Source: gaussian.com/gv6glance. Filtered to molecule-relevant items, mapped to our
