@@ -294,23 +294,28 @@ class MainWindow(QtWidgets.QMainWindow):
             elif i == n_occ:     col = "#ffa500"      # LUMO orange
             elif occ > 0.5:      col = "#4dd0e1"      # occupied cyan
             else:                col = "#7a7a7a"      # virtual grey
-            p.plot([x - 0.35, x + 0.35], [e, e], pen=pg.mkPen(col, width=3))
+            # offset α left / β right within the irrep column so the pair doesn't overlap;
+            # narrower level lines (~0.6x) leave room and survive a scrunched panel better
             spin = L.get("spin", "none")             # up/down (polarized) | none (restricted)
+            half = 0.15
+            if   spin == "up":   xc, lx, la = x - 0.18, x - 0.18 - half - 0.02, (1, 0.5)
+            elif spin == "down": xc, lx, la = x + 0.18, x + 0.18 + half + 0.02, (0, 0.5)
+            else:                xc, lx, la = x,        x + half + 0.02,        (0, 0.5)
+            p.plot([xc - half, xc + half], [e, e], pen=pg.mkPen(col, width=3))
             if   spin == "up":   arrows = "↑" if occ > 0.5 else ""
             elif spin == "down": arrows = "↓" if occ > 0.5 else ""
             else:                arrows = "↑↓" if occ >= 1.5 else ("↑" if occ >= 0.5 else "")
             if arrows:
                 t = pg.TextItem(arrows, color=col, anchor=(0.5, 0.5))
-                t.setFont(QtGui.QFont("sans", 22))       # ~3x -- spins should be visible
-                t.setPos(x, e); p.addItem(t)
+                t.setFont(QtGui.QFont("sans", 22)); t.setPos(xc, e); p.addItem(t)
             tag = f"{L['n']}{L['label'].lower()}" if L['label'] != "No Symmetry" else str(L['n'])
-            lab = pg.TextItem(tag, color="#bbb", anchor=(0, 0.5)); lab.setPos(x + 0.38, e); p.addItem(lab)
+            lab = pg.TextItem(tag, color="#bbb", anchor=la); lab.setPos(lx, e); p.addItem(lab)
         p.getAxis("bottom").setTicks([[(i, lab) for lab, i in xmap.items()]])
         p.setTitle(f"MO diagram — {run.spec.summary}")
         if shown:                                     # frame the valence cluster (exclude deep core)
             es = [float(L["e"]) for L in shown]
             valence = [e for e in es if e > -5.0] or es
-            p.setXRange(-0.5, len(order) - 0.5, padding=0.15)
+            p.setXRange(-0.9, len(order) - 0.1, padding=0.05)   # room for α (left) / β (right) labels
             p.setYRange(min(valence) - 0.3, max(es) + 0.3, padding=0)
 
     def _refresh_cmp_box(self):
