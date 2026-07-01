@@ -112,14 +112,19 @@ class QChemBackend(ComputeBackend):
                            tuple(d["origin"]), tuple(d["spacing"]))
 
     # -- SCF: live streaming -----------------------------------------------
-    def run_scf(self):
-        """Re-run the real SCF from the seed; yield one SCFStep per iteration.
-
-        The C++ side is push-based (an observer fires each iteration), so we
-        collect into a list and then yield. For a fast molecular SCF this is
-        sub-second, so the app's per-step timer animates it as a smooth replay
-        of the genuine convergence trace."""
-        steps: list[SCFStep] = []
+    def stream_scf(self, on_step):
+        """Re-run the real SCF from the seed, invoking on_step(SCFStep) LIVE as each
+        iteration is computed (blocking -- call from a worker thread). The C++ side is
+        push-based (an observer fires per iteration) and the binding releases the GIL
+        during the solve, re-acquiring it only for the callback -- so streaming this
+        off the GUI thread keeps the window responsive while the trace fills in real
+        time (vs collecting then replaying)."""
         self._calc.run_scf(lambda it, E, dE, comm, drho:
-                           steps.append(SCFStep(it, E, dE, comm, drho)))
+                           on_step(SCFStep(it, E, dE, comm, drho)))
+
+    def run_scf(self):
+        """Collect-then-yield fallback for non-streaming callers (kept for the
+        ComputeBackend generator contract)."""
+        steps: list[SCFStep] = []
+        self.stream_scf(steps.append)
         yield from steps

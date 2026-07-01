@@ -137,6 +137,18 @@ class Run:
     def run_scf(self):
         self._require_ready(); return self._be.run_scf()
 
+    def stream_scf(self, on_step) -> None:
+        """Live per-iteration SCF replay: invoke on_step(SCFStep) as each iteration is
+        computed. Blocking -- the Qt layer runs it on a worker thread. Falls back to the
+        pre-collected generator if the backend has no streaming hook."""
+        self._require_ready()
+        fn = getattr(self._be, "stream_scf", None)
+        if fn:
+            fn(on_step)
+        else:
+            for s in self._be.run_scf():
+                on_step(s)
+
     def report(self, kind: str) -> dict:
         """Structured report (e.g. 'orbitals') via the backend's JSON channel; {} if unsupported."""
         self._require_ready()

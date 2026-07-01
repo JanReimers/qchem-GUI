@@ -64,6 +64,35 @@ class _ComputeTask(QtCore.QRunnable):
         self._run.compute()
 
 
+class _ScfBridge(QtCore.QObject):
+    """Marshals a live SCF replay from a worker thread onto the GUI thread. The C++
+    observer fires each iteration on the worker; `step` (queued cross-thread) hands
+    the SCFStep to the plot, `done` (error string, '' = ok) re-enables the button."""
+    step = QtCore.Signal(object)
+    done = QtCore.Signal(str)
+
+
+class _ScfTask(QtCore.QRunnable):
+    """Streams Run.stream_scf() off the GUI thread, emitting each step through a
+    _ScfBridge so the convergence trace fills in real time without freezing the UI.
+    `pace` throttles the stream to a watchable cadence -- a tiny molecular SCF
+    otherwise converges in <0.1 s. time.sleep releases the GIL, so pacing on the
+    worker keeps the window responsive rather than blocking it."""
+    def __init__(self, run, bridge, pace=0.08):
+        super().__init__(); self._run = run; self._bridge = bridge; self._pace = pace
+    def run(self):
+        import time
+        def on_step(s):
+            self._bridge.step.emit(s)
+            if self._pace:
+                time.sleep(self._pace)
+        try:
+            self._run.stream_scf(on_step)
+            self._bridge.done.emit("")
+        except Exception as e:                       # noqa: BLE001 -- surface to the status bar
+            self._bridge.done.emit(str(e))
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, open_path=None):
         super().__init__()
@@ -448,25 +477,30 @@ class MainWindow(QtWidgets.QMainWindow):
         elif v <= 0:   v, self._sweep_dir = 0, 1
         self.slice.setValue(v)
 
-    # -- streamed SCF (of the selected run) -------------------------------
+    # -- streamed SCF (of the selected run), off the GUI thread -----------
     def _run_scf(self):
         run = self.ws.selected
         if run is None or not run.is_ready:
             return
         self.scf_steps.clear()
-        self._gen = run.run_scf()
+        self._scf_bridge = _ScfBridge()                  # kept alive on self for the task's lifetime
+        self._scf_bridge.step.connect(self._on_scf_step)
+        self._scf_bridge.done.connect(self._on_scf_done)
         self.run_btn.setEnabled(False)
-        self._timer = QtCore.QTimer(self); self._timer.timeout.connect(self._scf_tick); self._timer.start(120)
+        self.statusBar().showMessage("SCF replay running…")
+        self._pool.start(_ScfTask(run, self._scf_bridge))   # single-thread pool: serialized vs computes
 
-    def _scf_tick(self):
-        try:
-            self.scf_steps.append(next(self._gen))
-        except StopIteration:
-            self._timer.stop(); self.run_btn.setEnabled(True); return
-        s = self.scf_steps; it = [x.iteration for x in s]
-        self.c_dE.setData(it, [x.dE for x in s]); self.c_comm.setData(it, [x.commutator for x in s])
-        self.c_drho.setData(it, [x.drho for x in s])
-        self.statusBar().showMessage(f"iter {s[-1].iteration}  E = {s[-1].energy:.6f} Ha")
+    def _on_scf_step(self, s):
+        self.scf_steps.append(s)                          # runs on the GUI thread (queued from the worker)
+        steps = self.scf_steps; it = [x.iteration for x in steps]
+        self.c_dE.setData(it, [x.dE for x in steps]); self.c_comm.setData(it, [x.commutator for x in steps])
+        self.c_drho.setData(it, [x.drho for x in steps])
+        self.statusBar().showMessage(f"iter {s.iteration}  E = {s.energy:.6f} Ha")
+
+    def _on_scf_done(self, err):
+        self.run_btn.setEnabled(True)
+        self.statusBar().showMessage(f"SCF replay failed: {err}" if err
+                                     else f"SCF replay done — {len(self.scf_steps)} iterations")
 
     def _save_workspace(self):
         from qviz import project
