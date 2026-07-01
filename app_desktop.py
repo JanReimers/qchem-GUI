@@ -39,7 +39,8 @@ from qviz.backend_analytic import AnalyticBackend
 
 def make_backend(spec: RunSpec):
     if _HAVE_QCHEM:
-        return QChemBackend(list(spec.numbers), list(spec.positions), spec.basis, spec.method)
+        return QChemBackend(list(spec.numbers), list(spec.positions),
+                            spec.basis, spec.method, spec.symmetry)
     return AnalyticBackend()                   # geometry-agnostic (water) stand-in
 
 
@@ -76,7 +77,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.struct_view = QtWidgets.QPlainTextEdit(); self.struct_view.setReadOnly(True)
         self.struct_view.setFont(QtGui.QFont("monospace"))
         struct_dock = self._dock("Structure", self.struct_view, QtCore.Qt.LeftDockWidgetArea)
+
+        self.orb_view = QtWidgets.QPlainTextEdit(); self.orb_view.setReadOnly(True)
+        self.orb_view.setFont(QtGui.QFont("monospace"))
+        orb_dock = self._dock("Orbitals", self.orb_view, QtCore.Qt.LeftDockWidgetArea)
+
         self.tabifyDockWidget(runs_dock, struct_dock)
+        self.tabifyDockWidget(struct_dock, orb_dock)
         runs_dock.raise_()
 
         # right dock (top): Inspector
@@ -95,6 +102,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.basis_box = QtWidgets.QComboBox(); self.basis_box.addItems(["dzvp", "orb1", "dzvp2", "tzvp"])
         self.basis_box.setToolTip("orb1 is the smallest/fastest — use it for bigger molecules (e.g. benzene)")
         form.addRow("Basis", self.basis_box)
+        self.sym_check = QtWidgets.QCheckBox("point-group symmetry (SALC → irrep labels)")
+        self.sym_check.setChecked(True)          # default on so the orbital table carries irrep labels
+        form.addRow(self.sym_check)
 
         self.field_box = QtWidgets.QComboBox()
         self.field_box.addItems(["Electron density", "HOMO", "HOMO-1", "HOMO-2", "HOMO-3"])
@@ -172,7 +182,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _add_molecule(self, name: str):
         Z, pos, basis, n = molecules.MOLECULES[name]
         self._add_spec(RunSpec(label=name.split(" (")[0], numbers=tuple(Z), positions=tuple(pos),
-                               basis=self.basis_box.currentText(), method=self.method_box.currentText()))
+                               basis=self.basis_box.currentText(), method=self.method_box.currentText(),
+                               symmetry=self.sym_check.isChecked()))
 
     def _import_xyz(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import molecule (xyz)", "", "XYZ (*.xyz)")
@@ -183,7 +194,8 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:                   # noqa: BLE001
             self.statusBar().showMessage(f"xyz import failed: {e}"); return
         self._add_spec(RunSpec(label=label, numbers=tuple(numbers), positions=tuple(positions),
-                               basis=self.basis_box.currentText(), method=self.method_box.currentText()))
+                               basis=self.basis_box.currentText(), method=self.method_box.currentText(),
+                               symmetry=self.sym_check.isChecked()))
 
     def _on_ws_change(self, ws: Workspace):
         self._syncing = True
@@ -199,8 +211,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.struct_view.setPlainText(
             f"{sel.spec.summary}\n\n{geometry.report(sel.structure())}"
             if (sel is not None and sel.is_ready) else "")
+        self._update_orbitals(sel)
         self._refresh_cmp_box()
         self._refresh_3d()
+
+    def _update_orbitals(self, run):
+        if run is None or not run.is_ready:
+            self.orb_view.setPlainText(""); return
+        rep = run.report("orbitals")
+        if not rep or "levels" not in rep:
+            self.orb_view.setPlainText("(orbital report unavailable)"); return
+        lines = [f"{run.spec.summary}   E = {rep.get('energy', 0):.6f} Ha", "",
+                 f"{'e (Ha)':>10} {'occ':>4}  MO"]
+        for L in rep["levels"]:
+            tag = f"{L['n']}{L['label'].lower()}" if L['label'] != "No Symmetry" else str(L['n'])
+            lines.append(f"{L['e']:10.4f} {L['occ']:4.1f}  {tag}")
+        self.orb_view.setPlainText("\n".join(lines))
 
     def _refresh_cmp_box(self):
         """List READY runs that share the selected run's geometry (valid Δρ partners)."""

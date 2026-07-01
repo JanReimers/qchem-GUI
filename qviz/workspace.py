@@ -38,12 +38,13 @@ class RunSpec:
     label: str
     numbers: tuple[int, ...]
     positions: tuple[float, ...]    # flat 3N, bohr
-    method: str = "HF"             # HF | LDA | ...  (only HF wired in the binding today)
+    method: str = "HF"             # HF | LDA | Xalpha
     basis: str = "dzvp"
+    symmetry: bool = False         # SALC point-group blocking (adds irrep labels)
 
     @property
     def summary(self) -> str:
-        return f"{self.label} · {self.method}/{self.basis}"
+        return f"{self.label} · {self.method}/{self.basis}" + (" · sym" if self.symmetry else "")
 
 
 # A factory maps a spec -> a ComputeBackend. THIS is the DIP seam: the Workspace
@@ -122,6 +123,12 @@ class Run:
 
     def run_scf(self):
         self._require_ready(); return self._be.run_scf()
+
+    def report(self, kind: str) -> dict:
+        """Structured report (e.g. 'orbitals') via the backend's JSON channel; {} if unsupported."""
+        self._require_ready()
+        rep = getattr(self._be, "report", None)
+        return rep(kind) if rep else {}
 
     def _require_ready(self) -> None:
         if not self.is_ready:

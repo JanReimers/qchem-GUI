@@ -60,12 +60,18 @@ WATER_POSITIONS = [0.0, 0.0, 0.0,
 
 
 class QChemBackend(ComputeBackend):
-    def __init__(self, numbers=None, positions=None, basis="dzvp", method="HF", max_iter=20):
+    def __init__(self, numbers=None, positions=None, basis="dzvp", method="HF",
+                 symmetry=False, max_iter=20):
         numbers = list(numbers if numbers is not None else WATER_NUMBERS)
         positions = list(np.asarray(positions if positions is not None
                                     else WATER_POSITIONS, float).ravel())
-        self._calc = qchem_py.Calculator(numbers, positions, basis, method, max_iter)
+        self._calc = qchem_py.Calculator(numbers, positions, basis, method, symmetry, max_iter)
         self._struct = self._read_structure()
+
+    def report(self, kind: str) -> dict:
+        """Structured report from the lib's JSON channel (e.g. 'orbitals')."""
+        import json
+        return json.loads(self._calc.report(kind))
 
     # -- geometry ----------------------------------------------------------
     def _read_structure(self) -> Structure:
