@@ -144,8 +144,10 @@ class MainWindow(QtWidgets.QMainWindow):
                                  "LUMO", "LUMO+1", "LUMO+2"])
         self.field_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Field", self.field_box)
 
-        self.rep_box = QtWidgets.QComboBox(); self.rep_box.addItems(["Isosurface", "Wireframe", "Volume"])
-        self.rep_box.setToolTip("Wireframe = see-through mesh; Volume = translucent colour-burst cloud")
+        self.rep_box = QtWidgets.QComboBox()
+        self.rep_box.addItems(["Isosurface", "Wireframe", "Surface z(x,y)"])
+        self.rep_box.setToolTip("Wireframe = see-through mesh; "
+                                "Surface z(x,y) = lift the 'Slice z' plane into a height surface")
         self.rep_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Representation", self.rep_box)
 
         # Δρ vs another SAME-GEOMETRY run (populated on workspace change)
@@ -365,16 +367,17 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         f, struct = self._current_field()
         p = self.plotter
-        keep = self.ws.selected is self._cam_run     # same run -> preserve the user's view
+        rep = self.rep_box.currentText()
+        rep_changed = rep != getattr(self, "_last_rep", None)   # switching rep re-frames the view
+        keep = (self.ws.selected is self._cam_run) and not rep_changed
         cam = p.camera_position if keep else None
         p.suppress_rendering = True
         try:
             p.clear()
-            if f is not None:
-                rep = self.rep_box.currentText()
-                if rep == "Volume":                  # translucent colour-burst cloud (no isolevel)
-                    scene.add_volume(p, f)
-                elif f.signed:                       # orbital / Δρ: slider = ±frac·max|f|
+            if f is not None and rep == "Surface z(x,y)":   # standalone height surface (no atoms/slice)
+                scene.add_height_surface(p, f, z_frac=self.slice.value() / 100.0)
+            elif f is not None:
+                if f.signed:                         # orbital / Δρ: slider = ±frac·max|f|
                     scene.add_isosurface(p, f, signed_frac=self.iso.value() / 1000.0,
                                          style="wireframe" if rep == "Wireframe" else "surface")
                 else:
@@ -398,8 +401,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if cam is not None:
             p.camera_position = cam                  # keep view across control changes
         else:
+            if rep == "Surface z(x,y)":
+                p.camera_position = "iso"             # a 3/4 view suits the height surface
             p.reset_camera(); p.camera.zoom(0.85)    # fit the new run + a little breathing room
             self._cam_run = self.ws.selected
+        self._last_rep = rep
         p.render()
 
     def _toggle_spin(self, on):

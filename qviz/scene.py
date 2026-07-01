@@ -74,28 +74,33 @@ def add_isosurface(p: pv.Plotter, f: ScalarField, *, levels=None,
                            style=style, smooth_shading=not wire, show_scalar_bar=False)
 
 
-def add_volume(p: pv.Plotter, f: ScalarField, *, cmap=None):
-    """Volume rendering ('colour burst') -- a translucent colormapped cloud of the
-    whole field, complementing the single-level isosurface. Diverging map for
-    signed fields (orbitals, Δρ), sequential for densities.
-
-    Clim comes from PERCENTILES, not max: the density spikes orders of magnitude
-    at the nuclei, so a max-based window would leave only pinpoint cores glowing
-    and the whole valence cloud invisible. fixed_point mapper so it renders under
-    software (off-screen / GPU-less) VTK too."""
-    grid = field_to_imagedata(f)
+def add_height_surface(p: pv.Plotter, f: ScalarField, *, z_frac=0.5,
+                       cmap=None, relief=0.5) -> int:
+    """Lift a single z-plane of the field into a 3D SURFACE: height = f(x,y) on the
+    selected plane (the classic `plot_surface` view). Peaks/valleys of ρ or an MO
+    on a slice, complementing the isosurface. z_frac ∈ [0,1] picks the plane;
+    returns the chosen k index. Height is scaled so max|f| ≈ relief·(in-plane extent)."""
     vals = np.asarray(f.values)
-    if f.signed:
-        a = np.abs(vals)
-        c = float(np.percentile(a[a > 1e-6], 99.0)) if (a > 1e-6).any() else 1e-9
-        p.add_volume(grid, cmap=cmap or "coolwarm", clim=[-c, c], mapper="fixed_point",   # wide clear
-                     opacity=[0.8, 0.25, 0.0, 0.0, 0.0, 0.25, 0.8], show_scalar_bar=False)  # zero band
-    else:
-        pos = vals[vals > 1e-5]
-        lo = float(np.percentile(pos, 50.0)) if pos.size else 0.0
-        hi = float(np.percentile(pos, 99.0)) if pos.size else 1e-9
-        p.add_volume(grid, cmap=cmap or "plasma", clim=[lo, hi], mapper="fixed_point",
-                     opacity="sigmoid", show_scalar_bar=False)
+    nx, ny, nz = f.dims
+    ox, oy, _ = f.origin
+    dx, dy, _ = f.spacing
+    k = int(round(z_frac * (nz - 1)))
+    slab = vals[:, :, k]                              # (nx, ny)
+    X, Y = np.meshgrid(ox + dx * np.arange(nx),
+                       oy + dy * np.arange(ny), indexing="ij")
+    span = max(dx * (nx - 1), dy * (ny - 1))
+    peak = float(np.abs(slab).max()) or 1e-9
+    H = relief * span                                # scaled height of max|f|
+    grid = pv.StructuredGrid(X, Y, slab * (H / peak))
+    grid["value"] = grid.points[:, 2]                # colour by height (== scaled f), point-aligned
+    if cmap is None:
+        cmap = "coolwarm" if f.signed else "hot"
+    # signed field -> symmetric clim so zero maps to the diverging map's white midpoint
+    clim = [-H, H] if f.signed else None
+    p.add_mesh(grid, scalars="value", cmap=cmap, clim=clim, show_scalar_bar=False,
+               show_edges=True, edge_color="#404040", line_width=1,
+               smooth_shading=True, specular=0.25)
+    return k
 
 
 def add_vector_glyphs(p: pv.Plotter, vf: VectorField, *, factor=0.6, stride=2,
