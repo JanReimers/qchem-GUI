@@ -56,9 +56,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._cam_run = None          # which run the camera is fitted to (reset only on change)
         self.setWindowTitle("qchem viz")
         self.resize(1360, 860)
+        self._settings = QtCore.QSettings("qchem-GUI", "desktop")
         self._build_ui()
         self.ws.on_change(self._on_ws_change)
         self._add_molecule("Water (H2O)")       # seed one run so the window isn't empty
+        self._restore_layout()                   # after docks exist + a run is shown
 
     # -- layout -----------------------------------------------------------
     def _build_ui(self):
@@ -90,6 +92,9 @@ class MainWindow(QtWidgets.QMainWindow):
         h.addWidget(self.mol_box); h.addWidget(self.method_box); h.addWidget(self.add_btn)
         form.addRow("Molecule", row)
         self._update_add_label()
+        self.basis_box = QtWidgets.QComboBox(); self.basis_box.addItems(["dzvp", "orb1", "dzvp2", "tzvp"])
+        self.basis_box.setToolTip("orb1 is the smallest/fastest — use it for bigger molecules (e.g. benzene)")
+        form.addRow("Basis", self.basis_box)
 
         self.field_box = QtWidgets.QComboBox()
         self.field_box.addItems(["Electron density", "HOMO", "HOMO-1", "HOMO-2", "HOMO-3"])
@@ -141,6 +146,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _dock(self, title, widget, area):
         d = QtWidgets.QDockWidget(title, self); d.setWidget(widget)
+        d.setObjectName(title)                       # REQUIRED for saveState/restoreState to work
         d.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable)
         self.addDockWidget(area, d); return d
 
@@ -166,7 +172,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _add_molecule(self, name: str):
         Z, pos, basis, n = molecules.MOLECULES[name]
         self._add_spec(RunSpec(label=name.split(" (")[0], numbers=tuple(Z), positions=tuple(pos),
-                               basis=basis, method=self.method_box.currentText()))
+                               basis=self.basis_box.currentText(), method=self.method_box.currentText()))
 
     def _import_xyz(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import molecule (xyz)", "", "XYZ (*.xyz)")
@@ -177,7 +183,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:                   # noqa: BLE001
             self.statusBar().showMessage(f"xyz import failed: {e}"); return
         self._add_spec(RunSpec(label=label, numbers=tuple(numbers), positions=tuple(positions),
-                               basis="dzvp", method=self.method_box.currentText()))
+                               basis=self.basis_box.currentText(), method=self.method_box.currentText()))
 
     def _on_ws_change(self, ws: Workspace):
         self._syncing = True
@@ -240,8 +246,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 if f.signed:                         # orbital / Δρ: slider = ±frac·max|f|
                     scene.add_isosurface(p, f, signed_frac=self.iso.value() / 1000.0)
                 else:
-                    vmax = float(f.values.max())
-                    scene.add_isosurface(p, f, levels=[self.iso.value() / 1000.0 * vmax])
+                    vmax = float(f.values.max())     # density spans a huge range -> LOG slider:
+                    level = vmax * 10.0 ** (-3.0 + (self.iso.value() / 200.0) * 2.5)  # ~0.001..0.3·max
+                    scene.add_isosurface(p, f, levels=[level])
                 scene.add_structure(p, struct)
                 if self.slice_on.isChecked():
                     grid = field_to_imagedata(f)
@@ -258,7 +265,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if cam is not None:
             p.camera_position = cam                  # keep view across control changes
         else:
-            p.reset_camera(); self._cam_run = self.ws.selected
+            p.reset_camera(); p.camera.zoom(0.85)    # fit the new run + a little breathing room
+            self._cam_run = self.ws.selected
         p.render()
 
     def _toggle_spin(self, on):
@@ -316,9 +324,10 @@ class MainWindow(QtWidgets.QMainWindow):
     # -- PaperMill v1: publication export ---------------------------------
     def _export_image(self):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export 3D image", "figure.png", "PNG image (*.png)")
+            self, "Export 3D image", "figure.png",
+            "PNG (*.png);;JPEG (*.jpg);;TIFF (*.tif);;BMP (*.bmp)")
         if path:
-            self.plotter.screenshot(path, scale=3)      # 3x window resolution
+            self.plotter.screenshot(path, scale=3)      # format from extension, 3x resolution
             self.statusBar().showMessage(f"exported 3D image (3×) → {path}")
 
     def _export_scf(self):
@@ -343,8 +352,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(f"exported SCF plot → {path}")
 
     def _save_layout(self):
-        self._layout = self.saveState()          # stub: Qt serializes dock geometry
-        self.statusBar().showMessage("layout saved (in-memory)")
+        self._settings.setValue("geometry", self.saveGeometry())
+        self._settings.setValue("windowState", self.saveState())
+        self.statusBar().showMessage("layout saved (~/.config/qchem-GUI/desktop.conf)")
+
+    def _restore_layout(self):
+        geo = self._settings.value("geometry"); st = self._settings.value("windowState")
+        if geo is not None: self.restoreGeometry(geo)
+        if st is not None:  self.restoreState(st)
+
+    def closeEvent(self, e):
+        self._save_layout()                      # persist dock arrangement on exit
+        super().closeEvent(e)
 
 
 def main():
