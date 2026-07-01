@@ -18,11 +18,11 @@ if sys.platform == "linux" and os.environ.get("WAYLAND_DISPLAY") \
     os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 import numpy as np
-from PySide6 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 from pyvistaqt import QtInteractor
 
-from qviz import scene, compare
+from qviz import scene, compare, geometry
 from qviz.scene import field_to_imagedata
 from qviz.workspace import Workspace, RunSpec, RunStatus
 from qviz import molecules
@@ -66,10 +66,16 @@ class MainWindow(QtWidgets.QMainWindow):
         scene.style(self.plotter)
         self.setCentralWidget(self.plotter.interactor)
 
-        # left dock: Run Browser
+        # left dock: Run Browser + Structure readout (tabbed together)
         self.run_list = QtWidgets.QListWidget()
         self.run_list.currentRowChanged.connect(self._on_row_changed)
-        self._dock("Runs", self.run_list, QtCore.Qt.LeftDockWidgetArea)
+        runs_dock = self._dock("Runs", self.run_list, QtCore.Qt.LeftDockWidgetArea)
+
+        self.struct_view = QtWidgets.QPlainTextEdit(); self.struct_view.setReadOnly(True)
+        self.struct_view.setFont(QtGui.QFont("monospace"))
+        struct_dock = self._dock("Structure", self.struct_view, QtCore.Qt.LeftDockWidgetArea)
+        self.tabifyDockWidget(runs_dock, struct_dock)
+        runs_dock.raise_()
 
         # right dock (top): Inspector
         insp = QtWidgets.QWidget(); form = QtWidgets.QFormLayout(insp)
@@ -164,6 +170,10 @@ class MainWindow(QtWidgets.QMainWindow):
             if r is ws.selected: sel_row = i
         if sel_row >= 0: self.run_list.setCurrentRow(sel_row)
         self._syncing = False
+        sel = ws.selected
+        self.struct_view.setPlainText(
+            f"{sel.spec.summary}\n\n{geometry.report(sel.structure())}"
+            if (sel is not None and sel.is_ready) else "")
         self._refresh_cmp_box()
         self._refresh_3d()
 
