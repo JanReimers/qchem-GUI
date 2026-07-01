@@ -75,12 +75,15 @@ class MainWindow(QtWidgets.QMainWindow):
         insp = QtWidgets.QWidget(); form = QtWidgets.QFormLayout(insp)
         self.mol_box = QtWidgets.QComboBox(); self.mol_box.addItems(molecules.MOLECULES.keys())
         self.method_box = QtWidgets.QComboBox(); self.method_box.addItems(["HF", "LDA", "Xalpha"])
-        add_btn = QtWidgets.QPushButton("+ Add run")
-        add_btn.clicked.connect(lambda: self._add_molecule(self.mol_box.currentText()))
-        add_btn.setEnabled(_HAVE_QCHEM)
+        # the Add button names the method it will use, so it's clear BEFORE you click
+        self.add_btn = QtWidgets.QPushButton()
+        self.add_btn.clicked.connect(lambda: self._add_molecule(self.mol_box.currentText()))
+        self.add_btn.setEnabled(_HAVE_QCHEM)
+        self.method_box.currentTextChanged.connect(self._update_add_label)
         row = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(row); h.setContentsMargins(0,0,0,0)
-        h.addWidget(self.mol_box); h.addWidget(self.method_box); h.addWidget(add_btn)
+        h.addWidget(self.mol_box); h.addWidget(self.method_box); h.addWidget(self.add_btn)
         form.addRow("Molecule", row)
+        self._update_add_label()
 
         self.field_box = QtWidgets.QComboBox(); self.field_box.addItems(["Electron density", "HOMO"])
         self.field_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Field", self.field_box)
@@ -101,7 +104,10 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow(self.spin_on)
         self._spin_timer = QtCore.QTimer(self); self._spin_timer.timeout.connect(self._spin_tick)
 
-        self.run_btn = QtWidgets.QPushButton("Run SCF (stream)"); self.run_btn.clicked.connect(self._run_scf)
+        self.run_btn = QtWidgets.QPushButton("Replay SCF ▶")
+        self.run_btn.setToolTip("Re-animate the already-converged SCF of the selected run "
+                                "(the calculation itself runs on '+ Add run').")
+        self.run_btn.clicked.connect(self._run_scf)
         form.addRow(self.run_btn)
         insp_dock = self._dock("Inspector", insp, QtCore.Qt.RightDockWidgetArea)
 
@@ -124,6 +130,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addDockWidget(area, d); return d
 
     # -- workspace <-> UI --------------------------------------------------
+    def _update_add_label(self, *_):
+        m = self.method_box.currentText()
+        self.add_btn.setText(f"+ Add {m} run" if _HAVE_QCHEM else "+ Add run (needs qchem)")
+
     def _add_molecule(self, name: str):
         Z, pos, basis, n = molecules.MOLECULES[name]
         spec = RunSpec(label=name.split(" (")[0], numbers=tuple(Z), positions=tuple(pos),
@@ -138,6 +148,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 else f"{spec.summary}: {run.status.value}")
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
+        if run.is_ready:
+            self._run_scf()                      # auto-animate convergence as feedback
 
     def _on_ws_change(self, ws: Workspace):
         self._syncing = True
