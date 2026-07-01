@@ -75,17 +75,24 @@ def add_isosurface(p: pv.Plotter, f: ScalarField, *, levels=None,
 
 
 def add_height_surface(p: pv.Plotter, f: ScalarField, *, z_frac=0.5,
-                       cmap=None, relief=0.5) -> int:
+                       cmap=None, relief=0.5, log=False, log_floor=1e-6) -> int:
     """Lift a single z-plane of the field into a 3D SURFACE: height = f(x,y) on the
     selected plane (the classic `plot_surface` view). Peaks/valleys of ρ or an MO
     on a slice, complementing the isosurface. z_frac ∈ [0,1] picks the plane;
-    returns the chosen k index. Height is scaled so max|f| ≈ relief·(in-plane extent)."""
+    returns the chosen k index. Height is scaled so max|f| ≈ relief·(in-plane extent).
+
+    log=True plots log₁₀(f) (density only -- f must be >=0), which compresses the
+    nuclear spike and brings out the shell structure as shoulders on the profile;
+    values below log_floor are clamped and the baseline is shifted to that floor."""
     vals = np.asarray(f.values)
     nx, ny, nz = f.dims
     ox, oy, _ = f.origin
     dx, dy, _ = f.spacing
     k = int(round(z_frac * (nz - 1)))
     slab = vals[:, :, k]                              # (nx, ny)
+    logged = log and not f.signed
+    if logged:
+        slab = np.log10(np.maximum(slab, log_floor)) - np.log10(log_floor)  # >=0, floor->0
     X, Y = np.meshgrid(ox + dx * np.arange(nx),
                        oy + dy * np.arange(ny), indexing="ij")
     span = max(dx * (nx - 1), dy * (ny - 1))

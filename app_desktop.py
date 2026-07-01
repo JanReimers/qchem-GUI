@@ -150,6 +150,11 @@ class MainWindow(QtWidgets.QMainWindow):
                                 "Surface z(x,y) = lift the 'Slice z' plane into a height surface")
         self.rep_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Representation", self.rep_box)
 
+        self.logrho = QtWidgets.QCheckBox("log₁₀ height (density surface)")
+        self.logrho.setToolTip("Height surface only: plot log₁₀ρ to reveal shell structure "
+                               "(density fields only -- a signed field can't be logged)")
+        self.logrho.toggled.connect(self._refresh_3d); form.addRow(self.logrho)
+
         # Δρ vs another SAME-GEOMETRY run (populated on workspace change)
         self.cmp_box = QtWidgets.QComboBox(); self.cmp_box.currentIndexChanged.connect(self._refresh_3d)
         self._cmp_runs = [None]; form.addRow("Δρ vs", self.cmp_box)
@@ -375,7 +380,8 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             p.clear()
             if f is not None and rep == "Surface z(x,y)":   # standalone height surface (no atoms/slice)
-                scene.add_height_surface(p, f, z_frac=self.slice.value() / 100.0)
+                scene.add_height_surface(p, f, z_frac=self.slice.value() / 100.0,
+                                         log=self.logrho.isChecked())
             elif f is not None:
                 if f.signed:                         # orbital / Δρ: slider = ±frac·max|f|
                     scene.add_isosurface(p, f, signed_frac=self.iso.value() / 1000.0,
