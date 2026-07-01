@@ -132,6 +132,9 @@ class MainWindow(QtWidgets.QMainWindow):
         m.addAction("Open Workspace…", self._open_workspace)
         m.addAction("Save Workspace…", self._save_workspace)
         m.addSeparator()
+        m.addAction("Export 3D image…", self._export_image)
+        m.addAction("Export SCF plot…", self._export_scf)
+        m.addSeparator()
         m.addAction("Save Layout", self._save_layout)
 
     def _dock(self, title, widget, area):
@@ -294,6 +297,35 @@ class MainWindow(QtWidgets.QMainWindow):
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
         self.statusBar().showMessage(f"opened {len(self.ws.runs)} run(s) from {path}")
+
+    # -- PaperMill v1: publication export ---------------------------------
+    def _export_image(self):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export 3D image", "figure.png", "PNG image (*.png)")
+        if path:
+            self.plotter.screenshot(path, scale=3)      # 3x window resolution
+            self.statusBar().showMessage(f"exported 3D image (3×) → {path}")
+
+    def _export_scf(self):
+        r = self.ws.selected
+        if r is None or not r.is_ready:
+            self.statusBar().showMessage("no ready run selected"); return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export SCF plot", "convergence.pdf", "PDF (*.pdf);;PNG (*.png);;SVG (*.svg)")
+        if not path:
+            return
+        import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+        steps = list(r.run_scf())                        # fresh trace for the selected run
+        it = [s.iteration for s in steps]
+        fig, ax = plt.subplots(figsize=(6.4, 4.2))
+        ax.semilogy(it, [max(s.dE, 1e-13) for s in steps], "o-", label=r"$|\Delta E|$")
+        ax.semilogy(it, [s.commutator for s in steps], "s-", label=r"$\|[F,D]\|$")
+        ax.semilogy(it, [s.drho for s in steps], "^-", label=r"$\|\Delta\rho\|$")
+        ax.set_xlabel("SCF iteration"); ax.set_ylabel("residual")
+        ax.set_title(f"{r.spec.summary}   E = {r.energy:.6f} Ha")
+        ax.legend(); ax.grid(alpha=0.3); fig.tight_layout()
+        fig.savefig(path); plt.close(fig)
+        self.statusBar().showMessage(f"exported SCF plot → {path}")
 
     def _save_layout(self):
         self._layout = self.saveState()          # stub: Qt serializes dock geometry
