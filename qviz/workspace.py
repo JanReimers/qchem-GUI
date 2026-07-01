@@ -41,10 +41,17 @@ class RunSpec:
     method: str = "HF"             # HF | LDA | Xalpha
     basis: str = "dzvp"
     symmetry: bool = False         # SALC point-group blocking (adds irrep labels)
+    multiplicity: int = 0          # 2S+1 (0 = minimal spin); >1 -> spin-polarized open shell
 
     @property
     def summary(self) -> str:
-        return f"{self.label} · {self.method}/{self.basis}" + (" · sym" if self.symmetry else "")
+        _mult = {1: "singlet", 2: "doublet", 3: "triplet", 4: "quartet", 5: "quintet"}
+        s = f"{self.label} · {self.method}/{self.basis}"
+        if self.multiplicity:
+            s += " · " + _mult.get(self.multiplicity, f"2S+1={self.multiplicity}")
+        if self.symmetry:
+            s += " · sym"
+        return s
 
 
 # A factory maps a spec -> a ComputeBackend. THIS is the DIP seam: the Workspace

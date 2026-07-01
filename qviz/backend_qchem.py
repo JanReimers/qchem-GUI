@@ -61,11 +61,12 @@ WATER_POSITIONS = [0.0, 0.0, 0.0,
 
 class QChemBackend(ComputeBackend):
     def __init__(self, numbers=None, positions=None, basis="dzvp", method="HF",
-                 symmetry=False, max_iter=20):
+                 symmetry=False, multiplicity=0, max_iter=20):
         numbers = list(numbers if numbers is not None else WATER_NUMBERS)
         positions = list(np.asarray(positions if positions is not None
                                     else WATER_POSITIONS, float).ravel())
-        self._calc = qchem_py.Calculator(numbers, positions, basis, method, symmetry, max_iter)
+        self._calc = qchem_py.Calculator(numbers, positions, basis, method,
+                                         symmetry, multiplicity, max_iter)
         self._struct = self._read_structure()
 
     def report(self, kind: str) -> dict:

@@ -95,6 +95,7 @@ def save_workspace(path: str, ws) -> None:
             s = r.spec
             rg = g.create_group(f"run{i:03d}")
             rg.attrs.update(label=s.label, method=s.method, basis=s.basis, symmetry=s.symmetry,
+                            multiplicity=s.multiplicity,
                             energy=(float(r.energy) if r.energy is not None else np.nan),
                             status=r.status.value)
             rg.create_dataset("numbers", data=np.asarray(s.numbers, int))
@@ -115,7 +116,8 @@ def load_workspace(path: str, make_backend, compute: bool = True):
                 numbers=tuple(int(z) for z in rg["numbers"][:]),
                 positions=tuple(float(x) for x in rg["positions"][:]),
                 method=str(rg.attrs["method"]), basis=str(rg.attrs["basis"]),
-                symmetry=bool(rg.attrs.get("symmetry", False))), compute=compute)
+                symmetry=bool(rg.attrs.get("symmetry", False)),
+                multiplicity=int(rg.attrs.get("multiplicity", 0))), compute=compute)
         sel = int(h.attrs.get("selected", -1))
         if 0 <= sel < len(ws.runs):
             ws.select(ws.runs[sel])

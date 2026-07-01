@@ -40,7 +40,7 @@ from qviz.backend_analytic import AnalyticBackend
 def make_backend(spec: RunSpec):
     if _HAVE_QCHEM:
         return QChemBackend(list(spec.numbers), list(spec.positions),
-                            spec.basis, spec.method, spec.symmetry)
+                            spec.basis, spec.method, spec.symmetry, spec.multiplicity)
     return AnalyticBackend()                   # geometry-agnostic (water) stand-in
 
 
@@ -83,7 +83,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if open_path:
             self._open_workspace_path(open_path)  # CLI: load a .qproj.h5 instead of seeding
         else:
-            self._add_molecule("Water (H2O)")     # seed one run so the window isn't empty
+            self._on_mol_changed(self.mol_box.currentText())   # sync multiplicity to the default molecule
+            self._add_molecule("Oxygen (O2, triplet)")  # open-shell default (polarized primary, on-tenet)
         self._restore_layout()                    # after docks exist + a run is shown
 
     def _set_workspace(self, ws):
@@ -129,6 +130,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.basis_box = QtWidgets.QComboBox(); self.basis_box.addItems(["dzvp", "orb1", "dzvp2", "tzvp"])
         self.basis_box.setToolTip("orb1 is the smallest/fastest — use it for bigger molecules (e.g. benzene)")
         form.addRow("Basis", self.basis_box)
+        self.mult_spin = QtWidgets.QSpinBox(); self.mult_spin.setRange(0, 7)
+        self.mult_spin.setSpecialValueText("auto")   # 0 shows as 'auto' (minimal spin)
+        self.mult_spin.setToolTip("Spin multiplicity 2S+1 (auto = minimal). >1 → open-shell, spin-polarized.")
+        form.addRow("Multiplicity", self.mult_spin)
+        self.mol_box.currentTextChanged.connect(self._on_mol_changed)
         self.sym_check = QtWidgets.QCheckBox("point-group symmetry (SALC → irrep labels)")
         self.sym_check.setChecked(True)          # default on so the orbital table carries irrep labels
         form.addRow(self.sym_check)
@@ -208,11 +214,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(f"computing {spec.summary} … (window stays responsive)")
         self._pool.start(_ComputeTask(run))
 
+    def _on_mol_changed(self, name):
+        if name in molecules.MOLECULES:          # default the multiplicity to the preset's
+            self.mult_spin.setValue(molecules.MOLECULES[name][4])
+
     def _add_molecule(self, name: str):
-        Z, pos, basis, n = molecules.MOLECULES[name]
+        Z, pos, basis, n, mult = molecules.MOLECULES[name]
         self._add_spec(RunSpec(label=name.split(" (")[0], numbers=tuple(Z), positions=tuple(pos),
                                basis=self.basis_box.currentText(), method=self.method_box.currentText(),
-                               symmetry=self.sym_check.isChecked()))
+                               symmetry=self.sym_check.isChecked(), multiplicity=self.mult_spin.value()))
 
     def _import_xyz(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import molecule (xyz)", "", "XYZ (*.xyz)")
@@ -224,7 +234,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"xyz import failed: {e}"); return
         self._add_spec(RunSpec(label=label, numbers=tuple(numbers), positions=tuple(positions),
                                basis=self.basis_box.currentText(), method=self.method_box.currentText(),
-                               symmetry=self.sym_check.isChecked()))
+                               symmetry=self.sym_check.isChecked(), multiplicity=self.mult_spin.value()))
 
     def _on_ws_change(self, ws: Workspace):
         self._syncing = True
@@ -285,9 +295,14 @@ class MainWindow(QtWidgets.QMainWindow):
             elif occ > 0.5:      col = "#4dd0e1"      # occupied cyan
             else:                col = "#7a7a7a"      # virtual grey
             p.plot([x - 0.35, x + 0.35], [e, e], pen=pg.mkPen(col, width=3))
-            arrows = "↑↓" if occ >= 1.5 else ("↑" if occ >= 0.5 else "")
+            spin = L.get("spin", "none")             # up/down (polarized) | none (restricted)
+            if   spin == "up":   arrows = "↑" if occ > 0.5 else ""
+            elif spin == "down": arrows = "↓" if occ > 0.5 else ""
+            else:                arrows = "↑↓" if occ >= 1.5 else ("↑" if occ >= 0.5 else "")
             if arrows:
-                t = pg.TextItem(arrows, color=col, anchor=(0.5, 0.5)); t.setPos(x, e); p.addItem(t)
+                t = pg.TextItem(arrows, color=col, anchor=(0.5, 0.5))
+                t.setFont(QtGui.QFont("sans", 22))       # ~3x -- spins should be visible
+                t.setPos(x, e); p.addItem(t)
             tag = f"{L['n']}{L['label'].lower()}" if L['label'] != "No Symmetry" else str(L['n'])
             lab = pg.TextItem(tag, color="#bbb", anchor=(0, 0.5)); lab.setPos(x + 0.38, e); p.addItem(lab)
         p.getAxis("bottom").setTicks([[(i, lab) for lab, i in xmap.items()]])

@@ -63,10 +63,15 @@ _ETHENE = ([6, 6, 1, 1, 1, 1],
 # 14 GB box. Re-add it only with a memory budget / a smaller basis, or on a rig
 # with more RAM. Everything below is <=16 electrons -- comparable to water.
 
-# name -> (numbers, positions, basis, grid_n).
+# O2, experimental bond 1.208 Å = 2.283 bohr; ground state is a TRIPLET (paramagnetic)
+_O2 = ([8, 8], [0.0, 0.0, -1.1415, 0.0, 0.0, 1.1415])
+
+# name -> (numbers, positions, basis, grid_n, multiplicity).  multiplicity 0 = minimal spin
+# (closed-shell singlet for even Ne); >1 forces the open-shell / spin-polarized path.
 MOLECULES = {
-    "Water (H2O)":   (_WATER[0],   _WATER[1],   "dzvp", 80),
-    "Methane (CH4)": (_METHANE[0], _METHANE[1], "dzvp", 72),
-    "Ammonia (NH3)": (_AMMONIA[0], _AMMONIA[1], "dzvp", 72),
-    "Ethene (C2H4)": (_ETHENE[0],  _ETHENE[1],  "dzvp", 72),
+    "Oxygen (O2, triplet)": (_O2[0],      _O2[1],      "dzvp", 72, 3),   # open-shell default
+    "Water (H2O)":          (_WATER[0],   _WATER[1],   "dzvp", 80, 0),
+    "Methane (CH4)":        (_METHANE[0], _METHANE[1], "dzvp", 72, 0),
+    "Ammonia (NH3)":        (_AMMONIA[0], _AMMONIA[1], "dzvp", 72, 0),
+    "Ethene (C2H4)":        (_ETHENE[0],  _ETHENE[1],  "dzvp", 72, 0),
 }
