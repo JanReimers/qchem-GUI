@@ -7,9 +7,29 @@ Each preset is (numbers, positions_3N, basis, suggested_grid_n). Heavier
 molecules get a smaller default grid so sampling stays snappy.
 """
 from __future__ import annotations
-import math
+import math, pathlib
 
 _A = 1.8897259886   # angstrom -> bohr
+
+# symbol -> Z (through Kr; extend as needed)
+_ELEMENTS = ("H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn "
+             "Fe Co Ni Cu Zn Ga Ge As Se Br Kr").split()
+_Z = {sym: i + 1 for i, sym in enumerate(_ELEMENTS)}
+
+
+def from_xyz(path: str):
+    """Parse a standard .xyz file (Å) -> (numbers, positions_bohr_flat, label)."""
+    lines = pathlib.Path(path).read_text().splitlines()
+    n = int(lines[0].split()[0])
+    numbers, positions = [], []
+    for ln in lines[2:2 + n]:
+        p = ln.split()
+        z = _Z.get(p[0].capitalize())
+        if z is None:
+            raise ValueError(f"unknown element {p[0]!r} in {path}")
+        numbers.append(z)
+        positions += [float(p[1]) * _A, float(p[2]) * _A, float(p[3]) * _A]
+    return numbers, positions, pathlib.Path(path).stem
 
 
 def _flat(coords):

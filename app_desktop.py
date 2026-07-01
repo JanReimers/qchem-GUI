@@ -129,6 +129,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.splitDockWidget(insp_dock, conv_dock, QtCore.Qt.Vertical)
 
         m = self.menuBar().addMenu("&File")
+        m.addAction("Import molecule (xyz)…", self._import_xyz)
+        m.addSeparator()
         m.addAction("Open Workspace…", self._open_workspace)
         m.addAction("Save Workspace…", self._save_workspace)
         m.addSeparator()
@@ -147,15 +149,12 @@ class MainWindow(QtWidgets.QMainWindow):
         m = self.method_box.currentText()
         self.add_btn.setText(f"+ Add {m} run" if _HAVE_QCHEM else "+ Add run (needs qchem)")
 
-    def _add_molecule(self, name: str):
-        Z, pos, basis, n = molecules.MOLECULES[name]
-        spec = RunSpec(label=name.split(" (")[0], numbers=tuple(Z), positions=tuple(pos),
-                       basis=basis, method=self.method_box.currentText())
+    def _add_spec(self, spec: RunSpec):
+        """Add a Run for `spec` (busy cursor), select it, auto-animate its SCF."""
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         self.statusBar().showMessage(f"computing {spec.summary} …"); QtWidgets.QApplication.processEvents()
         try:
-            run = self.ws.add_run(spec)          # runs the SCF (synchronous today)
-            self.ws.select(run)
+            run = self.ws.add_run(spec); self.ws.select(run)
             self.statusBar().showMessage(
                 f"{spec.summary}: E = {run.energy:.6f} Ha" if run.is_ready
                 else f"{spec.summary}: {run.status.value}")
@@ -163,6 +162,22 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QApplication.restoreOverrideCursor()
         if run.is_ready:
             self._run_scf()                      # auto-animate convergence as feedback
+
+    def _add_molecule(self, name: str):
+        Z, pos, basis, n = molecules.MOLECULES[name]
+        self._add_spec(RunSpec(label=name.split(" (")[0], numbers=tuple(Z), positions=tuple(pos),
+                               basis=basis, method=self.method_box.currentText()))
+
+    def _import_xyz(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import molecule (xyz)", "", "XYZ (*.xyz)")
+        if not path:
+            return
+        try:
+            numbers, positions, label = molecules.from_xyz(path)
+        except Exception as e:                   # noqa: BLE001
+            self.statusBar().showMessage(f"xyz import failed: {e}"); return
+        self._add_spec(RunSpec(label=label, numbers=tuple(numbers), positions=tuple(positions),
+                               basis="dzvp", method=self.method_box.currentText()))
 
     def _on_ws_change(self, ws: Workspace):
         self._syncing = True
