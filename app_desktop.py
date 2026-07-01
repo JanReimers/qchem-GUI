@@ -91,7 +91,8 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("Molecule", row)
         self._update_add_label()
 
-        self.field_box = QtWidgets.QComboBox(); self.field_box.addItems(["Electron density", "HOMO"])
+        self.field_box = QtWidgets.QComboBox()
+        self.field_box.addItems(["Electron density", "HOMO", "HOMO-1", "HOMO-2", "HOMO-3"])
         self.field_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Field", self.field_box)
 
         # Δρ vs another SAME-GEOMETRY run (populated on workspace change)
@@ -201,8 +202,10 @@ class MainWindow(QtWidgets.QMainWindow):
         ci = self.cmp_box.currentIndex()
         if ci > 0 and ci < len(self._cmp_runs):          # Δρ mode (same-geometry partner chosen)
             return compare.difference_density(run, self._cmp_runs[ci], n=72), run.structure()
-        if self.field_box.currentText() == "HOMO":
-            return run.orbital(0, n=72), run.structure()
+        t = self.field_box.currentText()
+        if t.startswith("HOMO"):
+            k = 0 if t == "HOMO" else int(t.split("-")[1])   # HOMO-k -> occupied index from the top
+            return run.orbital(k, n=72), run.structure()
         return run.density(n=80), run.structure()
 
     def _refresh_3d(self):
