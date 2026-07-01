@@ -171,6 +171,13 @@ class MainWindow(QtWidgets.QMainWindow):
         conv_dock = self._dock("Convergence", self.conv, QtCore.Qt.RightDockWidgetArea)
         self.splitDockWidget(insp_dock, conv_dock, QtCore.Qt.Vertical)
 
+        # right dock: MO energy-level diagram (tabbed with convergence)
+        self.mo_plot = pg.PlotWidget(title="MO diagram")
+        self.mo_plot.setLabel("left", "Energy (Ha)"); self.mo_plot.showGrid(x=False, y=True, alpha=0.2)
+        self.mo_plot.setMouseEnabled(x=False, y=True)    # irreps are categorical; zoom the energy axis
+        mo_dock = self._dock("MO diagram", self.mo_plot, QtCore.Qt.RightDockWidgetArea)
+        self.tabifyDockWidget(conv_dock, mo_dock); conv_dock.raise_()
+
         m = self.menuBar().addMenu("&File")
         m.addAction("Import molecule (xyz)…", self._import_xyz)
         m.addSeparator()
@@ -243,10 +250,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_orbitals(self, run):
         if run is None or not run.is_ready:
-            self.orb_view.setPlainText(""); return
+            self.orb_view.setPlainText(""); self.mo_plot.clear(); return
         rep = run.report("orbitals")
         if not rep or "levels" not in rep:
-            self.orb_view.setPlainText("(orbital report unavailable)"); return
+            self.orb_view.setPlainText("(orbital report unavailable)"); self.mo_plot.clear(); return
         levels = rep["levels"]
         n_occ = sum(1 for L in levels if L["occ"] > 0.5)
         n_show = min(len(levels), n_occ + 3)         # occupied + LUMO..LUMO+2 (high virtuals are noise)
@@ -259,6 +266,37 @@ class MainWindow(QtWidgets.QMainWindow):
         if len(levels) > n_show:
             lines.append(f"     … {len(levels) - n_show} higher virtual(s) hidden")
         self.orb_view.setPlainText("\n".join(lines))
+        self._update_mo_diagram(run, levels, n_occ, n_show)
+
+    def _update_mo_diagram(self, run, levels, n_occ, n_show):
+        """2D MO energy diagram: irreps across x, energy up y, ↑↓ for occupation.
+        Pan/zoom the energy axis to spread a tight valence cluster (the deep core is
+        far below)."""
+        p = self.mo_plot; p.clear()
+        shown = levels[:n_show]
+        order = []                                    # irrep columns, in first-appearance order
+        for L in shown:
+            if L["label"] not in order: order.append(L["label"])
+        xmap = {lab: i for i, lab in enumerate(order)}
+        for i, L in enumerate(shown):
+            x, e, occ = xmap[L["label"]], float(L["e"]), float(L["occ"])
+            if   i == n_occ - 1: col = "#7CFC00"      # HOMO green
+            elif i == n_occ:     col = "#ffa500"      # LUMO orange
+            elif occ > 0.5:      col = "#4dd0e1"      # occupied cyan
+            else:                col = "#7a7a7a"      # virtual grey
+            p.plot([x - 0.35, x + 0.35], [e, e], pen=pg.mkPen(col, width=3))
+            arrows = "↑↓" if occ >= 1.5 else ("↑" if occ >= 0.5 else "")
+            if arrows:
+                t = pg.TextItem(arrows, color=col, anchor=(0.5, 0.5)); t.setPos(x, e); p.addItem(t)
+            tag = f"{L['n']}{L['label'].lower()}" if L['label'] != "No Symmetry" else str(L['n'])
+            lab = pg.TextItem(tag, color="#bbb", anchor=(0, 0.5)); lab.setPos(x + 0.38, e); p.addItem(lab)
+        p.getAxis("bottom").setTicks([[(i, lab) for lab, i in xmap.items()]])
+        p.setTitle(f"MO diagram — {run.spec.summary}")
+        if shown:                                     # frame the valence cluster (exclude deep core)
+            es = [float(L["e"]) for L in shown]
+            valence = [e for e in es if e > -5.0] or es
+            p.setXRange(-0.5, len(order) - 0.5, padding=0.15)
+            p.setYRange(min(valence) - 0.3, max(es) + 0.3, padding=0)
 
     def _refresh_cmp_box(self):
         """List READY runs that share the selected run's geometry (valid Δρ partners)."""
