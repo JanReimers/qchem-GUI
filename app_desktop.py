@@ -140,7 +140,8 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow(self.sym_check)
 
         self.field_box = QtWidgets.QComboBox()
-        self.field_box.addItems(["Electron density", "HOMO", "HOMO-1", "HOMO-2", "HOMO-3",
+        self.field_box.addItems(["Electron density", "Spin density (ρ↑−ρ↓)",
+                                 "HOMO", "HOMO-1", "HOMO-2", "HOMO-3",
                                  "LUMO", "LUMO+1", "LUMO+2"])
         self.field_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Field", self.field_box)
 
@@ -356,6 +357,12 @@ class MainWindow(QtWidgets.QMainWindow):
         t = self.field_box.currentText()
         if t == "Electron density":
             return run.density(n=80), run.structure()
+        if t.startswith("Spin density"):
+            sf = run.spin_density(n=80)                   # None -> unpolarized run
+            if sf is None:
+                self.statusBar().showMessage(
+                    "Spin density: this run is unpolarized (ρ↑=ρ↓) -- set multiplicity > 1")
+            return sf, run.structure()
         # orbital field: map HOMO-k / LUMO+k to an ABSOLUTE MO index via num_occupied
         rep = run.report("orbitals")
         nocc = int(rep.get("num_occupied", 1)); ntot = int(rep.get("num_orbitals", nocc))

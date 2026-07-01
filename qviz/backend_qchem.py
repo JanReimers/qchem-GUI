@@ -97,6 +97,11 @@ class QChemBackend(ComputeBackend):
     def density(self, n: int = 64, pad: float = 5.0) -> ScalarField:
         return self._scalar(self._calc.density(n, pad), "Electron density", False)
 
+    def spin_density(self, n: int = 64, pad: float = 5.0):
+        """Signed ρ↑−ρ↓, or None for an unpolarized (closed-shell) run."""
+        d = self._calc.spin_density(n, pad)
+        return None if d is None else self._scalar(d, "Spin density (ρ↑−ρ↓)", True)
+
     def orbital(self, index: int = 0, n: int = 64, pad: float = 5.0) -> ScalarField:
         d = self._calc.orbital(index, n, pad)
         return self._scalar(d, f"MO #{index} (HOMO-{index})" if index else "HOMO", bool(d["signed"]))

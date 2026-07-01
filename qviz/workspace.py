@@ -117,6 +117,12 @@ class Run:
     def orbital(self, index: int = 0, n: int = 64, pad: float = 5.0) -> ScalarField:
         return self._sampled(("orbital", index, n, pad), lambda: self._be.orbital(index, n, pad))
 
+    def spin_density(self, n: int = 64, pad: float = 5.0) -> Optional[ScalarField]:
+        """Signed ρ↑−ρ↓, or None if the backend/run has no net spin (unpolarized)."""
+        self._require_ready()
+        fn = getattr(self._be, "spin_density", None)
+        return self._sampled(("spin", n, pad), lambda: fn(n, pad)) if fn else None
+
     def density_gradient(self, n: int = 22, pad: float = 4.0) -> VectorField:
         return self._sampled(("grad", n, pad), lambda: self._be.density_gradient(n, pad))
 
