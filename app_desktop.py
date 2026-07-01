@@ -22,7 +22,7 @@ from PySide6 import QtWidgets, QtCore
 import pyqtgraph as pg
 from pyvistaqt import QtInteractor
 
-from qviz import scene
+from qviz import scene, compare
 from qviz.scene import field_to_imagedata
 from qviz.workspace import Workspace, RunSpec, RunStatus
 from qviz import molecules
@@ -39,7 +39,7 @@ from qviz.backend_analytic import AnalyticBackend
 
 def make_backend(spec: RunSpec):
     if _HAVE_QCHEM:
-        return QChemBackend(list(spec.numbers), list(spec.positions), spec.basis)
+        return QChemBackend(list(spec.numbers), list(spec.positions), spec.basis, spec.method)
     return AnalyticBackend()                   # geometry-agnostic (water) stand-in
 
 
@@ -73,14 +73,20 @@ class MainWindow(QtWidgets.QMainWindow):
         # right dock (top): Inspector
         insp = QtWidgets.QWidget(); form = QtWidgets.QFormLayout(insp)
         self.mol_box = QtWidgets.QComboBox(); self.mol_box.addItems(molecules.MOLECULES.keys())
+        self.method_box = QtWidgets.QComboBox(); self.method_box.addItems(["HF", "LDA", "Xalpha"])
         add_btn = QtWidgets.QPushButton("+ Add run")
         add_btn.clicked.connect(lambda: self._add_molecule(self.mol_box.currentText()))
         add_btn.setEnabled(_HAVE_QCHEM)
         row = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(row); h.setContentsMargins(0,0,0,0)
-        h.addWidget(self.mol_box); h.addWidget(add_btn); form.addRow("Molecule", row)
+        h.addWidget(self.mol_box); h.addWidget(self.method_box); h.addWidget(add_btn)
+        form.addRow("Molecule", row)
 
         self.field_box = QtWidgets.QComboBox(); self.field_box.addItems(["Electron density", "HOMO"])
         self.field_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Field", self.field_box)
+
+        # Δρ vs another SAME-GEOMETRY run (populated on workspace change)
+        self.cmp_box = QtWidgets.QComboBox(); self.cmp_box.currentIndexChanged.connect(self._refresh_3d)
+        self._cmp_runs = [None]; form.addRow("Δρ vs", self.cmp_box)
 
         self.iso = QtWidgets.QSlider(QtCore.Qt.Horizontal); self.iso.setRange(1, 200); self.iso.setValue(40)
         self.iso.valueChanged.connect(self._refresh_3d); form.addRow("Iso level", self.iso)
@@ -119,7 +125,8 @@ class MainWindow(QtWidgets.QMainWindow):
     # -- workspace <-> UI --------------------------------------------------
     def _add_molecule(self, name: str):
         Z, pos, basis, n = molecules.MOLECULES[name]
-        spec = RunSpec(label=name.split(" (")[0], numbers=tuple(Z), positions=tuple(pos), basis=basis)
+        spec = RunSpec(label=name.split(" (")[0], numbers=tuple(Z), positions=tuple(pos),
+                       basis=basis, method=self.method_box.currentText())
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         self.statusBar().showMessage(f"computing {spec.summary} …"); QtWidgets.QApplication.processEvents()
         try:
@@ -141,7 +148,19 @@ class MainWindow(QtWidgets.QMainWindow):
             if r is ws.selected: sel_row = i
         if sel_row >= 0: self.run_list.setCurrentRow(sel_row)
         self._syncing = False
+        self._refresh_cmp_box()
         self._refresh_3d()
+
+    def _refresh_cmp_box(self):
+        """List READY runs that share the selected run's geometry (valid Δρ partners)."""
+        self._syncing = True
+        self.cmp_box.clear(); self.cmp_box.addItem("— none —"); self._cmp_runs = [None]
+        sel = self.ws.selected
+        if sel is not None and sel.is_ready:
+            for r in self.ws.runs:
+                if r is not sel and r.is_ready and compare.same_geometry(r, sel):
+                    self.cmp_box.addItem(f"{r.spec.method}/{r.spec.basis}"); self._cmp_runs.append(r)
+        self._syncing = False
 
     def _on_row_changed(self, row: int):
         if self._syncing or row < 0 or row >= len(self.ws.runs):
@@ -153,11 +172,16 @@ class MainWindow(QtWidgets.QMainWindow):
         run = self.ws.selected
         if run is None or not run.is_ready:
             return None, None
+        ci = self.cmp_box.currentIndex()
+        if ci > 0 and ci < len(self._cmp_runs):          # Δρ mode (same-geometry partner chosen)
+            return compare.difference_density(run, self._cmp_runs[ci], n=72), run.structure()
         if self.field_box.currentText() == "HOMO":
             return run.orbital(0, n=72), run.structure()
         return run.density(n=80), run.structure()
 
     def _refresh_3d(self):
+        if self._syncing:                    # skip renders during programmatic list rebuilds
+            return
         f, struct = self._current_field()
         p = self.plotter
         p.suppress_rendering = True

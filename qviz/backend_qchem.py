@@ -60,11 +60,11 @@ WATER_POSITIONS = [0.0, 0.0, 0.0,
 
 
 class QChemBackend(ComputeBackend):
-    def __init__(self, numbers=None, positions=None, basis="dzvp", max_iter=20):
+    def __init__(self, numbers=None, positions=None, basis="dzvp", method="HF", max_iter=20):
         numbers = list(numbers if numbers is not None else WATER_NUMBERS)
         positions = list(np.asarray(positions if positions is not None
                                     else WATER_POSITIONS, float).ravel())
-        self._calc = qchem_py.Calculator(numbers, positions, basis, max_iter)
+        self._calc = qchem_py.Calculator(numbers, positions, basis, method, max_iter)
         self._struct = self._read_structure()
 
     # -- geometry ----------------------------------------------------------
