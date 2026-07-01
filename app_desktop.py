@@ -134,7 +134,8 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow(self.sym_check)
 
         self.field_box = QtWidgets.QComboBox()
-        self.field_box.addItems(["Electron density", "HOMO", "HOMO-1", "HOMO-2", "HOMO-3"])
+        self.field_box.addItems(["Electron density", "HOMO", "HOMO-1", "HOMO-2", "HOMO-3",
+                                 "LUMO", "LUMO+1", "LUMO+2"])
         self.field_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Field", self.field_box)
 
         # Δρ vs another SAME-GEOMETRY run (populated on workspace change)
@@ -284,10 +285,18 @@ class MainWindow(QtWidgets.QMainWindow):
         if ci > 0 and ci < len(self._cmp_runs):          # Δρ mode (same-geometry partner chosen)
             return compare.difference_density(run, self._cmp_runs[ci], n=72), run.structure()
         t = self.field_box.currentText()
-        if t.startswith("HOMO"):
-            k = 0 if t == "HOMO" else int(t.split("-")[1])   # HOMO-k -> occupied index from the top
-            return run.orbital(k, n=72), run.structure()
-        return run.density(n=80), run.structure()
+        if t == "Electron density":
+            return run.density(n=80), run.structure()
+        # orbital field: map HOMO-k / LUMO+k to an ABSOLUTE MO index via num_occupied
+        rep = run.report("orbitals")
+        nocc = int(rep.get("num_occupied", 1)); ntot = int(rep.get("num_orbitals", nocc))
+        if t == "HOMO":         idx = nocc - 1
+        elif t.startswith("HOMO-"): idx = nocc - 1 - int(t.split("-")[1])
+        elif t == "LUMO":       idx = nocc
+        elif t.startswith("LUMO+"): idx = nocc + int(t.split("+")[1])
+        else:                   idx = nocc - 1
+        idx = max(0, min(idx, ntot - 1))
+        return run.orbital(idx, n=72), run.structure()
 
     def _refresh_3d(self):
         if self._syncing:                    # skip renders during programmatic list rebuilds
