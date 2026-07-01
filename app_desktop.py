@@ -53,6 +53,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ws = Workspace("Untitled", make_backend=make_backend)
         self.scf_steps: list = []
         self._syncing = False
+        self._cam_run = None          # which run the camera is fitted to (reset only on change)
         self.setWindowTitle("qchem viz")
         self.resize(1360, 860)
         self._build_ui()
@@ -184,6 +185,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         f, struct = self._current_field()
         p = self.plotter
+        keep = self.ws.selected is self._cam_run     # same run -> preserve the user's view
+        cam = p.camera_position if keep else None
         p.suppress_rendering = True
         try:
             p.clear()
@@ -198,10 +201,18 @@ class MainWindow(QtWidgets.QMainWindow):
                     grid = field_to_imagedata(f)
                     z0, z1 = f.origin[2], f.origin[2] + (f.dims[2]-1)*f.spacing[2]
                     zpos = z0 + self.slice.value()/100.0*(z1 - z0)
-                    p.add_mesh(grid.slice(normal="z", origin=(0,0,zpos)),
-                               name="slice", cmap="inferno", show_scalar_bar=False)
+                    sl = grid.slice(normal="z", origin=(0, 0, zpos))
+                    if f.signed:                     # diverging + robust symmetric range (skip the core spike)
+                        c = float(np.percentile(np.abs(f.values), 99.0)) or 1e-9
+                        p.add_mesh(sl, name="slice", cmap="coolwarm", clim=[-c, c], show_scalar_bar=False)
+                    else:
+                        p.add_mesh(sl, name="slice", cmap="inferno", show_scalar_bar=False)
         finally:
             p.suppress_rendering = False
+        if cam is not None:
+            p.camera_position = cam                  # keep view across control changes
+        else:
+            p.reset_camera(); self._cam_run = self.ws.selected
         p.render()
 
     def _toggle_spin(self, on):
