@@ -77,3 +77,44 @@ def load(path: str) -> dict:
         out["scf"] = h["scf"][:] if "scf" in h else None
         out["viewstate"] = json.loads(h["viewstate"].attrs.get("json", "{}"))
     return out
+
+
+# --------------------------------------------------------------------------
+# Workspace (multi-run) save / restore -- the .qproj.h5 unit
+# --------------------------------------------------------------------------
+def save_workspace(path: str, ws) -> None:
+    """Persist a Workspace: one group per Run (its RunSpec + energy + status).
+    Runs recompute on load (fast for small molecules); caching the sampled fields
+    for true instant-open is a later enhancement."""
+    with h5py.File(path, "w") as h:
+        h.attrs.update(format="qviz-workspace/1", title=ws.title,
+                       created=_dt.datetime.now().isoformat(timespec="seconds"),
+                       selected=(ws.runs.index(ws.selected) if ws.selected in ws.runs else -1))
+        g = h.create_group("runs")
+        for i, r in enumerate(ws.runs):
+            s = r.spec
+            rg = g.create_group(f"run{i:03d}")
+            rg.attrs.update(label=s.label, method=s.method, basis=s.basis,
+                            energy=(float(r.energy) if r.energy is not None else np.nan),
+                            status=r.status.value)
+            rg.create_dataset("numbers", data=np.asarray(s.numbers, int))
+            rg.create_dataset("positions", data=np.asarray(s.positions, float))
+
+
+def load_workspace(path: str, make_backend):
+    """Rebuild a Workspace from a .qproj.h5, recomputing each Run via make_backend."""
+    from .workspace import Workspace, RunSpec
+    with h5py.File(path, "r") as h:
+        ws = Workspace(str(h.attrs.get("title", "Untitled")), make_backend=make_backend)
+        g = h["runs"]
+        for key in sorted(g):
+            rg = g[key]
+            ws.add_run(RunSpec(
+                label=str(rg.attrs["label"]),
+                numbers=tuple(int(z) for z in rg["numbers"][:]),
+                positions=tuple(float(x) for x in rg["positions"][:]),
+                method=str(rg.attrs["method"]), basis=str(rg.attrs["basis"])))
+        sel = int(h.attrs.get("selected", -1))
+        if 0 <= sel < len(ws.runs):
+            ws.select(ws.runs[sel])
+    return ws

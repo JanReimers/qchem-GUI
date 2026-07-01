@@ -122,6 +122,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.splitDockWidget(insp_dock, conv_dock, QtCore.Qt.Vertical)
 
         m = self.menuBar().addMenu("&File")
+        m.addAction("Open Workspace…", self._open_workspace)
+        m.addAction("Save Workspace…", self._save_workspace)
+        m.addSeparator()
         m.addAction("Save Layout", self._save_layout)
 
     def _dock(self, title, widget, area):
@@ -252,6 +255,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.c_dE.setData(it, [x.dE for x in s]); self.c_comm.setData(it, [x.commutator for x in s])
         self.c_drho.setData(it, [x.drho for x in s])
         self.statusBar().showMessage(f"iter {s[-1].iteration}  E = {s[-1].energy:.6f} Ha")
+
+    def _save_workspace(self):
+        from qviz import project
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Workspace", "workspace.qproj.h5", "qviz workspace (*.h5)")
+        if path:
+            project.save_workspace(path, self.ws)
+            self.statusBar().showMessage(f"saved {len(self.ws.runs)} run(s) → {path}")
+
+    def _open_workspace(self):
+        from qviz import project
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Open Workspace", "", "qviz workspace (*.h5)")
+        if not path:
+            return
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        self.statusBar().showMessage("opening workspace (recomputing runs) …")
+        QtWidgets.QApplication.processEvents()
+        try:
+            self.ws = project.load_workspace(path, make_backend)
+            self.ws.on_change(self._on_ws_change)
+            self._cam_run = None
+            self._on_ws_change(self.ws)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        self.statusBar().showMessage(f"opened {len(self.ws.runs)} run(s) from {path}")
 
     def _save_layout(self):
         self._layout = self.saveState()          # stub: Qt serializes dock geometry
