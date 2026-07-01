@@ -144,6 +144,10 @@ class MainWindow(QtWidgets.QMainWindow):
                                  "LUMO", "LUMO+1", "LUMO+2"])
         self.field_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Field", self.field_box)
 
+        self.rep_box = QtWidgets.QComboBox(); self.rep_box.addItems(["Isosurface", "Wireframe", "Volume"])
+        self.rep_box.setToolTip("Wireframe = see-through mesh; Volume = translucent colour-burst cloud")
+        self.rep_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Representation", self.rep_box)
+
         # Δρ vs another SAME-GEOMETRY run (populated on workspace change)
         self.cmp_box = QtWidgets.QComboBox(); self.cmp_box.currentIndexChanged.connect(self._refresh_3d)
         self._cmp_runs = [None]; form.addRow("Δρ vs", self.cmp_box)
@@ -367,12 +371,17 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             p.clear()
             if f is not None:
-                if f.signed:                         # orbital / Δρ: slider = ±frac·max|f|
-                    scene.add_isosurface(p, f, signed_frac=self.iso.value() / 1000.0)
+                rep = self.rep_box.currentText()
+                if rep == "Volume":                  # translucent colour-burst cloud (no isolevel)
+                    scene.add_volume(p, f)
+                elif f.signed:                       # orbital / Δρ: slider = ±frac·max|f|
+                    scene.add_isosurface(p, f, signed_frac=self.iso.value() / 1000.0,
+                                         style="wireframe" if rep == "Wireframe" else "surface")
                 else:
                     vmax = float(f.values.max())     # density spans a huge range -> LOG slider:
                     level = vmax * 10.0 ** (-3.0 + (self.iso.value() / 200.0) * 2.5)  # ~0.001..0.3·max
-                    scene.add_isosurface(p, f, levels=[level])
+                    scene.add_isosurface(p, f, levels=[level],
+                                         style="wireframe" if rep == "Wireframe" else "surface")
                 scene.add_structure(p, struct)
                 if self.slice_on.isChecked():
                     grid = field_to_imagedata(f)
