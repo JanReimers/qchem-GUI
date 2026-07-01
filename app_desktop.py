@@ -188,8 +188,8 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             p.clear()
             if f is not None:
-                if f.signed:
-                    scene.add_isosurface(p, f)
+                if f.signed:                         # orbital / Δρ: slider = ±frac·max|f|
+                    scene.add_isosurface(p, f, signed_frac=self.iso.value() / 1000.0)
                 else:
                     vmax = float(f.values.max())
                     scene.add_isosurface(p, f, levels=[self.iso.value() / 1000.0 * vmax])

@@ -49,12 +49,14 @@ def add_structure(p: pv.Plotter, s: Structure, *, bond_scale: float = 1.3):
 
 
 def add_isosurface(p: pv.Plotter, f: ScalarField, *, levels=None,
-                   cmap="viridis", opacity=1.0):
-    """Shaded isosurface(s). For signed fields draws +/- lobes in two colours."""
+                   cmap="viridis", opacity=1.0, signed_frac=0.18):
+    """Shaded isosurface(s). For signed fields (orbitals, Δρ) draws +/- lobes in
+    two colours at ±signed_frac·max|f| -- lower signed_frac reveals weaker lobes
+    (e.g. the diffuse side of a difference density)."""
     grid = field_to_imagedata(f)
     if f.signed:
         v = float(np.abs(f.values).max())
-        lo, hi = -0.18 * v, 0.18 * v
+        lo, hi = -signed_frac * v, signed_frac * v
         for lvl, col in ((hi, "#2b7bff"), (lo, "#ff5a4d")):
             iso = grid.contour([lvl])
             if iso.n_points:
