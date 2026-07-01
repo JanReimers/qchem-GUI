@@ -94,15 +94,16 @@ def save_workspace(path: str, ws) -> None:
         for i, r in enumerate(ws.runs):
             s = r.spec
             rg = g.create_group(f"run{i:03d}")
-            rg.attrs.update(label=s.label, method=s.method, basis=s.basis,
+            rg.attrs.update(label=s.label, method=s.method, basis=s.basis, symmetry=s.symmetry,
                             energy=(float(r.energy) if r.energy is not None else np.nan),
                             status=r.status.value)
             rg.create_dataset("numbers", data=np.asarray(s.numbers, int))
             rg.create_dataset("positions", data=np.asarray(s.positions, float))
 
 
-def load_workspace(path: str, make_backend):
-    """Rebuild a Workspace from a .qproj.h5, recomputing each Run via make_backend."""
+def load_workspace(path: str, make_backend, compute: bool = True):
+    """Rebuild a Workspace from a .qproj.h5. compute=True recomputes each Run now
+    (lib use); compute=False leaves them pending so a GUI can compute off-thread."""
     from .workspace import Workspace, RunSpec
     with h5py.File(path, "r") as h:
         ws = Workspace(str(h.attrs.get("title", "Untitled")), make_backend=make_backend)
@@ -113,7 +114,8 @@ def load_workspace(path: str, make_backend):
                 label=str(rg.attrs["label"]),
                 numbers=tuple(int(z) for z in rg["numbers"][:]),
                 positions=tuple(float(x) for x in rg["positions"][:]),
-                method=str(rg.attrs["method"]), basis=str(rg.attrs["basis"])))
+                method=str(rg.attrs["method"]), basis=str(rg.attrs["basis"]),
+                symmetry=bool(rg.attrs.get("symmetry", False))), compute=compute)
         sel = int(h.attrs.get("selected", -1))
         if 0 <= sel < len(ws.runs):
             ws.select(ws.runs[sel])

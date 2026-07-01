@@ -48,20 +48,47 @@ _STATUS_ICON = {RunStatus.PENDING: "…", RunStatus.RUNNING: "⏳",
                 RunStatus.READY: "●", RunStatus.FAILED: "✗"}
 
 
+class _WsBridge(QtCore.QObject):
+    """Marshals the (Qt-agnostic) Workspace observer onto the GUI thread: the model
+    may notify from a compute worker, so we bounce it through a signal (auto-queued
+    cross-thread) instead of touching widgets off the GUI thread."""
+    changed = QtCore.Signal()
+
+
+class _ComputeTask(QtCore.QRunnable):
+    """Runs Run.compute() off the GUI thread. The binding releases the GIL during the
+    C++ SCF, so the window stays live. Run.compute() catches errors -> FAILED status."""
+    def __init__(self, run):
+        super().__init__(); self._run = run
+    def run(self):
+        self._run.compute()
+
+
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self):
+    def __init__(self, open_path=None):
         super().__init__()
-        self.ws = Workspace("Untitled", make_backend=make_backend)
         self.scf_steps: list = []
         self._syncing = False
         self._cam_run = None          # which run the camera is fitted to (reset only on change)
         self.setWindowTitle("qchem viz")
         self.resize(1360, 860)
         self._settings = QtCore.QSettings("qchem-GUI", "desktop")
+        self._bridge = _WsBridge()
+        # changed carries no payload; supply the current workspace (queued when emitted from a worker)
+        self._bridge.changed.connect(lambda: self._on_ws_change(self.ws))
+        self._pool = QtCore.QThreadPool()
+        self._pool.setMaxThreadCount(1)          # serialize computes (integral cache is a global singleton)
         self._build_ui()
-        self.ws.on_change(self._on_ws_change)
-        self._add_molecule("Water (H2O)")       # seed one run so the window isn't empty
-        self._restore_layout()                   # after docks exist + a run is shown
+        self._set_workspace(Workspace("Untitled", make_backend=make_backend))
+        if open_path:
+            self._open_workspace_path(open_path)  # CLI: load a .qproj.h5 instead of seeding
+        else:
+            self._add_molecule("Water (H2O)")     # seed one run so the window isn't empty
+        self._restore_layout()                    # after docks exist + a run is shown
+
+    def _set_workspace(self, ws):
+        self.ws = ws
+        self.ws.on_change(lambda _w: self._bridge.changed.emit())   # model -> GUI thread, thread-safe
 
     # -- layout -----------------------------------------------------------
     def _build_ui(self):
@@ -166,18 +193,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.add_btn.setText(f"+ Add {m} run" if _HAVE_QCHEM else "+ Add run (needs qchem)")
 
     def _add_spec(self, spec: RunSpec):
-        """Add a Run for `spec` (busy cursor), select it, auto-animate its SCF."""
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-        self.statusBar().showMessage(f"computing {spec.summary} …"); QtWidgets.QApplication.processEvents()
-        try:
-            run = self.ws.add_run(spec); self.ws.select(run)
-            self.statusBar().showMessage(
-                f"{spec.summary}: E = {run.energy:.6f} Ha" if run.is_ready
-                else f"{spec.summary}: {run.status.value}")
-        finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
-        if run.is_ready:
-            self._run_scf()                      # auto-animate convergence as feedback
+        """Add a Run and compute it OFF the GUI thread -- the window stays live; the
+        Run Browser shows ⏳ then ● (or ✗). Serialized via the single-thread pool."""
+        run = self.ws.add_run(spec, compute=False)   # shows immediately as pending
+        self.ws.select(run)
+        self.statusBar().showMessage(f"computing {spec.summary} … (window stays responsive)")
+        self._pool.start(_ComputeTask(run))
 
     def _add_molecule(self, name: str):
         Z, pos, basis, n = molecules.MOLECULES[name]
@@ -208,6 +229,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if sel_row >= 0: self.run_list.setCurrentRow(sel_row)
         self._syncing = False
         sel = ws.selected
+        if sel is not None and sel.is_ready:
+            self.statusBar().showMessage(f"{sel.spec.summary}:  E = {sel.energy:.6f} Ha")
+        elif sel is not None and sel.status is RunStatus.FAILED:
+            self.statusBar().showMessage(f"{sel.spec.summary} failed: {sel.error}")
         self.struct_view.setPlainText(
             f"{sel.spec.summary}\n\n{geometry.report(sel.structure())}"
             if (sel is not None and sel.is_ready) else "")
@@ -221,11 +246,17 @@ class MainWindow(QtWidgets.QMainWindow):
         rep = run.report("orbitals")
         if not rep or "levels" not in rep:
             self.orb_view.setPlainText("(orbital report unavailable)"); return
+        levels = rep["levels"]
+        n_occ = sum(1 for L in levels if L["occ"] > 0.5)
+        n_show = min(len(levels), n_occ + 3)         # occupied + LUMO..LUMO+2 (high virtuals are noise)
         lines = [f"{run.spec.summary}   E = {rep.get('energy', 0):.6f} Ha", "",
                  f"{'e (Ha)':>10} {'occ':>4}  MO"]
-        for L in rep["levels"]:
+        for i, L in enumerate(levels[:n_show]):
             tag = f"{L['n']}{L['label'].lower()}" if L['label'] != "No Symmetry" else str(L['n'])
-            lines.append(f"{L['e']:10.4f} {L['occ']:4.1f}  {tag}")
+            mark = "  ← HOMO" if i == n_occ - 1 else ("  ← LUMO" if i == n_occ else "")
+            lines.append(f"{L['e']:10.4f} {L['occ']:4.1f}  {tag}{mark}")
+        if len(levels) > n_show:
+            lines.append(f"     … {len(levels) - n_show} higher virtual(s) hidden")
         self.orb_view.setPlainText("\n".join(lines))
 
     def _refresh_cmp_box(self):
@@ -330,22 +361,23 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"saved {len(self.ws.runs)} run(s) → {path}")
 
     def _open_workspace(self):
-        from qviz import project
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Open Workspace", "", "qviz workspace (*.h5)")
-        if not path:
-            return
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-        self.statusBar().showMessage("opening workspace (recomputing runs) …")
-        QtWidgets.QApplication.processEvents()
+        if path:
+            self._open_workspace_path(path)
+
+    def _open_workspace_path(self, path):
+        from qviz import project
         try:
-            self.ws = project.load_workspace(path, make_backend)
-            self.ws.on_change(self._on_ws_change)
-            self._cam_run = None
-            self._on_ws_change(self.ws)
-        finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
-        self.statusBar().showMessage(f"opened {len(self.ws.runs)} run(s) from {path}")
+            ws = project.load_workspace(path, make_backend, compute=False)   # pending runs
+        except Exception as e:                       # noqa: BLE001
+            self.statusBar().showMessage(f"open failed: {e}"); return
+        self._set_workspace(ws)
+        self._cam_run = None
+        self._on_ws_change(ws)                        # show the pending runs immediately
+        for run in ws.runs:                           # compute off-thread, serialized
+            self._pool.start(_ComputeTask(run))
+        self.statusBar().showMessage(f"opening {len(ws.runs)} run(s) from {path} …")
 
     # -- PaperMill v1: publication export ---------------------------------
     def _export_image(self):
@@ -394,7 +426,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
-    w = MainWindow(); w.show()
+    # optional workspace file on the command line: python app_desktop.py my.qproj.h5
+    open_path = next((a for a in sys.argv[1:] if a.endswith((".h5", ".qproj.h5"))), None)
+    w = MainWindow(open_path=open_path); w.show()
     sys.exit(app.exec())
 
 
