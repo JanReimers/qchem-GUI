@@ -65,6 +65,7 @@ class Run:
         self._make_backend = make_backend
         self._be: Optional[ComputeBackend] = None
         self._structure: Optional[Structure] = None
+        self._cache: dict = {}      # memoized sampled fields, keyed by (kind, args)
         self._listeners: list[Callable[["Run"], None]] = []
 
     # -- observer (Qt-agnostic) -------------------------------------------
@@ -84,6 +85,7 @@ class Run:
         try:
             self._be = self._make_backend(self.spec)
             self._structure = self._be.structure()
+            self._cache.clear()      # a fresh converge invalidates any memoized grids
             te = getattr(self._be, "total_energy", None)
             self.energy = te() if callable(te) else None
             self.status = RunStatus.READY
@@ -102,13 +104,21 @@ class Run:
         return self._structure
 
     def density(self, n: int = 64, pad: float = 5.0) -> ScalarField:
-        self._require_ready(); return self._be.density(n, pad)
+        return self._sampled(("density", n, pad), lambda: self._be.density(n, pad))
 
     def orbital(self, index: int = 0, n: int = 64, pad: float = 5.0) -> ScalarField:
-        self._require_ready(); return self._be.orbital(index, n, pad)
+        return self._sampled(("orbital", index, n, pad), lambda: self._be.orbital(index, n, pad))
 
     def density_gradient(self, n: int = 22, pad: float = 4.0) -> VectorField:
-        self._require_ready(); return self._be.density_gradient(n, pad)
+        return self._sampled(("grad", n, pad), lambda: self._be.density_gradient(n, pad))
+
+    def _sampled(self, key, sample):
+        """Lazy + memoized: sample the grid on first ask, reuse thereafter (the
+        cache is cleared on each Converge)."""
+        self._require_ready()
+        if key not in self._cache:
+            self._cache[key] = sample()
+        return self._cache[key]
 
     def run_scf(self):
         self._require_ready(); return self._be.run_scf()
