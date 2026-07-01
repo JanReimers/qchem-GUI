@@ -146,9 +146,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.field_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Field", self.field_box)
 
         self.rep_box = QtWidgets.QComboBox()
-        self.rep_box.addItems(["Isosurface", "Wireframe", "Surface z(x,y)"])
+        self.rep_box.addItems(["Isosurface", "Wireframe", "Surface (height)"])
         self.rep_box.setToolTip("Wireframe = see-through mesh; "
-                                "Surface z(x,y) = lift the 'Slice z' plane into a height surface")
+                                "Surface (height) = lift the slice plane into a z=f height surface")
         self.rep_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Representation", self.rep_box)
 
         self.logrho = QtWidgets.QCheckBox("log₁₀ height (density surface)")
@@ -164,13 +164,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.iso.valueChanged.connect(self._refresh_3d); form.addRow("Iso level", self.iso)
 
         self.slice_on = QtWidgets.QCheckBox("show slice"); self.slice_on.toggled.connect(self._refresh_3d)
-        form.addRow(self.slice_on)
+        self.axis_box = QtWidgets.QComboBox(); self.axis_box.addItems(["Z", "X", "Y"])
+        self.axis_box.setToolTip("Plane-normal axis for the slice and the height surface")
+        self.axis_box.currentTextChanged.connect(self._refresh_3d)
+        _sl = QtWidgets.QHBoxLayout(); _sl.addWidget(self.slice_on); _sl.addStretch(1)
+        _sl.addWidget(QtWidgets.QLabel("axis")); _sl.addWidget(self.axis_box)
+        form.addRow(_sl)
         self.slice = QtWidgets.QSlider(QtCore.Qt.Horizontal); self.slice.setRange(0, 100); self.slice.setValue(50)
-        self.slice.valueChanged.connect(self._refresh_3d); form.addRow("Slice z", self.slice)
+        self.slice.valueChanged.connect(self._refresh_3d); form.addRow("Slice pos", self.slice)
 
         self.spin_on = QtWidgets.QCheckBox("spin view"); self.spin_on.toggled.connect(self._toggle_spin)
-        form.addRow(self.spin_on)
+        self.sweep_on = QtWidgets.QCheckBox("sweep view"); self.sweep_on.toggled.connect(self._toggle_sweep)
+        self.sweep_on.setToolTip("Animate the slice plane back and forth along the selected axis")
+        _sv = QtWidgets.QHBoxLayout(); _sv.addWidget(self.spin_on); _sv.addWidget(self.sweep_on); _sv.addStretch(1)
+        form.addRow(_sv)
         self._spin_timer = QtCore.QTimer(self); self._spin_timer.timeout.connect(self._spin_tick)
+        self._sweep_timer = QtCore.QTimer(self); self._sweep_timer.timeout.connect(self._sweep_tick)
+        self._sweep_dir = 1
 
         self.run_btn = QtWidgets.QPushButton("Replay SCF ▶")
         self.run_btn.setToolTip("Re-animate the already-converged SCF of the selected run "
@@ -386,8 +396,9 @@ class MainWindow(QtWidgets.QMainWindow):
         p.suppress_rendering = True
         try:
             p.clear()
-            if f is not None and rep == "Surface z(x,y)":   # standalone height surface (no atoms/slice)
-                scene.add_height_surface(p, f, z_frac=self.slice.value() / 100.0,
+            axis = {"X": 0, "Y": 1, "Z": 2}[self.axis_box.currentText()]
+            if f is not None and rep == "Surface (height)":   # standalone height surface (no atoms/slice)
+                scene.add_height_surface(p, f, frac=self.slice.value() / 100.0, axis=axis,
                                          log=self.logrho.isChecked())
             elif f is not None:
                 if f.signed:                         # orbital / Δρ: slider = ±frac·max|f|
@@ -401,9 +412,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 scene.add_structure(p, struct)
                 if self.slice_on.isChecked():
                     grid = field_to_imagedata(f)
-                    z0, z1 = f.origin[2], f.origin[2] + (f.dims[2]-1)*f.spacing[2]
-                    zpos = z0 + self.slice.value()/100.0*(z1 - z0)
-                    sl = grid.slice(normal="z", origin=(0, 0, zpos))
+                    a0 = f.origin[axis]; a1 = a0 + (f.dims[axis]-1)*f.spacing[axis]
+                    o = [0.0, 0.0, 0.0]; o[axis] = a0 + self.slice.value()/100.0*(a1 - a0)
+                    sl = grid.slice(normal=("x", "y", "z")[axis], origin=tuple(o))
                     if f.signed:                     # diverging + robust symmetric range (skip the core spike)
                         c = float(np.percentile(np.abs(f.values), 99.0)) or 1e-9
                         p.add_mesh(sl, name="slice", cmap="coolwarm", clim=[-c, c], show_scalar_bar=False)
@@ -414,7 +425,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if cam is not None:
             p.camera_position = cam                  # keep view across control changes
         else:
-            if rep == "Surface z(x,y)":
+            if rep == "Surface (height)":
                 p.camera_position = "iso"             # a 3/4 view suits the height surface
             p.reset_camera(); p.camera.zoom(0.85)    # fit the new run + a little breathing room
             self._cam_run = self.ws.selected
@@ -426,6 +437,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _spin_tick(self):
         self.plotter.camera.Azimuth(1.5); self.plotter.render()
+
+    def _toggle_sweep(self, on):
+        self._sweep_timer.start(60) if on else self._sweep_timer.stop()
+
+    def _sweep_tick(self):
+        # drive the slice slider back and forth; setValue re-fires _refresh_3d
+        v = self.slice.value() + self._sweep_dir * 2
+        if   v >= 100: v, self._sweep_dir = 100, -1
+        elif v <= 0:   v, self._sweep_dir = 0, 1
+        self.slice.setValue(v)
 
     # -- streamed SCF (of the selected run) -------------------------------
     def _run_scf(self):
