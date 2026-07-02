@@ -72,6 +72,26 @@ class _ScfBridge(QtCore.QObject):
     done = QtCore.Signal(str)
 
 
+class _SampleBridge(QtCore.QObject):
+    """Signals a finished off-thread field sample back to the GUI thread (err '' = ok)."""
+    done = QtCore.Signal(str)
+
+
+class _SampleTask(QtCore.QRunnable):
+    """Samples a field grid off the GUI thread (the ~2 s n^3 ScalarFunction sweep) and
+    stows the result in the shared cache under `key`; then signals done. The dict write
+    is atomic under the GIL and only read after `done`, so no lock is needed."""
+    def __init__(self, key, sampler, cache, bridge):
+        super().__init__(); self._key = key; self._sampler = sampler
+        self._cache = cache; self._bridge = bridge
+    def run(self):
+        try:
+            self._cache[self._key] = self._sampler()   # may be None (e.g. spin on an unpolarized run)
+            self._bridge.done.emit("")
+        except Exception as e:                          # noqa: BLE001 -- surface to the status bar
+            self._bridge.done.emit(str(e))
+
+
 class _ScfTask(QtCore.QRunnable):
     """Streams Run.stream_scf() off the GUI thread, emitting each step through a
     _ScfBridge so the convergence trace fills in real time without freezing the UI.
@@ -99,6 +119,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scf_steps: list = []
         self._syncing = False
         self._cam_run = None          # which run the camera is fitted to (reset only on change)
+        self._fld_cache = {}          # GUI-side field cache: key -> ScalarField|None (off-thread sampled)
+        self._sample_bridges = []     # in-flight sample bridges, kept alive until they fire
+        self._computing_run = None    # the run whose compute we auto-replay once it turns ready
         self.setWindowTitle("qchem viz")
         self.resize(1360, 860)
         self._settings = QtCore.QSettings("qchem-GUI", "desktop")
@@ -225,15 +248,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.c_dE   = self.conv.plot(pen="#4dd0e1", symbol="o", name="|dE|")
         self.c_comm = self.conv.plot(pen="#ff8a65", symbol="s", name="||[F,D]||")
         self.c_drho = self.conv.plot(pen="#aed581", symbol="t", name="||drho||")
-        conv_dock = self._dock("Convergence", self.conv, QtCore.Qt.RightDockWidgetArea)
-        self.splitDockWidget(insp_dock, conv_dock, QtCore.Qt.Vertical)
+        self._conv_dock = self._dock("Convergence", self.conv, QtCore.Qt.RightDockWidgetArea)
+        self.splitDockWidget(insp_dock, self._conv_dock, QtCore.Qt.Vertical)
 
         # right dock: MO energy-level diagram (tabbed with convergence)
         self.mo_plot = pg.PlotWidget(title="MO diagram")
         self.mo_plot.setLabel("left", "Energy (Ha)"); self.mo_plot.showGrid(x=False, y=True, alpha=0.2)
         self.mo_plot.setMouseEnabled(x=False, y=True)    # irreps are categorical; zoom the energy axis
         mo_dock = self._dock("MO diagram", self.mo_plot, QtCore.Qt.RightDockWidgetArea)
-        self.tabifyDockWidget(conv_dock, mo_dock); conv_dock.raise_()
+        self.tabifyDockWidget(self._conv_dock, mo_dock)
+
+        # right dock: SCF log (iteration-by-iteration text trace + run metadata)
+        self.scf_log = QtWidgets.QPlainTextEdit(); self.scf_log.setReadOnly(True)
+        self.scf_log.setFont(QtGui.QFont("monospace")); self.scf_log.setMaximumBlockCount(500)
+        self._log_dock = self._dock("SCF log", self.scf_log, QtCore.Qt.RightDockWidgetArea)
+        self.tabifyDockWidget(self._conv_dock, self._log_dock)
+        self._conv_dock.raise_()
 
         m = self.menuBar().addMenu("&File")
         m.addAction("Import molecule (xyz)…", self._import_xyz)
@@ -262,8 +292,18 @@ class MainWindow(QtWidgets.QMainWindow):
         Run Browser shows ⏳ then ● (or ✗). Serialized via the single-thread pool."""
         run = self.ws.add_run(spec, compute=False)   # shows immediately as pending
         self.ws.select(run)
+        self._computing_run = run                     # auto-replay its SCF once it turns ready
         self.statusBar().showMessage(f"computing {spec.summary} … (window stays responsive)")
+        self._conv_dock.raise_()                      # bring the SCF graph forward for the iteration trace
+        self._log(f"▶ computing {spec.summary}", clear=True)
+        self._log(f"  basis={spec.basis}  method={spec.method}  "
+                  f"multiplicity={spec.multiplicity or 'auto'}  accelerator=DIIS")
         self._pool.start(_ComputeTask(run))
+
+    def _log(self, msg, clear=False):
+        if clear:
+            self.scf_log.clear()
+        self.scf_log.appendPlainText(msg)
 
     def _on_mol_changed(self, name):
         if name in molecules.MOLECULES:          # default the multiplicity to the preset's
@@ -307,6 +347,16 @@ class MainWindow(QtWidgets.QMainWindow):
             if (sel is not None and sel.is_ready) else "")
         self._update_orbitals(sel)
         self._refresh_cmp_box()
+        # the run we just kicked off has finished converging -> animate its SCF trace live.
+        # Do this BEFORE _refresh_3d so the (paced) SCF task queues on the single-thread pool
+        # ahead of the field sample: the user watches iterations first, the density lands after.
+        cr = self._computing_run
+        if cr is not None and cr.is_ready and cr is ws.selected:
+            self._computing_run = None
+            self._run_scf()                           # streamed replay from the seed (Convergence dock is up)
+        elif cr is not None and cr.status is RunStatus.FAILED:
+            self._computing_run = None
+            self._log(f"✗ {cr.spec.summary} failed: {cr.error}")
         self._refresh_3d()
 
     def _update_orbitals(self, run):
@@ -386,22 +436,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ws.select(self.ws.runs[row])
 
     # -- 3D viewport ------------------------------------------------------
-    def _current_field(self):
+    def _field_spec(self):
+        """Resolve the current field selection into (run, key, sampler, struct) WITHOUT
+        the heavy grid sample. `key` is hashable (field-cache key); `sampler` is a nullary
+        closure safe to run off the GUI thread -- it reads NO widgets, only the captured
+        run + params. The cheap index resolution (report) stays here on the GUI thread."""
         run = self.ws.selected
         if run is None or not run.is_ready:
-            return None, None
+            return None, None, None, None
+        struct = run.structure(); rid = id(run)
         ci = self.cmp_box.currentIndex()
         if ci > 0 and ci < len(self._cmp_runs):          # Δρ mode (same-geometry partner chosen)
-            return compare.difference_density(run, self._cmp_runs[ci], n=72), run.structure()
+            other = self._cmp_runs[ci]
+            return (run, (rid, "drho", id(other)),
+                    (lambda r=run, o=other: compare.difference_density(r, o, n=72)), struct)
         t = self.field_box.currentText()
         if t == "Electron density":
-            return run.density(n=80), run.structure()
+            return run, (rid, "density"), (lambda r=run: r.density(n=80)), struct
         if t.startswith("Spin density"):
-            sf = run.spin_density(n=80)                   # None -> unpolarized run
-            if sf is None:
-                self.statusBar().showMessage(
-                    "Spin density: this run is unpolarized (ρ↑=ρ↓) -- set multiplicity > 1")
-            return sf, run.structure()
+            return run, (rid, "spin"), (lambda r=run: r.spin_density(n=80)), struct
         # orbital field: map HOMO-k / LUMO+k to an ABSOLUTE MO index via num_occupied
         rep = run.report("orbitals")
         nocc = int(rep.get("num_occupied", 1)); ntot = int(rep.get("num_orbitals", nocc))
@@ -411,12 +464,40 @@ class MainWindow(QtWidgets.QMainWindow):
         elif t.startswith("LUMO+"): idx = nocc + int(t.split("+")[1])
         else:                   idx = nocc - 1
         idx = max(0, min(idx, ntot - 1))
-        return run.orbital(idx, n=72), run.structure()
+        return run, (rid, "orbital", idx), (lambda r=run, i=idx: r.orbital(i, n=72)), struct
 
     def _refresh_3d(self):
         if self._syncing:                    # skip renders during programmatic list rebuilds
             return
-        f, struct = self._current_field()
+        run, key, sampler, struct = self._field_spec()
+        if run is None:
+            self._render_field(None, None); return
+        if key in self._fld_cache:           # already sampled -> render immediately (slider drags land here)
+            self._render_field(self._fld_cache[key], struct); return
+        # cache miss: the n^3 sample is ~2 s -> do it OFF the GUI thread; show the molecule meanwhile
+        self._render_field(None, struct)
+        self.statusBar().showMessage("sampling field … (window stays responsive)")
+        bridge = _SampleBridge(); self._sample_bridges.append(bridge)
+        bridge.done.connect(lambda err, k=key, st=struct, b=bridge: self._on_sample_done(k, st, err, b))
+        self._pool.start(_SampleTask(key, sampler, self._fld_cache, bridge))
+
+    def _on_sample_done(self, key, struct, err, bridge):
+        if bridge in self._sample_bridges:
+            self._sample_bridges.remove(bridge)
+        if err:
+            self.statusBar().showMessage(f"field sampling failed: {err}"); return
+        # render only if the finished sample is STILL what's selected (guards rapid field switches)
+        run, cur_key, _s, cur_struct = self._field_spec()
+        if cur_key != key:
+            return
+        f = self._fld_cache.get(key)
+        if f is None and key[1] == "spin":
+            self.statusBar().showMessage("Spin density: this run is unpolarized (ρ↑=ρ↓) -- set multiplicity > 1")
+        elif run is not None and run.is_ready:
+            self.statusBar().showMessage(f"{run.spec.summary}:  E = {run.energy:.6f} Ha")
+        self._render_field(f, cur_struct)
+
+    def _render_field(self, f, struct):
         p = self.plotter
         rep = self.rep_box.currentText()
         rep_changed = rep != getattr(self, "_last_rep", None)   # switching rep re-frames the view
@@ -449,6 +530,8 @@ class MainWindow(QtWidgets.QMainWindow):
                         p.add_mesh(sl, name="slice", cmap="coolwarm", clim=[-c, c], show_scalar_bar=False)
                     else:
                         p.add_mesh(sl, name="slice", cmap="inferno", show_scalar_bar=False)
+            elif struct is not None:                 # no field yet (sampling in flight) -> show the molecule
+                scene.add_structure(p, struct)
         finally:
             p.suppress_rendering = False
         if cam is not None:
@@ -487,7 +570,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._scf_bridge.step.connect(self._on_scf_step)
         self._scf_bridge.done.connect(self._on_scf_done)
         self.run_btn.setEnabled(False)
-        self.statusBar().showMessage("SCF replay running…")
+        self._conv_dock.raise_()                          # SCF graph to the foreground for the trace
+        self.statusBar().showMessage("SCF running…")
+        self._log(f"  {'iter':>4}  {'E (Ha)':>15}  {'|dE|':>10}  {'||[F,D]||':>10}  {'||dρ||':>10}")
         self._pool.start(_ScfTask(run, self._scf_bridge))   # single-thread pool: serialized vs computes
 
     def _on_scf_step(self, s):
@@ -496,11 +581,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.c_dE.setData(it, [x.dE for x in steps]); self.c_comm.setData(it, [x.commutator for x in steps])
         self.c_drho.setData(it, [x.drho for x in steps])
         self.statusBar().showMessage(f"iter {s.iteration}  E = {s.energy:.6f} Ha")
+        self._log(f"  {s.iteration:>4}  {s.energy:>15.8f}  {s.dE:>10.2e}  {s.commutator:>10.2e}  {s.drho:>10.2e}")
 
     def _on_scf_done(self, err):
         self.run_btn.setEnabled(True)
-        self.statusBar().showMessage(f"SCF replay failed: {err}" if err
-                                     else f"SCF replay done — {len(self.scf_steps)} iterations")
+        if err:
+            self.statusBar().showMessage(f"SCF failed: {err}"); self._log(f"✗ {err}")
+        else:
+            n = len(self.scf_steps); e = self.scf_steps[-1].energy if n else float("nan")
+            self.statusBar().showMessage(f"SCF done — {n} iterations,  E = {e:.6f} Ha")
+            self._log(f"✔ converged in {n} iterations,  E = {e:.8f} Ha")
 
     def _save_workspace(self):
         from qviz import project
