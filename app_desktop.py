@@ -105,6 +105,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scf_steps: list = []
         self._syncing = False
         self._cam_run = None          # which run the camera is fitted to (reset only on change)
+        self._cam_pair = None         # which (left,right) pair the split camera is fitted to
+        self._split = False           # is the viewport currently two linked panes?
         self._fld_cache = {}          # GUI-side field cache: key -> ScalarField|None (off-thread sampled)
         self._sample_bridges = []     # in-flight sample bridges, kept alive until they fire
         self.setWindowTitle("qchem viz")
@@ -193,9 +195,14 @@ class MainWindow(QtWidgets.QMainWindow):
                                "(density fields only -- a signed field can't be logged)")
         self.logrho.toggled.connect(self._refresh_3d); form.addRow(self.logrho)
 
-        # Δρ vs another SAME-GEOMETRY run (populated on workspace change)
+        # compare against another SAME-GEOMETRY run (populated on workspace change).
+        # split off -> Δρ overlay in one view; split on -> two linked panes, each its own field.
         self.cmp_box = QtWidgets.QComboBox(); self.cmp_box.currentIndexChanged.connect(self._refresh_3d)
-        self._cmp_runs = [None]; form.addRow("Δρ vs", self.cmp_box)
+        self._cmp_runs = [None]; form.addRow("Compare vs", self.cmp_box)
+        self.split_on = QtWidgets.QCheckBox("split view (two linked panes)")
+        self.split_on.setToolTip("Show the selected run and the 'Compare vs' run side by side, "
+                                 "cameras linked; unchecked = Δρ difference in one view")
+        self.split_on.toggled.connect(self._refresh_3d); form.addRow(self.split_on)
 
         self.iso = QtWidgets.QSlider(QtCore.Qt.Horizontal); self.iso.setRange(1, 200); self.iso.setValue(40)
         self.iso.valueChanged.connect(self._refresh_3d); form.addRow("Iso level", self.iso)
@@ -411,20 +418,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ws.select(self.ws.runs[row])
 
     # -- 3D viewport ------------------------------------------------------
+    def _partner(self):
+        """The 'Compare vs' run, or None if none chosen / not applicable."""
+        ci = self.cmp_box.currentIndex()
+        return self._cmp_runs[ci] if 0 < ci < len(self._cmp_runs) else None
+
     def _field_spec(self):
-        """Resolve the current field selection into (run, key, sampler, struct) WITHOUT
-        the heavy grid sample. `key` is hashable (field-cache key); `sampler` is a nullary
-        closure safe to run off the GUI thread -- it reads NO widgets, only the captured
-        run + params. The cheap index resolution (report) stays here on the GUI thread."""
+        """The selected run's field for SINGLE view: (run, key, sampler, struct). With a
+        Compare-vs partner and split OFF this is the Δρ overlay; otherwise the plain field."""
         run = self.ws.selected
         if run is None or not run.is_ready:
             return None, None, None, None
+        other = self._partner()
+        if other is not None and not self.split_on.isChecked():   # Δρ mode (single view)
+            return (run, (id(run), "drho", id(other)),
+                    (lambda r=run, o=other: compare.difference_density(r, o, n=72)), run.structure())
+        return self._field_spec_for(run)
+
+    def _field_spec_for(self, run):
+        """Resolve the field_box selection for a GIVEN run into (run, key, sampler, struct)
+        WITHOUT the heavy grid sample. `key` is hashable (field-cache key); `sampler` is a
+        nullary closure safe to run off the GUI thread -- it reads NO widgets, only the
+        captured run + params. The cheap index resolution (report) stays on the GUI thread."""
         struct = run.structure(); rid = id(run)
-        ci = self.cmp_box.currentIndex()
-        if ci > 0 and ci < len(self._cmp_runs):          # Δρ mode (same-geometry partner chosen)
-            other = self._cmp_runs[ci]
-            return (run, (rid, "drho", id(other)),
-                    (lambda r=run, o=other: compare.difference_density(r, o, n=72)), struct)
         t = self.field_box.currentText()
         if t == "Electron density":
             return run, (rid, "density"), (lambda r=run: r.density(n=80)), struct
@@ -444,6 +460,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refresh_3d(self):
         if self._syncing:                    # skip renders during programmatic list rebuilds
             return
+        partner = self._partner()
+        sel = self.ws.selected
+        want_split = bool(self.split_on.isChecked() and partner is not None
+                          and sel is not None and sel.is_ready)
+        if want_split != self._split:        # only rebuild the viewport on the transition
+            self._set_viewport(want_split)
+        if self._split:
+            self._refresh_compare(sel, partner); return
+
         run, key, sampler, struct = self._field_spec()
         if run is None:
             self._render_field(None, None); return
@@ -461,6 +486,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._sample_bridges.remove(bridge)
         if err:
             self.statusBar().showMessage(f"field sampling failed: {err}"); return
+        if self._split:                      # split view redraws both panes from the (now warmer) cache
+            self._refresh_3d(); return
         # render only if the finished sample is STILL what's selected (guards rapid field switches)
         run, cur_key, _s, cur_struct = self._field_spec()
         if cur_key != key:
@@ -472,6 +499,37 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"{run.spec.summary}:  E = {run.energy:.6f} Ha")
         self._render_field(f, cur_struct)
 
+    def _draw_field(self, p, f, struct):
+        """Add the field actors for ONE renderer (no clear / camera / render -- the caller
+        owns those). Shared by the single view and each pane of the split view."""
+        rep = self.rep_box.currentText()
+        axis = {"X": 0, "Y": 1, "Z": 2}[self.axis_box.currentText()]
+        if f is not None and rep == "Surface (height)":   # standalone height surface (no atoms/slice)
+            scene.add_height_surface(p, f, frac=self.slice.value() / 100.0, axis=axis,
+                                     log=self.logrho.isChecked())
+        elif f is not None:
+            if f.signed:                         # orbital / Δρ: slider = ±frac·max|f|
+                scene.add_isosurface(p, f, signed_frac=self.iso.value() / 1000.0,
+                                     style="wireframe" if rep == "Wireframe" else "surface")
+            else:
+                vmax = float(f.values.max())     # density spans a huge range -> LOG slider:
+                level = vmax * 10.0 ** (-3.0 + (self.iso.value() / 200.0) * 2.5)  # ~0.001..0.3·max
+                scene.add_isosurface(p, f, levels=[level],
+                                     style="wireframe" if rep == "Wireframe" else "surface")
+            scene.add_structure(p, struct)
+            if self.slice_on.isChecked():
+                grid = field_to_imagedata(f)
+                a0 = f.origin[axis]; a1 = a0 + (f.dims[axis]-1)*f.spacing[axis]
+                o = [0.0, 0.0, 0.0]; o[axis] = a0 + self.slice.value()/100.0*(a1 - a0)
+                sl = grid.slice(normal=("x", "y", "z")[axis], origin=tuple(o))
+                if f.signed:                     # diverging + robust symmetric range (skip the core spike)
+                    c = float(np.percentile(np.abs(f.values), 99.0)) or 1e-9
+                    p.add_mesh(sl, name="slice", cmap="coolwarm", clim=[-c, c], show_scalar_bar=False)
+                else:
+                    p.add_mesh(sl, name="slice", cmap="inferno", show_scalar_bar=False)
+        elif struct is not None:                 # no field yet (sampling in flight) -> show the molecule
+            scene.add_structure(p, struct)
+
     def _render_field(self, f, struct):
         p = self.plotter
         rep = self.rep_box.currentText()
@@ -480,33 +538,7 @@ class MainWindow(QtWidgets.QMainWindow):
         cam = p.camera_position if keep else None
         p.suppress_rendering = True
         try:
-            p.clear()
-            axis = {"X": 0, "Y": 1, "Z": 2}[self.axis_box.currentText()]
-            if f is not None and rep == "Surface (height)":   # standalone height surface (no atoms/slice)
-                scene.add_height_surface(p, f, frac=self.slice.value() / 100.0, axis=axis,
-                                         log=self.logrho.isChecked())
-            elif f is not None:
-                if f.signed:                         # orbital / Δρ: slider = ±frac·max|f|
-                    scene.add_isosurface(p, f, signed_frac=self.iso.value() / 1000.0,
-                                         style="wireframe" if rep == "Wireframe" else "surface")
-                else:
-                    vmax = float(f.values.max())     # density spans a huge range -> LOG slider:
-                    level = vmax * 10.0 ** (-3.0 + (self.iso.value() / 200.0) * 2.5)  # ~0.001..0.3·max
-                    scene.add_isosurface(p, f, levels=[level],
-                                         style="wireframe" if rep == "Wireframe" else "surface")
-                scene.add_structure(p, struct)
-                if self.slice_on.isChecked():
-                    grid = field_to_imagedata(f)
-                    a0 = f.origin[axis]; a1 = a0 + (f.dims[axis]-1)*f.spacing[axis]
-                    o = [0.0, 0.0, 0.0]; o[axis] = a0 + self.slice.value()/100.0*(a1 - a0)
-                    sl = grid.slice(normal=("x", "y", "z")[axis], origin=tuple(o))
-                    if f.signed:                     # diverging + robust symmetric range (skip the core spike)
-                        c = float(np.percentile(np.abs(f.values), 99.0)) or 1e-9
-                        p.add_mesh(sl, name="slice", cmap="coolwarm", clim=[-c, c], show_scalar_bar=False)
-                    else:
-                        p.add_mesh(sl, name="slice", cmap="inferno", show_scalar_bar=False)
-            elif struct is not None:                 # no field yet (sampling in flight) -> show the molecule
-                scene.add_structure(p, struct)
+            p.clear(); self._draw_field(p, f, struct)
         finally:
             p.suppress_rendering = False
         if cam is not None:
@@ -516,6 +548,64 @@ class MainWindow(QtWidgets.QMainWindow):
                 p.camera_position = "iso"             # a 3/4 view suits the height surface
             p.reset_camera(); p.camera.zoom(0.85)    # fit the new run + a little breathing room
             self._cam_run = self.ws.selected
+        self._last_rep = rep
+        p.render()
+
+    # -- split view: two linked panes -------------------------------------
+    def _set_viewport(self, split):
+        """Swap the central plotter for a (1,2) grid (split) or (1,1) (single). PyVista fixes
+        the renderer grid at construction, so a mode change rebuilds the interactor."""
+        new = QtInteractor(self, shape=(1, 2) if split else (1, 1))
+        scene.style(new)                             # set_background defaults to all renderers
+        old = self.plotter
+        try: old.close()
+        except Exception: pass                       # noqa: BLE001 -- best-effort VTK teardown
+        self.plotter = new
+        self.setCentralWidget(new.interactor)        # QMainWindow deletes the previous central widget
+        self._split = split
+        self._cam_run = None; self._cam_pair = None   # force a reframe in the new viewport
+
+    def _refresh_compare(self, left_run, right_run):
+        panes = []
+        for run in (left_run, right_run):
+            _r, key, sampler, struct = self._field_spec_for(run)
+            if key in self._fld_cache:
+                panes.append((run, self._fld_cache[key], struct))
+            else:                                    # sample this pane off-thread; redraw when it lands
+                panes.append((run, None, struct))
+                bridge = _SampleBridge(); self._sample_bridges.append(bridge)
+                bridge.done.connect(lambda err, b=bridge: self._on_compare_sample_done(b))
+                self._pool.start(_SampleTask(key, sampler, self._fld_cache, bridge))
+        self._draw_compare(panes)
+
+    def _on_compare_sample_done(self, bridge):
+        if bridge in self._sample_bridges:
+            self._sample_bridges.remove(bridge)
+        if self._split:
+            self._refresh_3d()                       # both panes redraw from the warmer cache
+
+    def _draw_compare(self, panes):
+        p = self.plotter
+        pair = tuple(id(r) for r, _f, _s in panes)
+        reframe = pair != self._cam_pair
+        rep = self.rep_box.currentText()
+        p.suppress_rendering = True
+        try:
+            p.clear()
+            for idx, (run, f, struct) in enumerate(panes):
+                p.subplot(0, idx)
+                self._draw_field(p, f, struct)
+                lbl = run.spec.summary + (f"\nE = {run.energy:.4f} Ha" if run.energy is not None else "")
+                p.add_text(lbl, font_size=9, color="w")
+            p.link_views()                           # one camera drives both panes
+        finally:
+            p.suppress_rendering = False
+        if reframe:
+            p.subplot(0, 0)
+            if rep == "Surface (height)":
+                p.camera_position = "iso"
+            p.reset_camera(); p.camera.zoom(0.85)    # propagates to the linked pane
+            self._cam_pair = pair
         self._last_rep = rep
         p.render()
 
