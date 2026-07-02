@@ -61,12 +61,14 @@ WATER_POSITIONS = [0.0, 0.0, 0.0,
 
 class QChemBackend(ComputeBackend):
     def __init__(self, numbers=None, positions=None, basis="dzvp", method="HF",
-                 symmetry=False, multiplicity=0, max_iter=20):
+                 symmetry=False, multiplicity=0, max_iter=20, on_iteration=None):
         numbers = list(numbers if numbers is not None else WATER_NUMBERS)
         positions = list(np.asarray(positions if positions is not None
                                     else WATER_POSITIONS, float).ravel())
+        # on_iteration(iter, E, dE, [F,D], drho) streams the (single) converge live; the ctor
+        # runs the SCF, so this fires DURING construction, not on a later call.
         self._calc = qchem_py.Calculator(numbers, positions, basis, method,
-                                         symmetry, multiplicity, max_iter)
+                                         symmetry, multiplicity, max_iter, on_iteration)
         self._struct = self._read_structure()
 
     def report(self, kind: str) -> dict:

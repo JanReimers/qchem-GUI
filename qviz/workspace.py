@@ -54,10 +54,11 @@ class RunSpec:
         return s
 
 
-# A factory maps a spec -> a ComputeBackend. THIS is the DIP seam: the Workspace
-# never names QChemBackend/AnalyticBackend/RemoteBackend -- local vs remote is just
-# which factory you inject.
-BackendFactory = Callable[[RunSpec], ComputeBackend]
+# A factory maps (spec, on_iteration) -> a ComputeBackend. THIS is the DIP seam: the
+# Workspace never names QChemBackend/AnalyticBackend/RemoteBackend -- local vs remote is
+# just which factory you inject. on_iteration (optional) streams the SCF; a factory that
+# can't stream simply ignores it.
+BackendFactory = Callable[..., ComputeBackend]
 
 
 class Run:
@@ -85,13 +86,15 @@ class Run:
             cb(self)
 
     # -- lifecycle --------------------------------------------------------
-    def compute(self) -> None:
+    def compute(self, on_iteration=None) -> None:
         """Run the calculation. Synchronous for local backends; the status + notify
-        shape lets the Qt layer push this onto a worker thread later unchanged."""
+        shape lets the Qt layer push this onto a worker thread later unchanged.
+        on_iteration(iter, E, dE, [F,D], drho), if given, streams the SCF live -- the
+        backend fires it once per iteration DURING construction (the converge)."""
         self.status = RunStatus.RUNNING
         self._notify()
         try:
-            self._be = self._make_backend(self.spec)
+            self._be = self._make_backend(self.spec, on_iteration)
             self._structure = self._be.structure()
             self._cache.clear()      # a fresh converge invalidates any memoized grids
             te = getattr(self._be, "total_energy", None)

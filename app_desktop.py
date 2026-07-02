@@ -25,6 +25,7 @@ from pyvistaqt import QtInteractor
 from qviz import scene, compare, geometry
 from qviz.scene import field_to_imagedata
 from qviz.workspace import Workspace, RunSpec, RunStatus
+from qviz.data import SCFStep
 from qviz import molecules
 
 # -- backend factory (DIP): real qchem if available, else analytic water --------
@@ -37,11 +38,12 @@ except Exception as _e:                       # extension not built / QCHEM_BUIL
 from qviz.backend_analytic import AnalyticBackend
 
 
-def make_backend(spec: RunSpec):
+def make_backend(spec: RunSpec, on_iteration=None):
     if _HAVE_QCHEM:
         return QChemBackend(list(spec.numbers), list(spec.positions),
-                            spec.basis, spec.method, spec.symmetry, spec.multiplicity)
-    return AnalyticBackend()                   # geometry-agnostic (water) stand-in
+                            spec.basis, spec.method, spec.symmetry, spec.multiplicity,
+                            on_iteration=on_iteration)   # streams the converge live
+    return AnalyticBackend()                   # geometry-agnostic (water) stand-in (no streaming)
 
 
 _STATUS_ICON = {RunStatus.PENDING: "…", RunStatus.RUNNING: "⏳",
@@ -56,18 +58,22 @@ class _WsBridge(QtCore.QObject):
 
 
 class _ComputeTask(QtCore.QRunnable):
-    """Runs Run.compute() off the GUI thread. The binding releases the GIL during the
-    C++ SCF, so the window stays live. Run.compute() catches errors -> FAILED status."""
-    def __init__(self, run):
-        super().__init__(); self._run = run
+    """Runs Run.compute() off the GUI thread, streaming the SCF live: the binding fires
+    on_iteration per step DURING the converge (GIL released between steps), so the trace
+    fills in real time and the window stays responsive. Run.compute() catches errors
+    -> FAILED status; we relay that as the bridge's done payload."""
+    def __init__(self, run, bridge):
+        super().__init__(); self._run = run; self._bridge = bridge
     def run(self):
-        self._run.compute()
+        step = lambda it, E, dE, comm, drho: self._bridge.step.emit(SCFStep(it, E, dE, comm, drho))
+        self._run.compute(on_iteration=step)
+        self._bridge.done.emit(self._run.error or "" if self._run.status is RunStatus.FAILED else "")
 
 
 class _ScfBridge(QtCore.QObject):
-    """Marshals a live SCF replay from a worker thread onto the GUI thread. The C++
-    observer fires each iteration on the worker; `step` (queued cross-thread) hands
-    the SCFStep to the plot, `done` (error string, '' = ok) re-enables the button."""
+    """Marshals the live SCF stream from a compute worker onto the GUI thread. The C++
+    observer fires each iteration on the worker; `step` (queued cross-thread) hands the
+    SCFStep to the convergence plot/log, `done` (error string, '' = ok) writes the footer."""
     step = QtCore.Signal(object)
     done = QtCore.Signal(str)
 
@@ -92,26 +98,6 @@ class _SampleTask(QtCore.QRunnable):
             self._bridge.done.emit(str(e))
 
 
-class _ScfTask(QtCore.QRunnable):
-    """Streams Run.stream_scf() off the GUI thread, emitting each step through a
-    _ScfBridge so the convergence trace fills in real time without freezing the UI.
-    `pace` throttles the stream to a watchable cadence -- a tiny molecular SCF
-    otherwise converges in <0.1 s. time.sleep releases the GIL, so pacing on the
-    worker keeps the window responsive rather than blocking it."""
-    def __init__(self, run, bridge, pace=0.08):
-        super().__init__(); self._run = run; self._bridge = bridge; self._pace = pace
-    def run(self):
-        import time
-        def on_step(s):
-            self._bridge.step.emit(s)
-            if self._pace:
-                time.sleep(self._pace)
-        try:
-            self._run.stream_scf(on_step)
-            self._bridge.done.emit("")
-        except Exception as e:                       # noqa: BLE001 -- surface to the status bar
-            self._bridge.done.emit(str(e))
-
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, open_path=None):
@@ -121,7 +107,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._cam_run = None          # which run the camera is fitted to (reset only on change)
         self._fld_cache = {}          # GUI-side field cache: key -> ScalarField|None (off-thread sampled)
         self._sample_bridges = []     # in-flight sample bridges, kept alive until they fire
-        self._computing_run = None    # the run whose compute we auto-replay once it turns ready
         self.setWindowTitle("qchem viz")
         self.resize(1360, 860)
         self._settings = QtCore.QSettings("qchem-GUI", "desktop")
@@ -234,11 +219,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sweep_timer = QtCore.QTimer(self); self._sweep_timer.timeout.connect(self._sweep_tick)
         self._sweep_dir = 1
 
-        self.run_btn = QtWidgets.QPushButton("Replay SCF ▶")
-        self.run_btn.setToolTip("Re-animate the already-converged SCF of the selected run "
-                                "(the calculation itself runs on '+ Add run').")
-        self.run_btn.clicked.connect(self._run_scf)
-        form.addRow(self.run_btn)
         insp_dock = self._dock("Inspector", insp, QtCore.Qt.RightDockWidgetArea)
 
         # right dock (bottom): SCF convergence
@@ -292,13 +272,18 @@ class MainWindow(QtWidgets.QMainWindow):
         Run Browser shows ⏳ then ● (or ✗). Serialized via the single-thread pool."""
         run = self.ws.add_run(spec, compute=False)   # shows immediately as pending
         self.ws.select(run)
-        self._computing_run = run                     # auto-replay its SCF once it turns ready
-        self.statusBar().showMessage(f"computing {spec.summary} … (window stays responsive)")
-        self._conv_dock.raise_()                      # bring the SCF graph forward for the iteration trace
+        self.scf_steps.clear()                        # fresh convergence trace for this run
+        self.c_dE.setData([], []); self.c_comm.setData([], []); self.c_drho.setData([], [])
+        self._conv_dock.raise_()                      # bring the SCF graph forward for the live trace
         self._log(f"▶ computing {spec.summary}", clear=True)
         self._log(f"  basis={spec.basis}  method={spec.method}  "
                   f"multiplicity={spec.multiplicity or 'auto'}  accelerator=DIIS")
-        self._pool.start(_ComputeTask(run))
+        self._log(f"  {'iter':>4}  {'E (Ha)':>15}  {'|dE|':>10}  {'||[F,D]||':>10}  {'||dρ||':>10}")
+        self.statusBar().showMessage(f"computing {spec.summary} … (window stays responsive)")
+        self._compute_bridge = _ScfBridge()           # kept alive on self for the task's lifetime
+        self._compute_bridge.step.connect(self._on_scf_step)
+        self._compute_bridge.done.connect(self._on_compute_done)
+        self._pool.start(_ComputeTask(run, self._compute_bridge))
 
     def _log(self, msg, clear=False):
         if clear:
@@ -347,16 +332,6 @@ class MainWindow(QtWidgets.QMainWindow):
             if (sel is not None and sel.is_ready) else "")
         self._update_orbitals(sel)
         self._refresh_cmp_box()
-        # the run we just kicked off has finished converging -> animate its SCF trace live.
-        # Do this BEFORE _refresh_3d so the (paced) SCF task queues on the single-thread pool
-        # ahead of the field sample: the user watches iterations first, the density lands after.
-        cr = self._computing_run
-        if cr is not None and cr.is_ready and cr is ws.selected:
-            self._computing_run = None
-            self._run_scf()                           # streamed replay from the seed (Convergence dock is up)
-        elif cr is not None and cr.status is RunStatus.FAILED:
-            self._computing_run = None
-            self._log(f"✗ {cr.spec.summary} failed: {cr.error}")
         self._refresh_3d()
 
     def _update_orbitals(self, run):
@@ -560,21 +535,7 @@ class MainWindow(QtWidgets.QMainWindow):
         elif v <= 0:   v, self._sweep_dir = 0, 1
         self.slice.setValue(v)
 
-    # -- streamed SCF (of the selected run), off the GUI thread -----------
-    def _run_scf(self):
-        run = self.ws.selected
-        if run is None or not run.is_ready:
-            return
-        self.scf_steps.clear()
-        self._scf_bridge = _ScfBridge()                  # kept alive on self for the task's lifetime
-        self._scf_bridge.step.connect(self._on_scf_step)
-        self._scf_bridge.done.connect(self._on_scf_done)
-        self.run_btn.setEnabled(False)
-        self._conv_dock.raise_()                          # SCF graph to the foreground for the trace
-        self.statusBar().showMessage("SCF running…")
-        self._log(f"  {'iter':>4}  {'E (Ha)':>15}  {'|dE|':>10}  {'||[F,D]||':>10}  {'||dρ||':>10}")
-        self._pool.start(_ScfTask(run, self._scf_bridge))   # single-thread pool: serialized vs computes
-
+    # -- live SCF trace (streamed from the compute worker) ----------------
     def _on_scf_step(self, s):
         self.scf_steps.append(s)                          # runs on the GUI thread (queued from the worker)
         steps = self.scf_steps; it = [x.iteration for x in steps]
@@ -583,13 +544,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(f"iter {s.iteration}  E = {s.energy:.6f} Ha")
         self._log(f"  {s.iteration:>4}  {s.energy:>15.8f}  {s.dE:>10.2e}  {s.commutator:>10.2e}  {s.drho:>10.2e}")
 
-    def _on_scf_done(self, err):
-        self.run_btn.setEnabled(True)
+    def _on_compute_done(self, err):
         if err:
-            self.statusBar().showMessage(f"SCF failed: {err}"); self._log(f"✗ {err}")
+            self.statusBar().showMessage(f"compute failed: {err}"); self._log(f"✗ {err}")
         else:
             n = len(self.scf_steps); e = self.scf_steps[-1].energy if n else float("nan")
-            self.statusBar().showMessage(f"SCF done — {n} iterations,  E = {e:.6f} Ha")
             self._log(f"✔ converged in {n} iterations,  E = {e:.8f} Ha")
 
     def _save_workspace(self):
