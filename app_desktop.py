@@ -132,9 +132,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -- layout -----------------------------------------------------------
     def _build_ui(self):
-        self.plotter = QtInteractor(self)
+        # A stable container is the permanent central widget; the QtInteractor lives INSIDE its
+        # stretching layout. Swapping the interactor (single <-> split) then never resizes the
+        # central area -- the layout forces the new interactor to fill immediately (a bare
+        # setCentralWidget swap leaves it at a zero size hint until a manual resize).
+        self._viewport = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(self._viewport); lay.setContentsMargins(0, 0, 0, 0)
+        self.plotter = QtInteractor(self._viewport)
         scene.style(self.plotter)
-        self.setCentralWidget(self.plotter.interactor)
+        lay.addWidget(self.plotter.interactor)
+        self.setCentralWidget(self._viewport)
 
         # left dock: Run Browser + Structure readout (tabbed together)
         self.run_list = QtWidgets.QListWidget()
@@ -553,15 +560,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -- split view: two linked panes -------------------------------------
     def _set_viewport(self, split):
-        """Swap the central plotter for a (1,2) grid (split) or (1,1) (single). PyVista fixes
-        the renderer grid at construction, so a mode change rebuilds the interactor."""
-        new = QtInteractor(self, shape=(1, 2) if split else (1, 1))
+        """Swap the plotter for a (1,2) grid (split) or (1,1) (single). PyVista fixes the
+        renderer grid at construction, so a mode change rebuilds the interactor -- inside the
+        persistent container layout, so it fills the central area at once (no zero-size flash)."""
+        new = QtInteractor(self._viewport, shape=(1, 2) if split else (1, 1))
         scene.style(new)                             # set_background defaults to all renderers
         old = self.plotter
-        try: old.close()
-        except Exception: pass                       # noqa: BLE001 -- best-effort VTK teardown
+        lay = self._viewport.layout()
+        lay.removeWidget(old.interactor)             # detach the old, attach the new in its place
+        old.interactor.setParent(None)
         self.plotter = new
-        self.setCentralWidget(new.interactor)        # QMainWindow deletes the previous central widget
+        lay.addWidget(new.interactor)
+        try: old.close()                             # best-effort VTK teardown, then let Qt reap it
+        except Exception: pass                       # noqa: BLE001
+        old.interactor.deleteLater()
         self._split = split
         self._cam_run = None; self._cam_pair = None   # force a reframe in the new viewport
 
