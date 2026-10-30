@@ -5,8 +5,9 @@ Dockable single-window layout (ParaView/Blender idiom, not GaussView MDI):
     Run Browser (left) | 3D viewport (center) | Inspector + SCF convergence (right)
 
 The window holds a Workspace; panels bind to the *selected* Run via the model's
-Qt-agnostic observer. Adding a molecule = adding a Run. The compute backend is
-injected by a factory (DIP): real qchem if the extension is built, else analytic.
+Qt-agnostic observer. Adding a molecule = adding a Run: a back-end-neutral RunSpec
+(doc/RunSpecPlan.md) on the first registered back end that can run it -- SOLID² in
+process when the qchem extension is built, else the analytic stand-in.
 """
 from __future__ import annotations
 import os, sys, pathlib
@@ -24,26 +25,19 @@ from pyvistaqt import QtInteractor
 
 from qviz import scene, compare, geometry
 from qviz.scene import field_to_imagedata
-from qviz.workspace import Workspace, RunSpec, RunStatus
-from qviz.data import SCFStep
+from qviz.workspace import Workspace, RunStatus
+from qviz.spec import Accuracy, molecule
+from qviz.backends import default_registry
 from qviz import molecules
 
-# -- backend factory (DIP): real qchem if available, else analytic water --------
-try:
-    from qviz.backend_qchem import QChemBackend
-    _HAVE_QCHEM = True
-except Exception as _e:                       # extension not built / QCHEM_BUILD unset
-    print(f"qchem backend unavailable ({_e}); analytic only")
-    _HAVE_QCHEM = False
-from qviz.backend_analytic import AnalyticBackend
+# -- the back ends (DIP): the Workspace asks the registry by name, never a concrete class ----
+REGISTRY = default_registry()
+_SOLID2 = REGISTRY.get("SOLID²").capabilities()
+if not _SOLID2.installed:
+    print(f"SOLID² unavailable ({_SOLID2.why_absent}); analytic stand-in only")
 
-
-def make_backend(spec: RunSpec, on_iteration=None):
-    if _HAVE_QCHEM:
-        return QChemBackend(list(spec.numbers), list(spec.positions),
-                            spec.basis, spec.method, spec.symmetry, spec.multiplicity,
-                            on_iteration=on_iteration)   # streams the converge live
-    return AnalyticBackend()                   # geometry-agnostic (water) stand-in (no streaming)
+# the Inspector's method box -> the spec's (theory, functional)
+_METHOD = {"HF": ("HF", None), "LDA": ("DFT", "LDA"), "Xalpha": ("DFT", "Xalpha")}
 
 
 _STATUS_ICON = {RunStatus.PENDING: "…", RunStatus.RUNNING: "⏳",
@@ -58,16 +52,17 @@ class _WsBridge(QtCore.QObject):
 
 
 class _ComputeTask(QtCore.QRunnable):
-    """Runs Run.compute() off the GUI thread, streaming the SCF live: the binding fires
-    on_iteration per step DURING the converge (GIL released between steps), so the trace
-    fills in real time and the window stays responsive. Run.compute() catches errors
-    -> FAILED status; we relay that as the bridge's done payload."""
-    def __init__(self, run, bridge):
+    """Runs Run.compute() off the GUI thread, streaming the SCF live: the back end hands
+    each SCFStep over DURING the converge (SOLID² releases the GIL between steps), so the
+    trace fills in real time and the window stays responsive. Run.compute() catches errors
+    -> FAILED status; we relay that as the bridge's done payload.  `bridge` None = no live
+    trace (a workspace reopen computes its runs quietly)."""
+    def __init__(self, run, bridge=None):
         super().__init__(); self._run = run; self._bridge = bridge
     def run(self):
-        step = lambda it, E, dE, comm, drho: self._bridge.step.emit(SCFStep(it, E, dE, comm, drho))
-        self._run.compute(on_iteration=step)
-        self._bridge.done.emit(self._run.error or "" if self._run.status is RunStatus.FAILED else "")
+        self._run.compute(on_step=self._bridge.step.emit if self._bridge else None)
+        if self._bridge:
+            self._bridge.done.emit(self._run.error or "" if self._run.status is RunStatus.FAILED else "")
 
 
 class _ScfBridge(QtCore.QObject):
@@ -118,7 +113,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pool = QtCore.QThreadPool()
         self._pool.setMaxThreadCount(1)          # serialize computes (integral cache is a global singleton)
         self._build_ui()
-        self._set_workspace(Workspace("Untitled", make_backend=make_backend))
+        self._set_workspace(Workspace("Untitled", registry=REGISTRY))
         if open_path:
             self._open_workspace_path(open_path)  # CLI: load a .qproj.h5 instead of seeding
         else:
@@ -167,7 +162,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # the Add button names the method it will use, so it's clear BEFORE you click
         self.add_btn = QtWidgets.QPushButton()
         self.add_btn.clicked.connect(lambda: self._add_molecule(self.mol_box.currentText()))
-        self.add_btn.setEnabled(_HAVE_QCHEM)
         self.method_box.currentTextChanged.connect(self._update_add_label)
         row = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(row); h.setContentsMargins(0,0,0,0)
         h.addWidget(self.mol_box); h.addWidget(self.method_box); h.addWidget(self.add_btn)
@@ -279,9 +273,17 @@ class MainWindow(QtWidgets.QMainWindow):
     # -- workspace <-> UI --------------------------------------------------
     def _update_add_label(self, *_):
         m = self.method_box.currentText()
-        self.add_btn.setText(f"+ Add {m} run" if _HAVE_QCHEM else "+ Add run (needs qchem)")
+        self.add_btn.setText(f"+ Add {m} run" if _SOLID2.installed else f"+ Add {m} run (analytic: no qchem)")
 
-    def _add_spec(self, spec: RunSpec):
+    def _make_spec(self, label, numbers, positions):
+        """The Inspector's choices as a RunSpec: the basis and the point-group blocking are STATED choices."""
+        theory, functional = _METHOD[self.method_box.currentText()]
+        scf = {"impose_symmetry": self.sym_check.isChecked()}
+        return molecule(label, numbers, positions, theory=theory, functional=functional,
+                        multiplicity=self.mult_spin.value() or None,
+                        accuracy=Accuracy(representation={"basis": self.basis_box.currentText()}, scf=scf))
+
+    def _add_spec(self, spec):
         """Add a Run and compute it OFF the GUI thread -- the window stays live; the
         Run Browser shows ⏳ then ● (or ✗). Serialized via the single-thread pool."""
         run = self.ws.add_run(spec, compute=False)   # shows immediately as pending
@@ -289,11 +291,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scf_steps.clear()                        # fresh convergence trace for this run
         self.c_dE.setData([], []); self.c_comm.setData([], []); self.c_drho.setData([], [])
         self._conv_dock.raise_()                      # bring the SCF graph forward for the live trace
-        self._log(f"▶ computing {spec.summary}", clear=True)
-        self._log(f"  basis={spec.basis}  method={spec.method}  "
-                  f"multiplicity={spec.multiplicity or 'auto'}  accelerator=DIIS")
+        self._log(f"▶ computing {run.summary}", clear=True)
+        try:
+            for k, v in run.backend.translate(spec).resolved.items():   # the resolved settings, before the run
+                self._log(f"  {k}: {v}")
+        except Exception as e:                        # noqa: BLE001 -- compute() reports it as FAILED
+            self._log(f"  (cannot translate: {e})")
         self._log(f"  {'iter':>4}  {'E (Ha)':>15}  {'|dE|':>10}  {'||[F,D]||':>10}  {'||dρ||':>10}")
-        self.statusBar().showMessage(f"computing {spec.summary} … (window stays responsive)")
+        self.statusBar().showMessage(f"computing {run.summary} … (window stays responsive)")
         self._compute_bridge = _ScfBridge()           # kept alive on self for the task's lifetime
         self._compute_bridge.step.connect(self._on_scf_step)
         self._compute_bridge.done.connect(self._on_compute_done)
@@ -310,9 +315,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _add_molecule(self, name: str):
         Z, pos, basis, n, mult = molecules.MOLECULES[name]
-        self._add_spec(RunSpec(label=name.split(" (")[0], numbers=tuple(Z), positions=tuple(pos),
-                               basis=self.basis_box.currentText(), method=self.method_box.currentText(),
-                               symmetry=self.sym_check.isChecked(), multiplicity=self.mult_spin.value()))
+        self._add_spec(self._make_spec(name.split(" (")[0], Z, pos))
 
     def _import_xyz(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import molecule (xyz)", "", "XYZ (*.xyz)")
@@ -322,9 +325,11 @@ class MainWindow(QtWidgets.QMainWindow):
             numbers, positions, label = molecules.from_xyz(path)
         except Exception as e:                   # noqa: BLE001
             self.statusBar().showMessage(f"xyz import failed: {e}"); return
-        self._add_spec(RunSpec(label=label, numbers=tuple(numbers), positions=tuple(positions),
-                               basis=self.basis_box.currentText(), method=self.method_box.currentText(),
-                               symmetry=self.sym_check.isChecked(), multiplicity=self.mult_spin.value()))
+        try:
+            spec = self._make_spec(label, numbers, positions)
+        except Exception as e:                   # noqa: BLE001 -- e.g. a multiplicity of the wrong parity
+            self.statusBar().showMessage(f"invalid run: {e}"); return
+        self._add_spec(spec)
 
     def _on_ws_change(self, ws: Workspace):
         self._syncing = True
@@ -332,17 +337,17 @@ class MainWindow(QtWidgets.QMainWindow):
         sel_row = -1
         for i, r in enumerate(ws.runs):
             e = f"{r.energy:.5f}" if r.energy is not None else "—"
-            self.run_list.addItem(f"{_STATUS_ICON[r.status]}  {r.spec.summary}   E={e}")
+            self.run_list.addItem(f"{_STATUS_ICON[r.status]}  {r.summary}   E={e}")
             if r is ws.selected: sel_row = i
         if sel_row >= 0: self.run_list.setCurrentRow(sel_row)
         self._syncing = False
         sel = ws.selected
         if sel is not None and sel.is_ready:
-            self.statusBar().showMessage(f"{sel.spec.summary}:  E = {sel.energy:.6f} Ha")
+            self.statusBar().showMessage(f"{sel.summary}:  E = {sel.energy:.6f} Ha")
         elif sel is not None and sel.status is RunStatus.FAILED:
-            self.statusBar().showMessage(f"{sel.spec.summary} failed: {sel.error}")
+            self.statusBar().showMessage(f"{sel.summary} failed: {sel.error}")
         self.struct_view.setPlainText(
-            f"{sel.spec.summary}\n\n{geometry.report(sel.structure())}"
+            f"{sel.summary}\n\n{geometry.report(sel.structure())}"
             if (sel is not None and sel.is_ready) else "")
         self._update_orbitals(sel)
         self._refresh_cmp_box()
@@ -357,7 +362,7 @@ class MainWindow(QtWidgets.QMainWindow):
         levels = rep["levels"]
         n_occ = sum(1 for L in levels if L["occ"] > 0.5)
         n_show = min(len(levels), n_occ + 3)         # occupied + LUMO..LUMO+2 (high virtuals are noise)
-        lines = [f"{run.spec.summary}   E = {rep.get('energy', 0):.6f} Ha", "",
+        lines = [f"{run.summary}   E = {rep.get('energy', 0):.6f} Ha", "",
                  f"{'e (Ha)':>10} {'occ':>4}  MO"]
         for i, L in enumerate(levels[:n_show]):
             tag = f"{L['n']}{L['label'].lower()}" if L['label'] != "No Symmetry" else str(L['n'])
@@ -401,7 +406,7 @@ class MainWindow(QtWidgets.QMainWindow):
             tag = f"{L['n']}{L['label'].lower()}" if L['label'] != "No Symmetry" else str(L['n'])
             lab = pg.TextItem(tag, color="#bbb", anchor=la); lab.setPos(lx, e); p.addItem(lab)
         p.getAxis("bottom").setTicks([[(i, lab) for lab, i in xmap.items()]])
-        p.setTitle(f"MO diagram — {run.spec.summary}")
+        p.setTitle(f"MO diagram — {run.summary}")
         if shown:                                     # frame the valence cluster (exclude deep core)
             es = [float(L["e"]) for L in shown]
             valence = [e for e in es if e > -5.0] or es
@@ -416,7 +421,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if sel is not None and sel.is_ready:
             for r in self.ws.runs:
                 if r is not sel and r.is_ready and compare.same_geometry(r, sel):
-                    self.cmp_box.addItem(f"{r.spec.method}/{r.spec.basis}"); self._cmp_runs.append(r)
+                    self.cmp_box.addItem(compare.method_tag(r)); self._cmp_runs.append(r)
         self._syncing = False
 
     def _on_row_changed(self, row: int):
@@ -503,7 +508,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if f is None and key[1] == "spin":
             self.statusBar().showMessage("Spin density: this run is unpolarized (ρ↑=ρ↓) -- set multiplicity > 1")
         elif run is not None and run.is_ready:
-            self.statusBar().showMessage(f"{run.spec.summary}:  E = {run.energy:.6f} Ha")
+            self.statusBar().showMessage(f"{run.summary}:  E = {run.energy:.6f} Ha")
         self._render_field(f, cur_struct)
 
     def _draw_field(self, p, f, struct):
@@ -607,7 +612,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for idx, (run, f, struct) in enumerate(panes):
                 p.subplot(0, idx)
                 self._draw_field(p, f, struct)
-                lbl = run.spec.summary + (f"\nE = {run.energy:.4f} Ha" if run.energy is not None else "")
+                lbl = run.summary + (f"\nE = {run.energy:.4f} Ha" if run.energy is not None else "")
                 p.add_text(lbl, font_size=9, color="w")
             p.link_views()                           # one camera drives both panes
         finally:
@@ -670,7 +675,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _open_workspace_path(self, path):
         from qviz import project
         try:
-            ws = project.load_workspace(path, make_backend, compute=False)   # pending runs
+            ws = project.load_workspace(path, REGISTRY, compute=False)   # pending runs
         except Exception as e:                       # noqa: BLE001
             self.statusBar().showMessage(f"open failed: {e}"); return
         self._set_workspace(ws)
@@ -698,14 +703,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if not path:
             return
         import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-        steps = list(r.run_scf())                        # fresh trace for the selected run
+        steps = r.scf                                    # the trace recorded during the run
         it = [s.iteration for s in steps]
         fig, ax = plt.subplots(figsize=(6.4, 4.2))
         ax.semilogy(it, [max(s.dE, 1e-13) for s in steps], "o-", label=r"$|\Delta E|$")
         ax.semilogy(it, [s.commutator for s in steps], "s-", label=r"$\|[F,D]\|$")
         ax.semilogy(it, [s.drho for s in steps], "^-", label=r"$\|\Delta\rho\|$")
         ax.set_xlabel("SCF iteration"); ax.set_ylabel("residual")
-        ax.set_title(f"{r.spec.summary}   E = {r.energy:.6f} Ha")
+        ax.set_title(f"{r.summary}   E = {r.energy:.6f} Ha")
         ax.legend(); ax.grid(alpha=0.3); fig.tight_layout()
         fig.savefig(path); plt.close(fig)
         self.statusBar().showMessage(f"exported SCF plot → {path}")

@@ -1,12 +1,13 @@
-"""qviz -- a feasibility spike for the qchem6 visualization layer.
+"""qviz -- the qchem (SOLID²) visualization app's model layer.
 
-Pipeline:  qchem (C++)  --nanobind-->  ComputeBackend  -->  PyVista / pyqtgraph
+Pipeline:  RunSpec (what)  -->  Backend (how: SOLID² in process, later CP2K / QE / ABINIT / VASP)
+           -->  Result (neutral)  -->  PyVista / pyqtgraph
 
-See qviz.data for the (frontend-agnostic) boundary every backend implements.
+See doc/RunSpecPlan.md.  qviz.data holds the frontend-agnostic records the views draw.
 """
-from .data import (Structure, ScalarField, VectorField, SCFStep,
-                   ComputeBackend)
-from .backend_analytic import AnalyticBackend, water
+from .data import Structure, ScalarField, VectorField, SCFStep
+from .spec import RunSpec, SpecError, molecule
+from .backends import Backend, BackendRegistry, FakeBackend, Solid2Backend, default_registry
 
-__all__ = ["Structure", "ScalarField", "VectorField", "SCFStep",
-           "ComputeBackend", "AnalyticBackend", "water"]
+__all__ = ["Structure", "ScalarField", "VectorField", "SCFStep", "RunSpec", "SpecError", "molecule",
+           "Backend", "BackendRegistry", "FakeBackend", "Solid2Backend", "default_registry"]

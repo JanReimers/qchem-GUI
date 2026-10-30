@@ -1,19 +1,8 @@
 """
-qviz.data -- the C++ <-> Python boundary.
+qviz.data -- the records the views draw.
 
-This module defines the *only* thing the GUI knows about the numerical core:
-a handful of plain, frontend-agnostic data records plus a `ComputeBackend`
-Protocol that emits them.
-
-The whole architecture rests on this seam:
-
-    qchem (C++)  --nanobind-->  ComputeBackend  -->  qviz frontends (PyVista, pyqtgraph)
-
-Today `backend_analytic.AnalyticBackend` implements `ComputeBackend` with
-closed-form chemistry so we can build and admire the plots. Tomorrow you write
-`backend_qchem.QChemBackend` as a nanobind module exposing the real density /
-structure / SCF trace from src/. Nothing in the frontends changes -- they only
-ever see these records.
+Plain, frontend-agnostic data: Structure, ScalarField, VectorField, SCFStep.  Every back end's
+Result (qviz.backends.base) hands these out, so nothing in the frontends knows which code ran.
 
 Design rules (mirrors CLAUDE.md "expose high-level answers, not internals"):
   * arrays are contiguous NumPy (zero-copy views of Blaze storage via nanobind),
@@ -23,7 +12,6 @@ Design rules (mirrors CLAUDE.md "expose high-level answers, not internals"):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, Iterator, runtime_checkable
 import numpy as np
 
 
@@ -90,26 +78,3 @@ class SCFStep:
     dE: float                      # |E_n - E_{n-1}|
     commutator: float              # ||[F, D]||  (DIIS error)
     drho: float                    # ||rho_n - rho_{n-1}||
-
-
-# --------------------------------------------------------------------------
-# The backend contract
-# --------------------------------------------------------------------------
-@runtime_checkable
-class ComputeBackend(Protocol):
-    """What every numerical backend must offer the GUI. nanobind fills this."""
-
-    def structure(self) -> Structure: ...
-
-    def density(self, n: int = 64, pad: float = 5.0) -> ScalarField:
-        """Total electron density on an n^3 grid padded `pad` bohr past the atoms."""
-
-    def orbital(self, index: int, n: int = 64, pad: float = 5.0) -> ScalarField:
-        """A (signed) molecular orbital -- e.g. the HOMO."""
-
-    def density_gradient(self, n: int = 24, pad: float = 5.0) -> VectorField: ...
-
-    def run_scf(self) -> Iterator[SCFStep]:
-        """Drive an SCF, yielding one SCFStep per iteration so the GUI can
-        stream convergence live. The real backend yields from inside the C++
-        iterate loop via a callback; the frontend never blocks."""

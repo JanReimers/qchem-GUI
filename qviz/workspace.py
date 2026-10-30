@@ -4,24 +4,24 @@ qviz.workspace -- the Workspace{Run} model (Pillar 2).
 The load-bearing foundation: the app is multi-run from line one. Everything
 (layouts, compare, optimizer, papermill) hangs off this.
 
-Deliberately **Qt-agnostic** -- pure Python, observer callbacks, and the backend
-injected by a factory. So the model obeys DIP just like the seam it sits on: it
-depends on the `ComputeBackend` abstraction, never on a concrete backend or on Qt.
+Deliberately **Qt-agnostic** -- pure Python, observer callbacks.  It obeys DIP: a Run
+depends on the `Backend` abstraction (qviz.backends.base), never on a concrete code; the
+Workspace holds a `BackendRegistry` and asks it by name.
 
-A `Run` carries a lifecycle (pending → running → ready / failed) so the GUI never
-assumes compute is instant. Local backends resolve synchronously today; a future
-RemoteBackend resolves over the network through the *same* interface. The Qt layer
-can run `Run.compute()` on a worker thread later -- the status + notify shape is
-already here.
+A Run is ONE spec on ONE back end: `compute()` translates the spec (a Job: the native input
+and the resolved settings, inspectable before anything runs), runs it -- streaming each SCF
+iteration to the caller -- and keeps the neutral Result.  Lifecycle pending → running →
+ready / failed, so the GUI never assumes compute is instant; the Qt layer calls
+`compute()` on a worker thread.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
-import numpy as np
 
-from .data import Structure, ScalarField, VectorField, ComputeBackend
+from .backends.base import Backend, BackendRegistry, Job, Result
+from .data import ScalarField, SCFStep, Structure, VectorField
+from .spec import RunSpec
 
 
 class RunStatus(Enum):
@@ -31,51 +31,31 @@ class RunStatus(Enum):
     FAILED  = "failed"
 
 
-@dataclass(frozen=True)
-class RunSpec:
-    """What DEFINES a calculation -- the inputs. Hashable + serializable, so it can
-    be a dict key, written to a project file, or shipped to a remote job."""
-    label: str
-    numbers: tuple[int, ...]
-    positions: tuple[float, ...]    # flat 3N, bohr
-    method: str = "HF"             # HF | LDA | Xalpha
-    basis: str = "dzvp"
-    symmetry: bool = False         # SALC point-group blocking (adds irrep labels)
-    multiplicity: int = 0          # 2S+1 (0 = minimal spin); >1 -> spin-polarized open shell
+class Run:
+    """One calculation: a spec + the back end it runs on + a lifecycle + (when ready) the Result.
+    Fields are sampled lazily on access and memoized -- a 64^3 grid is built only when a panel asks."""
+
+    def __init__(self, spec: RunSpec, backend: Backend):
+        self.spec = spec
+        self.backend = backend
+        self.status: RunStatus = RunStatus.PENDING
+        self.error: Optional[str] = None
+        self.job: Optional[Job] = None
+        self.result: Optional[Result] = None
+        self._cache: dict = {}
+        self._listeners: list[Callable[["Run"], None]] = []
+
+    @property
+    def backend_name(self) -> str:
+        return self.backend.name
 
     @property
     def summary(self) -> str:
-        _mult = {1: "singlet", 2: "doublet", 3: "triplet", 4: "quartet", 5: "quintet"}
-        s = f"{self.label} · {self.method}/{self.basis}"
-        if self.multiplicity:
-            s += " · " + _mult.get(self.multiplicity, f"2S+1={self.multiplicity}")
-        if self.symmetry:
-            s += " · sym"
-        return s
+        return f"{self.spec.summary} · {self.backend_name}"
 
-
-# A factory maps (spec, on_iteration) -> a ComputeBackend. THIS is the DIP seam: the
-# Workspace never names QChemBackend/AnalyticBackend/RemoteBackend -- local vs remote is
-# just which factory you inject. on_iteration (optional) streams the SCF; a factory that
-# can't stream simply ignores it.
-BackendFactory = Callable[..., ComputeBackend]
-
-
-class Run:
-    """One calculation instance: a spec + a lifecycle + (when ready) sampled fields.
-    Fields are sampled lazily on access -- creating the Run runs the SCF (energy),
-    but a 64^3 density grid is only built when a panel actually asks for it."""
-
-    def __init__(self, spec: RunSpec, make_backend: BackendFactory):
-        self.spec = spec
-        self.status: RunStatus = RunStatus.PENDING
-        self.error: Optional[str] = None
-        self.energy: Optional[float] = None
-        self._make_backend = make_backend
-        self._be: Optional[ComputeBackend] = None
-        self._structure: Optional[Structure] = None
-        self._cache: dict = {}      # memoized sampled fields, keyed by (kind, args)
-        self._listeners: list[Callable[["Run"], None]] = []
+    @property
+    def energy(self) -> Optional[float]:
+        return self.result.energy_Ha if self.result else None
 
     # -- observer (Qt-agnostic) -------------------------------------------
     def on_change(self, cb: Callable[["Run"], None]) -> None:
@@ -86,21 +66,23 @@ class Run:
             cb(self)
 
     # -- lifecycle --------------------------------------------------------
-    def compute(self, on_iteration=None) -> None:
-        """Run the calculation. Synchronous for local backends; the status + notify
-        shape lets the Qt layer push this onto a worker thread later unchanged.
-        on_iteration(iter, E, dE, [F,D], drho), if given, streams the SCF live -- the
-        backend fires it once per iteration DURING construction (the converge)."""
+    def compute(self, on_step: Optional[Callable[[SCFStep], None]] = None) -> None:
+        """Translate + run.  Blocking: the Qt layer calls it on a worker thread.  `on_step(SCFStep)` streams the
+        SCF live.  Any failure (a refused capability, a throw in the code) becomes the FAILED state."""
         self.status = RunStatus.RUNNING
+        self.error = None
         self._notify()
         try:
-            self._be = self._make_backend(self.spec, on_iteration)
-            self._structure = self._be.structure()
-            self._cache.clear()      # a fresh converge invalidates any memoized grids
-            te = getattr(self._be, "total_energy", None)
-            self.energy = te() if callable(te) else None
+            verdict = self.backend.capabilities().can_run(self.spec)
+            if not verdict:
+                raise RuntimeError(f"{self.backend_name} cannot run this spec: " + "; ".join(verdict.reasons))
+            self.job = self.backend.translate(self.spec)
+            self.result = self.backend.run(self.job, on_step)
+            self._cache.clear()
+            if not self.result.converged:
+                raise RuntimeError(f"SCF did not converge in {len(self.result.scf)} iterations")
             self.status = RunStatus.READY
-        except Exception as e:           # noqa: BLE001 -- surface any backend failure as a state
+        except Exception as e:           # noqa: BLE001 -- surface any back-end failure as a state
             self.error = str(e)
             self.status = RunStatus.FAILED
         self._notify()
@@ -109,68 +91,68 @@ class Run:
     def is_ready(self) -> bool:
         return self.status is RunStatus.READY
 
-    # -- results (valid only when READY; delegate to the backend) ---------
+    # -- results (valid only when READY) ----------------------------------
     def structure(self) -> Structure:
         self._require_ready()
-        return self._structure
+        return self.result.structure
+
+    @property
+    def scf(self) -> list[SCFStep]:
+        """The trace recorded during the one run (no re-run: a replay is a UI animation over this)."""
+        self._require_ready()
+        return self.result.scf
 
     def density(self, n: int = 64, pad: float = 5.0) -> ScalarField:
-        return self._sampled(("density", n, pad), lambda: self._be.density(n, pad))
-
-    def orbital(self, index: int = 0, n: int = 64, pad: float = 5.0) -> ScalarField:
-        return self._sampled(("orbital", index, n, pad), lambda: self._be.orbital(index, n, pad))
-
-    def spin_density(self, n: int = 64, pad: float = 5.0) -> Optional[ScalarField]:
-        """Signed ρ↑−ρ↓, or None if the backend/run has no net spin (unpolarized)."""
-        self._require_ready()
-        fn = getattr(self._be, "spin_density", None)
-        return self._sampled(("spin", n, pad), lambda: fn(n, pad)) if fn else None
+        return self._field("density", n, pad)
 
     def density_gradient(self, n: int = 22, pad: float = 4.0) -> VectorField:
-        return self._sampled(("grad", n, pad), lambda: self._be.density_gradient(n, pad))
+        return self._field("gradient", n, pad)
 
-    def _sampled(self, key, sample):
-        """Lazy + memoized: sample the grid on first ask, reuse thereafter (the
-        cache is cleared on each Converge)."""
+    def spin_density(self, n: int = 64, pad: float = 5.0) -> Optional[ScalarField]:
+        """Signed ρ↑−ρ↓, or None when the run is unpolarized (or the back end cannot sample it)."""
         self._require_ready()
+        return self._field("spin_density", n, pad) if "spin_density" in self.result.fields else None
+
+    def orbital(self, index: int = 0, n: int = 64, pad: float = 5.0) -> ScalarField:
+        """Level `index` in report('orbitals') order (0 = lowest)."""
+        self._require_ready()
+        if self.result.orbital is None:
+            raise RuntimeError(f"{self.backend_name} does not sample orbitals")
+        key = ("orbital", index, n, pad)
         if key not in self._cache:
-            self._cache[key] = sample()
+            self._cache[key] = self.result.orbital(index, n, pad)
         return self._cache[key]
 
-    def run_scf(self):
-        self._require_ready(); return self._be.run_scf()
-
-    def stream_scf(self, on_step) -> None:
-        """Live per-iteration SCF replay: invoke on_step(SCFStep) as each iteration is
-        computed. Blocking -- the Qt layer runs it on a worker thread. Falls back to the
-        pre-collected generator if the backend has no streaming hook."""
-        self._require_ready()
-        fn = getattr(self._be, "stream_scf", None)
-        if fn:
-            fn(on_step)
-        else:
-            for s in self._be.run_scf():
-                on_step(s)
-
     def report(self, kind: str) -> dict:
-        """Structured report (e.g. 'orbitals') via the backend's JSON channel; {} if unsupported."""
+        """'orbitals': every level (lowest first) + counts, the shape the orbital panel reads; {} otherwise."""
         self._require_ready()
-        rep = getattr(self._be, "report", None)
-        return rep(kind) if rep else {}
+        if kind != "orbitals":
+            return {}
+        r = self.result
+        return {"energy": r.energy_Ha, "levels": r.levels, "num_occupied": r.num_occupied,
+                "num_orbitals": len(r.levels)}
+
+    def _field(self, name: str, n: int, pad: float):
+        self._require_ready()
+        key = (name, n, pad)
+        if key not in self._cache:
+            ref = self.result.fields.get(name)
+            if ref is None:
+                raise RuntimeError(f"{self.backend_name} gives no '{name}' field")
+            self._cache[key] = ref.sample(n, pad)
+        return self._cache[key]
 
     def _require_ready(self) -> None:
         if not self.is_ready:
-            raise RuntimeError(f"Run '{self.spec.summary}' is {self.status.value}, not ready")
+            raise RuntimeError(f"Run '{self.summary}' is {self.status.value}, not ready")
 
 
 class Workspace:
-    """A collection of Runs + selection. The unit saved to a .qproj.h5 (see project.py).
-    Project-level multiplicity is handled by opening multiple Workspaces in separate
-    windows; run-level multiplicity lives here, as data."""
+    """A collection of Runs + selection. The unit saved to a .qproj.h5 (see project.py)."""
 
-    def __init__(self, title: str = "Untitled", make_backend: Optional[BackendFactory] = None):
+    def __init__(self, title: str = "Untitled", registry: Optional[BackendRegistry] = None):
         self.title = title
-        self.make_backend = make_backend     # default factory for add_run()
+        self.registry = registry or BackendRegistry()
         self.runs: list[Run] = []
         self.selected: Optional[Run] = None
         self._listeners: list[Callable[["Workspace"], None]] = []
@@ -182,12 +164,11 @@ class Workspace:
         for cb in self._listeners:
             cb(self)
 
-    def add_run(self, spec: RunSpec, make_backend: Optional[BackendFactory] = None,
-                compute: bool = True) -> Run:
-        factory = make_backend or self.make_backend
-        if factory is None:
-            raise ValueError("no backend factory: pass make_backend to add_run or the Workspace")
-        run = Run(spec, factory)
+    def add_run(self, spec: RunSpec, backend: Optional[str] = None, compute: bool = True) -> Run:
+        """Add `spec` on the back end named `backend`, else on the registry's default for it (the first that can run
+        it).  With no back end able to run it, the Run is still added -- and fails with the strip's reasons."""
+        name = backend or self.registry.default_for(spec) or self.registry.names()[0]
+        run = Run(spec, self.registry.get(name))
         run.on_change(lambda _r: self._notify())     # run state changes bubble up to the workspace
         self.runs.append(run)
         if self.selected is None:

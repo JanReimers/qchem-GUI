@@ -1,0 +1,111 @@
+"""
+qviz.backends.base -- the Backend interface every code implements (doc/RunSpecPlan.md §2-4).
+
+Four verbs, and the order a Run calls them in:
+
+    capabilities()            -> Capabilities   what this code can do (option 2.2: the spec filters back ends)
+    translate(spec)           -> Job            PURE: the native input + the resolved settings table; nothing runs
+    run(job, on_step)         -> Result         blocking (a Run calls it on a worker thread); streams SCFStep live
+    (parse is inside run for an in-process code; an external code's run = launch + parse(run_dir))
+
+A Result is NEUTRAL: the frontends read energies, the SCF trace, levels and lazily
+sampled fields from it without knowing which code produced it.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Callable, Optional, Protocol, runtime_checkable
+
+from ..capability import Capabilities
+from ..data import ScalarField, SCFStep, Structure, VectorField
+from ..spec import RunSpec
+
+StepSink = Callable[[SCFStep], None]
+
+
+@dataclass(frozen=True)
+class Job:
+    """What `translate` produced: enough to run (and to SHOW the user before running)."""
+    backend: str
+    spec: RunSpec
+    native: dict                          # the code's own input, as data (SOLID²: the bridge's arguments)
+    resolved: dict                        # the ε-derived / stated native settings table, shown and recorded
+    files: dict[str, bytes] = field(default_factory=dict)   # an external code's input deck(s)
+    command: tuple[str, ...] = ()         # an external code's argv WITHOUT the mpirun launcher (the runner adds it)
+
+
+@dataclass(frozen=True)
+class FieldRef:
+    """A lazily sampled field: `sample(n, pad)` builds the grid only when a panel asks."""
+    name: str
+    signed: bool
+    sample: Callable[[int, float], ScalarField | VectorField]
+
+
+@dataclass
+class Result:
+    converged: bool
+    energy_Ha: Optional[float]
+    structure: Structure
+    scf: list[SCFStep] = field(default_factory=list)
+    levels: list[dict] = field(default_factory=list)      # ascending: {"e","occ","spin" -1/0/+1,"label","n"}
+    polarized: bool = False
+    fields: dict[str, FieldRef] = field(default_factory=dict)   # "density", "spin_density", "gradient", "orbital:<i>"
+    orbital: Optional[Callable[[int, int, float], ScalarField]] = None   # level index -> sampled MO
+    resolved: dict = field(default_factory=dict)
+    provenance: dict = field(default_factory=dict)
+
+    @property
+    def num_occupied(self) -> int:
+        return sum(1 for L in self.levels if L["occ"] > 0.5)
+
+
+@runtime_checkable
+class Backend(Protocol):
+    name: str
+
+    def capabilities(self) -> Capabilities: ...
+    def translate(self, spec: RunSpec) -> Job: ...
+    def run(self, job: Job, on_step: Optional[StepSink] = None) -> Result: ...
+
+
+class BackendRegistry:
+    """The back ends this app knows, by name; the Workspace asks it, never a concrete class (DIP)."""
+
+    def __init__(self, backends: list[Backend] = ()):
+        self._by_name: dict[str, Backend] = {}
+        for b in backends:
+            self.add(b)
+
+    def add(self, b: Backend) -> None:
+        self._by_name[b.name] = b
+
+    def get(self, name: str) -> Backend:
+        if name not in self._by_name:
+            raise KeyError(f"no back end {name!r}; known: {sorted(self._by_name)}")
+        return self._by_name[name]
+
+    def names(self) -> list[str]:
+        return list(self._by_name)
+
+    def verdicts(self, spec: RunSpec) -> dict:
+        """The back-end strip for one spec (option 2.2)."""
+        return {n: b.capabilities().can_run(spec) for n, b in self._by_name.items()}
+
+    def default_for(self, spec: RunSpec) -> Optional[str]:
+        """The first back end that can run `spec`, in registration order (SOLID² is registered first --
+        PROVISIONAL, RunSpecPlan §10 Q6)."""
+        return next((n for n, v in self.verdicts(spec).items() if v), None)
+
+
+def data_structure(spec: RunSpec) -> Structure:
+    """The frontends' Structure (Cartesian bohr) for a spec's atoms; a crystal's fractional sites go through its lattice."""
+    import numpy as np
+    st = spec.structure
+    numbers = np.array([s.Z for s in st.sites], int)
+    if st.kind == "crystal":
+        L = np.asarray(st.lattice_bohr, float)
+        pos = np.array([np.asarray(s.frac, float) @ L for s in st.sites])
+        return Structure([s.element for s in st.sites], pos, numbers, lattice=L)
+    pos = np.array([s.xyz for s in st.sites], float)
+    return Structure([s.element for s in st.sites], pos, numbers)

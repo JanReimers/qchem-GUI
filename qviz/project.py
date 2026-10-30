@@ -82,42 +82,43 @@ def load(path: str) -> dict:
 # --------------------------------------------------------------------------
 # Workspace (multi-run) save / restore -- the .qproj.h5 unit
 # --------------------------------------------------------------------------
+WORKSPACE_FORMAT = "qviz-workspace/2"   # /2: one RunSpec (JSON) + its back end per run.  /1 files: scripts/convert_workspace_v1.py
+
+
 def save_workspace(path: str, ws) -> None:
-    """Persist a Workspace: one group per Run (its RunSpec + energy + status).
-    Runs recompute on load (fast for small molecules); caching the sampled fields
-    for true instant-open is a later enhancement."""
+    """Persist a Workspace: one group per Run -- its RunSpec as JSON, the back end it ran on, energy, status.
+    Runs recompute on load (fast for small molecules); caching the sampled fields for true instant-open is a
+    later enhancement."""
     with h5py.File(path, "w") as h:
-        h.attrs.update(format="qviz-workspace/1", title=ws.title,
+        h.attrs.update(format=WORKSPACE_FORMAT, title=ws.title,
                        created=_dt.datetime.now().isoformat(timespec="seconds"),
                        selected=(ws.runs.index(ws.selected) if ws.selected in ws.runs else -1))
         g = h.create_group("runs")
         for i, r in enumerate(ws.runs):
-            s = r.spec
             rg = g.create_group(f"run{i:03d}")
-            rg.attrs.update(label=s.label, method=s.method, basis=s.basis, symmetry=s.symmetry,
-                            multiplicity=s.multiplicity,
+            rg.attrs.update(spec=r.spec.to_json(), backend=r.backend_name,
                             energy=(float(r.energy) if r.energy is not None else np.nan),
                             status=r.status.value)
-            rg.create_dataset("numbers", data=np.asarray(s.numbers, int))
-            rg.create_dataset("positions", data=np.asarray(s.positions, float))
 
 
-def load_workspace(path: str, make_backend, compute: bool = True):
-    """Rebuild a Workspace from a .qproj.h5. compute=True recomputes each Run now
-    (lib use); compute=False leaves them pending so a GUI can compute off-thread."""
-    from .workspace import Workspace, RunSpec
+def load_workspace(path: str, registry, compute: bool = True):
+    """Rebuild a Workspace from a .qproj.h5.  compute=True recomputes each Run now (lib use); compute=False leaves
+    them pending so a GUI can compute off-thread.  A run whose back end is not registered here goes to the registry's
+    default for its spec."""
+    from .workspace import Workspace
+    from .spec import RunSpec
     with h5py.File(path, "r") as h:
-        ws = Workspace(str(h.attrs.get("title", "Untitled")), make_backend=make_backend)
+        fmt = str(h.attrs.get("format", ""))
+        if fmt != WORKSPACE_FORMAT:
+            raise ValueError(f"{path}: workspace format {fmt!r}, this reader knows {WORKSPACE_FORMAT!r}"
+                             + (" -- convert it with scripts/convert_workspace_v1.py" if fmt == "qviz-workspace/1" else ""))
+        ws = Workspace(str(h.attrs.get("title", "Untitled")), registry=registry)
         g = h["runs"]
         for key in sorted(g):
             rg = g[key]
-            ws.add_run(RunSpec(
-                label=str(rg.attrs["label"]),
-                numbers=tuple(int(z) for z in rg["numbers"][:]),
-                positions=tuple(float(x) for x in rg["positions"][:]),
-                method=str(rg.attrs["method"]), basis=str(rg.attrs["basis"]),
-                symmetry=bool(rg.attrs.get("symmetry", False)),
-                multiplicity=int(rg.attrs.get("multiplicity", 0))), compute=compute)
+            name = str(rg.attrs["backend"])
+            ws.add_run(RunSpec.from_json(str(rg.attrs["spec"])),
+                       backend=name if name in registry.names() else None, compute=compute)
         sel = int(h.attrs.get("selected", -1))
         if 0 <= sel < len(ws.runs):
             ws.select(ws.runs[sel])

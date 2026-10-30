@@ -14,9 +14,21 @@ from .workspace import Run
 
 
 def same_geometry(a: Run, b: Run, tol: float = 1e-9) -> bool:
-    return (a.spec.numbers == b.spec.numbers
-            and len(a.spec.positions) == len(b.spec.positions)
-            and np.allclose(a.spec.positions, b.spec.positions, atol=tol))
+    sa, sb = a.spec.structure, b.spec.structure
+    if sa.kind != sb.kind or [s.element for s in sa.sites] != [s.element for s in sb.sites]:
+        return False
+    coords = (lambda st: [s.xyz for s in st.sites]) if sa.kind == "molecule" else (lambda st: [s.frac for s in st.sites])
+    if sa.kind == "crystal" and not np.allclose(sa.lattice_bohr, sb.lattice_bohr, atol=tol):
+        return False
+    return bool(np.allclose(coords(sa), coords(sb), atol=tol))
+
+
+def method_tag(r: Run) -> str:
+    """A short name for HOW a run was computed: model/basis · back end."""
+    p = r.spec.physics
+    model = p.functional if p.theory == "DFT" else p.theory
+    basis = (r.spec.accuracy.representation or {}).get("basis")
+    return f"{model}/{basis} · {r.backend_name}" if basis else f"{model} · {r.backend_name}"
 
 
 def difference_density(a: Run, b: Run, n: int = 80, pad: float = 5.0) -> ScalarField:
@@ -27,5 +39,5 @@ def difference_density(a: Run, b: Run, n: int = 80, pad: float = 5.0) -> ScalarF
     fa = a.density(n, pad)
     fb = b.density(n, pad)
     d = np.asarray(fa.values) - np.asarray(fb.values)
-    return ScalarField(name=f"Δρ ({a.spec.method}−{b.spec.method})",
+    return ScalarField(name=f"Δρ ({method_tag(a)} − {method_tag(b)})",
                        values=d, origin=fa.origin, spacing=fa.spacing, signed=True)

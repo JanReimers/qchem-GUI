@@ -20,13 +20,18 @@ import numpy as np
 import pyvista as pv
 pv.OFF_SCREEN = True
 
-from qviz import AnalyticBackend
+from qviz import FakeBackend, molecule
+from qviz.workspace import Run
 from qviz import scene, project
 from qviz.scene import field_to_imagedata
 
 OUT = pathlib.Path(__file__).resolve().parents[1] / "out"
 OUT.mkdir(exist_ok=True)
-be = AnalyticBackend()
+# water at its real geometry (r_OH = 1.81 bohr, angle 104.5 deg), on the analytic stand-in back end
+_r, _h = 1.81, np.deg2rad(104.5) / 2.0
+be = Run(molecule("water", [8, 1, 1], [0, 0, 0, _r*np.sin(_h), 0, _r*np.cos(_h), -_r*np.sin(_h), 0, _r*np.cos(_h)],
+                  theory="DFT", functional="LDA"), FakeBackend())
+be.compute()
 struct = be.structure()
 
 
@@ -112,7 +117,7 @@ def scf_convergence():
     import matplotlib.pyplot as plt
     import imageio.v2 as imageio
 
-    steps = list(be.run_scf())
+    steps = be.scf
     it = [s.iteration for s in steps]
     dE = [s.dE for s in steps]
     comm = [s.commutator for s in steps]
@@ -143,7 +148,7 @@ def scf_convergence():
 
 def save_project(steps):
     project.save(str(OUT / "water.qproj.h5"),
-                 title="Water / LDA demo", backend="AnalyticBackend",
+                 title="Water / LDA demo", backend=be.backend_name,
                  structure=struct,
                  fields={"density": be.density(n=64),
                          "homo": be.orbital(0, n=64)},
