@@ -10,10 +10,15 @@ Requires the compiled extension `qchem_py`, built in the SEPARATE qchem repo
 (`-DQCHEM_PYBIND=ON`). This GUI repo just consumes the built `.so`: point
 `QCHEM_BUILD` at the qchem build dir that contains `pybind/qchem_py*.so`, e.g.
 
-    export QCHEM_BUILD=~/Code/qchem-viz/build/PIC
+    export QCHEM_BUILD=~/Code/qchem-lane-g/build/Release
 
-"Pull forward" whichever build you like (Release/Debug/PIC). If QCHEM_BUILD is
-unset we probe a few common sibling-checkout build dirs as a convenience.
+The build tree must be configured with -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+-DQCHEM_PYBIND=ON. If QCHEM_BUILD is unset we probe a few common sibling-checkout
+build dirs as a convenience.
+
+The binding drives qchem's production front door: MoleculeSetup::Resolve +
+qchem::Calculation (lane G bridge, 2026-10-30) -- its levels (every MO, virtuals
+included), density, spin density and live per-iteration observer.
 """
 from __future__ import annotations
 import os, sys, pathlib
@@ -31,7 +36,7 @@ def _locate_qchem_py() -> None:
         p = pathlib.Path(env).expanduser()
         cands += [p / "pybind", p]                       # build-dir or its pybind/ subdir
     home = pathlib.Path.home()
-    for root in (home/"Code/qchem-viz", home/"Code/qchem", home/"Code/qchem6"):
+    for root in (home/"Code/qchem-lane-g", home/"Code/qchem-main", home/"Code/qchem6"):
         for b in ("build/PIC/pybind", "build/Release/pybind", "build/Debug/pybind"):
             cands.append(root / b)
     for c in cands:
@@ -41,7 +46,7 @@ def _locate_qchem_py() -> None:
     raise ImportError(
         "qchem_py extension not found. Build it in the qchem repo "
         "(-DQCHEM_PYBIND=ON) and set QCHEM_BUILD to that build dir, e.g.\n"
-        "    export QCHEM_BUILD=~/Code/qchem-viz/build/PIC")
+        "    export QCHEM_BUILD=~/Code/qchem-lane-g/build/Release")
 
 
 _locate_qchem_py()
@@ -61,20 +66,29 @@ WATER_POSITIONS = [0.0, 0.0, 0.0,
 
 class QChemBackend(ComputeBackend):
     def __init__(self, numbers=None, positions=None, basis="dzvp", method="HF",
-                 symmetry=False, multiplicity=0, max_iter=20, on_iteration=None):
+                 symmetry=False, multiplicity=0, max_iter=100, on_iteration=None):
         numbers = list(numbers if numbers is not None else WATER_NUMBERS)
         positions = list(np.asarray(positions if positions is not None
                                     else WATER_POSITIONS, float).ravel())
+        self._max_iter = max_iter
         # on_iteration(iter, E, dE, [F,D], drho) streams the (single) converge live; the ctor
         # runs the SCF, so this fires DURING construction, not on a later call.
-        self._calc = qchem_py.Calculator(numbers, positions, basis, method,
-                                         symmetry, multiplicity, max_iter, on_iteration)
+        self._calc = qchem_py.Calculator(numbers, positions, basis=basis, model=method,
+                                         symmetry=symmetry, multiplicity=multiplicity,
+                                         max_iter=max_iter, on_iteration=on_iteration)
         self._struct = self._read_structure()
 
     def report(self, kind: str) -> dict:
-        """Structured report from the lib's JSON channel (e.g. 'orbitals')."""
-        import json
-        return json.loads(self._calc.report(kind))
+        """Structured report. 'orbitals': every level (lowest first) + counts, the shape the
+        orbital panel reads."""
+        if kind != "orbitals":
+            return {}
+        # the lib's label is "<n><irrep>" (e.g. "5No Symmetry "); the panel numbers levels itself
+        levels = [dict(L, n=i + 1, label=L["label"].lstrip("0123456789").strip())
+                  for i, L in enumerate(self._calc.levels())]
+        nocc = sum(1 for L in levels if L["occ"] > 0.5)
+        return {"energy": self._calc.total_energy(), "levels": levels,
+                "num_occupied": nocc, "num_orbitals": len(levels)}
 
     # -- geometry ----------------------------------------------------------
     def _read_structure(self) -> Structure:
@@ -100,13 +114,16 @@ class QChemBackend(ComputeBackend):
         return self._scalar(self._calc.density(n, pad), "Electron density", False)
 
     def spin_density(self, n: int = 64, pad: float = 5.0):
-        """Signed ρ↑−ρ↓, or None for an unpolarized (closed-shell) run."""
-        d = self._calc.spin_density(n, pad)
-        return None if d is None else self._scalar(d, "Spin density (ρ↑−ρ↓)", True)
+        """Signed ρ↑−ρ↓, or None for an unpolarized run (its m(r) is the zero field --
+        nothing to draw)."""
+        if not any(L["spin"] for L in self._calc.levels()):
+            return None
+        return self._scalar(self._calc.spin_density(n, pad), "Spin density (ρ↑−ρ↓)", True)
 
     def orbital(self, index: int = 0, n: int = 64, pad: float = 5.0) -> ScalarField:
+        """MO `index` in levels order (0 = lowest); for a closed shell the HOMO is num_occupied-1."""
         d = self._calc.orbital(index, n, pad)
-        return self._scalar(d, f"MO #{index} (HOMO-{index})" if index else "HOMO", bool(d["signed"]))
+        return self._scalar(d, f"MO #{index}", bool(d["signed"]))
 
     def density_gradient(self, n: int = 22, pad: float = 4.0) -> VectorField:
         d = self._calc.gradient(n, pad)
@@ -122,7 +139,7 @@ class QChemBackend(ComputeBackend):
         off the GUI thread keeps the window responsive while the trace fills in real
         time (vs collecting then replaying)."""
         self._calc.run_scf(lambda it, E, dE, comm, drho:
-                           on_step(SCFStep(it, E, dE, comm, drho)))
+                           on_step(SCFStep(it, E, dE, comm, drho)), self._max_iter)
 
     def run_scf(self):
         """Collect-then-yield fallback for non-streaming callers (kept for the

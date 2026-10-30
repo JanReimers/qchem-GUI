@@ -1,5 +1,14 @@
 # nanobind binding plan — qchem C++ → qviz.ComputeBackend
 
+> **2026-10-30, lane G (current):** the bridge was rebuilt FRESH on qchem `lane-g` over the production front door --
+> `MoleculeSetup::Resolve` + `qchem::Calculation` -- not the stale `viz` branch.  Opaque struct handles (`qcb_calc`,
+> `qcb_sink`; no `void*`), the module-unit / plain-C-header split kept.  The facade grew three read-only faces for it:
+> a constructor observer (the first SCF streams live, no re-run), `GetLevels()` (every MO, virtuals included) and
+> `GetSpinDensity()` (the zero field when unpolarized).  Build: any qchem tree configured with
+> `-DCMAKE_POSITION_INDEPENDENT_CODE=ON -DQCHEM_PYBIND=ON -DPython_EXECUTABLE=<this repo>/.venv/bin/python`, then
+> `ninja qchem_py`; `export QCHEM_BUILD=<that build dir>`.  The recipe sections below are the HISTORY of the first
+> (viz-branch) bridge.  What comes next is `doc/RunSpecPlan.md`.
+
 Goal: implement `backend_qchem.QChemBackend(ComputeBackend)` so `app_desktop.py`
 shows a **genuinely computed** water density/orbital, replacing `AnalyticBackend`.
 Scope (decided): **static first** — Structure + density + orbital + gradient,
