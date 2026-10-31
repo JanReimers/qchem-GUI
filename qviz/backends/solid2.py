@@ -1,10 +1,15 @@
 """
 qviz.backends.solid2 -- SOLID² (qchem) in process, through the nanobind bridge (doc/RunSpecPlan.md §3.1).
 
-translate(spec) fills the arguments of qchem's production front door (MoleculeSetup::Resolve +
+A MOLECULE: translate(spec) fills the arguments of qchem's production front door (MoleculeSetup::Resolve +
 qchem::Calculation, bound by `qchem_py.Calculator`); run() converges on the calling (worker) thread
 with the GIL released, streaming each iteration through the facade's constructor observer; the
 Result samples density / spin density / orbitals in process, lazily.
+
+A CRYSTAL: translate(spec) writes the qchem INPUT DECK (solid2_deck.to_deck -- the one translator, the file `rundeck`
+runs); run() hands its JSON to `qchem_py.SolidRun` (deck::Build: resolve, lattice, basis, SolidSetup) and converges the
+deck's schedule (deck::ScheduleToRun), streaming the same IterationRow cells.  A deck or setup the library refuses
+raises with the library's text; an SCF that does not converge returns its SCFFailure reason and no energy.
 
 Requires the compiled extension `qchem_py`, built in the SEPARATE qchem repo: point QCHEM_BUILD at a
 build tree configured with -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DQCHEM_PYBIND=ON, e.g.
@@ -14,11 +19,12 @@ build tree configured with -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DQCHEM_PYBIND=O
 When the extension is absent the back end still REGISTERS; its capabilities say why it is not
 installed, so the back-end strip greys it out instead of the app failing to start.
 
-Scope today (S2): molecules.  A crystal is refused by capability ("SolidSetup not bound yet") until
-the bridge binds SolidSetup / SolidSession.
+Scope today: single points.  A crystal's post-SCF actions (compute_U) need `rundeck` (deck::Build stops at the
+SCF); a crystal's fields and bands are not sampled through the bridge yet.
 """
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import sys
@@ -29,6 +35,7 @@ import numpy as np
 from ..capability import Capabilities, Capability
 from ..data import ScalarField, SCFCell, SCFRow, VectorField
 from ..spec import RunSpec
+from . import solid2_deck
 from .base import FieldRef, Job, Result, StepSink, code_block, data_structure, shared_representation
 
 NAME = "SOLID²"
@@ -94,34 +101,44 @@ class Solid2Backend:
         def scf(s: RunSpec) -> dict:
             return s.accuracy.scf or {}
         rep = shared_representation
+        def molecule(check):          # the molecular facade's constraints bind a molecule only; a crystal answers to its deck
+            return lambda s: s.structure.kind != "molecule" or check(s)
+
+        def crystal(s: RunSpec) -> bool:
+            return s.structure.kind != "crystal" or solid2_deck.why_not(s) is None
         return Capabilities(NAME, installed=self._qc is not None, why_absent=self._why_absent, features=[
-            Capability("structure.kind=molecule", lambda s: s.structure.kind == "molecule",
-                       "crystals: SolidSetup is not bound in the GUI bridge yet"),
-            Capability("physics.theory/functional", lambda s: (s.physics.theory, s.physics.functional
-                       if s.physics.theory == "DFT" else None) in _MODEL,
+            Capability("structure.kind=crystal -> deck", crystal, lambda s: solid2_deck.why_not(s) or ""),
+            Capability("task.kind=energy", lambda s: s.task.kind == "energy",
+                       "single points only (MoleculeSession relax is not bound; a crystal's compute_U runs in rundeck: "
+                       "deck::Build stops at the SCF)"),
+            Capability("physics.theory/functional", molecule(lambda s: (s.physics.theory, s.physics.functional
+                       if s.physics.theory == "DFT" else None) in _MODEL),
                        "molecular models are HF, LDA and Xalpha"),
             Capability("physics.relativity", lambda s: s.physics.relativity == "none"
                        or (s.physics.relativity == "scalar" and s.physics.core == "pseudopotential"),
                        "non-relativistic all-electron (scalar relativity only through a pseudopotential)"),
-            Capability("physics.hubbard=()", lambda s: not s.physics.hubbard, "no molecular DFT+U in the facade"),
-            Capability("physics.occupations=none", lambda s: s.physics.occupations.smearing == "none",
+            Capability("physics.hubbard=()", molecule(lambda s: not s.physics.hubbard), "no molecular DFT+U in the facade"),
+            Capability("physics.occupations=none", molecule(lambda s: s.physics.occupations.smearing == "none"),
                        "no smearing for molecules"),
             Capability("physics.core=pseudopotential needs LDA + a valence basis",
-                       lambda s: s.physics.core != "pseudopotential"
-                       or (s.physics.functional == "LDA" and rep(s).get("basis") in _VALENCE_BASES),
+                       molecule(lambda s: s.physics.core != "pseudopotential"
+                                or (s.physics.functional == "LDA" and rep(s).get("basis") in _VALENCE_BASES)),
                        "a molecular pseudopotential run is LDA with a stated valence basis (sipp*, valence_lowq*)"),
-            Capability("accuracy.representation keys", lambda s: set(rep(s)) <= {"basis"}
-                       and set(code_block(s, "solid2")) <= _REP_KEYS,
+            Capability("accuracy.representation keys", molecule(lambda s: set(rep(s)) <= {"basis"}
+                       and set(code_block(s, "solid2")) <= _REP_KEYS),
                        "a stated representation is a shared basis, or SOLID² settings under representation['solid2'] "
                        "(mesh_radial, mesh_angular)"),
-            Capability("accuracy.representation.basis", lambda s: rep(s).get("basis") in (None, *BASES),
+            Capability("accuracy.representation.basis", molecule(lambda s: rep(s).get("basis") in (None, *BASES)),
                        "the stated basis is not a registered Gaussian basis"),
-            Capability("task.kind=energy", lambda s: s.task.kind == "energy",
-                       "single points only (MoleculeSession relax is not bound yet)"),
         ])
 
     # -- translate ----------------------------------------------------------
     def translate(self, spec: RunSpec) -> Job:
+        if spec.structure.kind == "crystal":
+            deck = solid2_deck.to_deck(spec)
+            text = json.dumps(deck, indent=2)
+            return Job(NAME, spec, native={"deck": text}, resolved=dict(solid2_deck.resolved(spec)),
+                       files={"deck": text.encode()})
         st, ph, ac = spec.structure, spec.physics, spec.accuracy
         scf = ac.scf or {}
         rep = shared_representation(spec)
@@ -173,6 +190,9 @@ class Solid2Backend:
             if on_step:
                 on_step(s)
 
+        if "deck" in n:
+            return self._run_deck(job, step, steps)
+
         calc = self._qc.Calculator(n["numbers"], n["positions"], basis=n["basis"], model=n["model"],
                                    symmetry=n["symmetry"], polarized=n["polarized"],
                                    multiplicity=n["multiplicity"], max_iter=n["max_iter"], pp=n["pp"],
@@ -202,3 +222,11 @@ class Solid2Backend:
                       orbital=lambda i, npts, pad: scalar(calc.orbital(i, npts, pad), f"MO #{i}", True),
                       resolved=job.resolved,
                       provenance={"code": NAME, "iterations": calc.iterations()})   # the closures above own `calc`
+
+    def _run_deck(self, job: Job, step, steps: list[SCFRow]) -> Result:
+        """A crystal: deck::Build (a refusal raises with the library's text), then the deck's schedule, streamed."""
+        run = self._qc.SolidRun(job.native["deck"])
+        converged = run.converge(step)
+        return Result(converged=converged, energy_Ha=run.total_energy(), failure=run.failure(),
+                      structure=data_structure(job.spec), scf=steps, resolved=job.resolved,
+                      provenance={"code": NAME, "iterations": run.iterations(), "deck": json.loads(run.resolved())})

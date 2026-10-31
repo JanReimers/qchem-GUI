@@ -132,12 +132,27 @@ class Solid2EndToEnd(unittest.TestCase):
         self.assertTrue(run.result.polarized, "both spin channels are listed")
         self.assertLess(np.abs(run.spin_density(16).values).max(), 1e-8)
 
-    def test_a_crystal_is_refused_by_capability_not_by_a_crash(self):
+    def test_a_built_crystal_runs_in_process_through_the_deck(self):
+        h = 5.13
+        spec = RunSpec.from_dict({
+            "label": "Si cell", "structure": {"kind": "crystal", "lattice_bohr": [[0, h, h], [h, 0, h], [h, h, 0]],
+                                              "sites": [{"element": "Si", "frac": [0, 0, 0]}, {"element": "Si", "frac": [0.25, 0.25, 0.25]}]},
+            "physics": {"theory": "DFT", "functional": "LDA", "core": "pseudopotential", "spin": {"polarized": False}},
+            "accuracy": {"kmesh": [1, 1, 1], "representation": {"basis": "sipp_sr", "solid2": {"deck": {"solid": {"densityEcut": 20.0}}}}}})
+        steps = []
+        run = self.ws().add_run(spec, compute=False)
+        self.assertEqual(run.backend_name, "SOLID²")
+        run.compute(on_step=steps.append)
+        self.assertIs(run.status, RunStatus.READY, run.error)
+        self.assertAlmostEqual(run.energy, -7.1150676382, places=8)     # rundeck decks/Si_diamond_inline.json, same deck
+        self.assertEqual(steps[0].titles[:3], ("Etotal", "[F,D]", "ΔE/E"), "the periodic console's columns")
+
+    def test_a_crystal_the_deck_cannot_say_is_refused_by_capability_not_by_a_crash(self):
         v = SOLID2.capabilities().can_run(RunSpec.from_dict({
             "label": "Si", "structure": {"kind": "crystal", "lattice_bohr": [[0, 5.13, 5.13], [5.13, 0, 5.13], [5.13, 5.13, 0]],
                                          "sites": [{"element": "Si", "frac": [0, 0, 0]}, {"element": "Si", "frac": [0.25, 0.25, 0.25]}]}}))
         self.assertFalse(v)
-        self.assertTrue(any("SolidSetup" in r for r in v.reasons))
+        self.assertTrue(any("accuracy.kmesh" in r for r in v.reasons), v.reasons)   # the deck translator's own reason
 
 
 if __name__ == "__main__":

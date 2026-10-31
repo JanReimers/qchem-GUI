@@ -7,8 +7,9 @@ banked energies), S4 compare across codes (one spec on every ticked back end; CP
 file converted, `qviz/backends/gaussian_basis.py`; per-code `representation.<code>` blocks; the Codes panel;
 F₂ runs on both).  **S4 findings, handed to qchem's tracker:** the molecular facade's default XC mesh is
 0.52 Ha/atom off (the GUI now states a mesh from ε), and the molecular PP route sits 4 mHa/atom above CP2K on F₂
-while the crystal route matches CP2K on NaF.  **Next:** the SolidSetup bind: its RunSpec -> deck translator is built (§9); the bridge waits for
-lane B's inline deck structure and `deck::Build(json, Observer)` on main.  **S5 agent: the tool
+while the crystal route matches CP2K on NaF.  **SolidSetup BOUND (2026-10-31, §9):** a crystal is a qchem deck (`solid2_deck.py`) built by `deck::Build` in
+process (`qchem_py.SolidRun`); the Si inline cell lands on `rundeck`'s energy to 1e-9 Ha.  **Next:** a crystal's density
+over the cell, and its revision record in the run directory.  **S5 agent: the tool
 layer, shared draft, loop, consent gate and Agent dock are built on molecules (`qviz/agent/`), against a scripted
 client and an offline planner; no model client exists until the user answers Q4** (no API call, no key, nothing
 sent).  The open questions for the user are in §10; the code takes the
@@ -571,7 +572,26 @@ Per the qchem repo's tracker convention, residual items from these stages go as 
   stating the banked bench decks translate to exactly `decks/bench/Si_Gamma_parity.json` and
   `NaF_SR2_Gamma_parity.json`; those and an MnO AFM-II +U deck pass `rundeck --check`; the Si Γ deck
   runs end to end (−7.1150674 Ha, 7 μHa from CP2K) and its revision record holds every value the GUI
-  stated.  Named-structure decks run today; inline ones wait for piece 1, the in-process run for piece 2.
+  stated.
+
+  **BOUND (2026-10-31, qchem main a0f6ce1a: lane B's inline structure + `deck::Build(RunSpec, Observer)` +
+  `ScheduleToRun`).**  `qchem_py.SolidRun(deck_json)`: `deck::FromJson` + `deck::Build` (no SCF; a refusal raises with the
+  library's text: an unknown key, an unknown structure, a setup refusal), `converge(on_iteration)` runs
+  `Converge(ScheduleToRun(spec))` with the GIL released and streams the periodic IterationRow cells (Etotal, [F,D], ΔE/E,
+  Δρ, ...), `failure()` is the SCFFailure line, `total_energy()` is None unless converged, `resolved()` is the resolved
+  deck (Nelec / species derived).  The observer is attached per `converge`, not at Build.  The inline shape the
+  translator writes IS lane B's (`lattice.vectors_bohr` rows, `atoms` el + frac; `decks/Si_diamond_inline.json`).
+  Gates (`tests/test_solid2_deck.py::TheBridgeRunsThem`): Si as a built cell (inline) converges through the bridge to
+  rundeck's energy on the same deck within 1e-9 Ha (both −7.1150676382, 10 iterations); a 2-iteration cap returns no
+  energy and the "iteration limit" reason; a misspelt key raises the deck reader's text; compute_U is refused (Build stops
+  at the SCF, postSCF actions are `rundeck`'s).
+  **Found on the way:** the lib's console tables (submodules/tabulate) set `std::locale::global(en_US.UTF-8)` and restore
+  the C++ global, "C", around each border, so every SCF left the HOST process in LC_ALL=C (a later `subprocess.run(...,
+  text=True)` decoded rundeck's UTF-8 as ASCII).  The bridge restores the host's locale on every entry that prints
+  (`HostLocale`); the defect itself is reported to the lib.
+  **Not yet exposed:** the density over the cell, site moments, `RunDiagnostics`; the revision record (Build writes
+  none -- the GUI will write `resolved()` into `~/Code/qchem6-runs/<Material>/`).  Lane B's electron-count refusal
+  (cfdd1e04) reaches the GUI through the same RuntimeError path once it is on main.
 - **The ONE accuracy target for solids** is lane A chunk C2; until then the SOLID² ε table fills
   today's separate tolerances and says so.
 - **Forces / stress** for relax: the `GeometryGradient` capability (lane B review); until it

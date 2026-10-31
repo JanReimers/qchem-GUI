@@ -1,11 +1,13 @@
 """The RunSpec -> qchem deck translator (qviz.backends.solid2_deck; doc/RunSpecPlan.md §9 route (b)).
 
 GOLDEN DECKS: a spec stating what qchem's banked bench decks state translates to exactly that deck; the decks it writes are
-accepted by `rundeck --check`, and one runs end to end.
+accepted by `rundeck --check`, and one runs end to end.  THE BRIDGE: the same deck through `qchem_py.SolidRun` (deck::Build)
+lands on rundeck's energy to the last digit, and a refusal / an unconverged SCF comes back in the library's words.
 
     QCHEM_BUILD=~/Code/qchem-lane-g/build/Release .venv/bin/python -m unittest tests.test_solid2_deck
 """
 import json
+import locale
 import os
 import pathlib
 import subprocess
@@ -139,6 +141,59 @@ class RundeckReadsThem(unittest.TestCase):
         energies = [float(l.split()[3]) for l in r.stdout.splitlines() if l.startswith("[rundeck] Etot =")]
         self.assertEqual(len(energies), 1, r.stdout[-2000:])
         self.assertAlmostEqual(energies[0], -7.11506, delta=2e-5)    # CP2K's si_fcc_gpw.inp (doc/Records/CP2Kresults.md); ran -7.1150674
+
+
+def si_inline(**scf) -> RunSpec:
+    """Si as a cell the user built (no materials.json name -> the inline structure), the template deck's recipe."""
+    return crystal("Si inline", *SI, accuracy={"representation": {"basis": "sipp_sr", "solid2": {"deck": {"solid": {"densityEcut": 20.0}}}},
+                                               **({"scf": scf} if scf else {})})
+
+
+def solid2():
+    from qviz.backends.solid2 import Solid2Backend
+    return Solid2Backend()
+
+
+@unittest.skipUnless(solid2()._qc is not None and RUNDECK.exists(), "qchem_py / rundeck not built (QCHEM_BUILD)")
+class TheBridgeRunsThem(unittest.TestCase):
+    def test_the_inline_cell_lands_on_rundeck_s_energy(self):
+        be, spec = solid2(), si_inline()
+        self.assertTrue(be.capabilities().can_run(spec))
+        job = be.translate(spec)
+        self.assertIsInstance(json.loads(job.native["deck"])["structure"], dict, "a built cell goes inline")
+        rows, host = [], locale.setlocale(locale.LC_ALL)
+        res = be.run(job, rows.append)
+        self.assertEqual(locale.setlocale(locale.LC_ALL), host, "the lib's console tables reset LC_ALL to C; the bridge puts it back")
+        self.assertTrue(res.converged, res.failure)
+        self.assertIsNone(res.failure)
+        self.assertEqual(len(rows), res.provenance["iterations"])
+        self.assertEqual(rows[0].titles[:2], ("Etotal", "[F,D]"), "the periodic console's own columns")
+        self.assertEqual(res.provenance["deck"]["solid"]["Nelec"], 8, "the resolved deck derives Nelec")
+        r, _ = RundeckReadsThem.rundeck(self, json.loads(job.native["deck"]))
+        etot = [float(l.split()[3]) for l in r.stdout.splitlines() if l.startswith("[rundeck] Etot =")]
+        self.assertEqual(len(etot), 1, r.stdout[-2000:])
+        self.assertAlmostEqual(res.energy_Ha, etot[0], delta=1e-9, msg="one deck, one path: the bridge IS rundeck")
+
+    def test_a_capped_scf_says_why_and_hands_back_no_energy(self):
+        be = solid2()
+        res = be.run(be.translate(si_inline(max_iter=2)))
+        self.assertFalse(res.converged)
+        self.assertIsNone(res.energy_Ha)
+        self.assertIn("iteration limit", res.failure)
+
+    def test_a_deck_the_library_refuses_raises_its_text(self):
+        be, spec = solid2(), si_inline()
+        job = be.translate(spec)
+        deck = json.loads(job.native["deck"]); deck["kmseh"] = [1, 1, 1]
+        job.native["deck"] = json.dumps(deck)
+        with self.assertRaisesRegex(RuntimeError, "unknown key 'run.kmseh'"):
+            be.run(job)
+
+    def test_compute_u_is_rundeck_s(self):
+        s = mno_plus_u()
+        v = solid2().capabilities().can_run(RunSpec.from_dict(s.to_dict() | {"task": {"kind": "compute_U", "compute_U": {"method": "ACBN0"}}}))
+        self.assertFalse(v)
+        self.assertTrue(any("deck::Build stops at the SCF" in r for r in v.reasons), v.reasons)
 
 
 if __name__ == "__main__":

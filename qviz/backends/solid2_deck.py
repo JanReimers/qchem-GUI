@@ -2,14 +2,15 @@
 qviz.backends.solid2_deck -- a crystal RunSpec as a qchem INPUT DECK (doc/RunSpecPlan.md §9, route (b): the deck is the seam).
 
 The GUI's RunSpec never reaches the library.  This module is the ONE translator: RunSpec -> deck JSON (qchem
-src/Calculation/Deck.C, schema 1), which `rundeck` runs today and the bridge will hand to `deck::Build(json, Observer)`
-once lane B lands it.  So every GUI crystal run is a deck `rundeck` reproduces, and there is no second copy of the
+src/Calculation/Deck.C, schema 1): the file `rundeck` runs, and the JSON the bridge hands to `deck::Build`
+(`qchem_py.SolidRun`, qviz.backends.solid2).  So every GUI crystal run is a deck `rundeck` reproduces, and there is no second copy of the
 deck's resolve logic in pybind.
 
 What the deck is told, and what it is left to derive:
   * structure -- the NAME of a materials.json entry when `structure.source.materials` names one AND the spec's geometry is
     that entry's (elements, fractional sites, cell volume: a drift guard, not a re-derivation); otherwise an INLINE
-    structure (PROVISIONAL shape -- lane B's inline `structure` section, OpenWork; rundeck refuses it until that lands).
+    structure: the materials.json entry itself (`lattice.vectors_bohr` rows a, b, c; `atoms` el + frac -- qchem's
+    decks/Si_diamond_inline.json).
   * Nelec / species -- derived by the deck from the material and the pp set, never restated.
   * spin -- unpolarized = multiplicity 0 (the deck's minimal-spin default, not written); polarized = the two-channel run,
     multiplicity |Σ site_moments| + 1, and the ordering as `siteSpins` (the moments' signs: the deck's decoration is a
@@ -123,7 +124,7 @@ def _sign(m: float) -> int:
 
 
 def structure_entry(spec: RunSpec) -> str | dict:
-    """The deck's `structure`: a materials.json name when the spec is that entry, else the inline form (PROVISIONAL)."""
+    """The deck's `structure`: a materials.json name when the spec is that entry, else the inline entry."""
     src = (spec.structure.source or {}).get("materials")
     if src and _material_mismatch(spec, src) is None:
         return src

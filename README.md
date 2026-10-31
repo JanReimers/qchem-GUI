@@ -52,7 +52,7 @@ python scripts/make_artifacts.py     # headless: render all plot types -> out/
 
 - `qviz/spec.py` — the back-end-neutral `RunSpec` (structure, physics, task, ONE accuracy target ε); imports no back end.
 - `qviz/draft.py` — `SpecDraft`: the one editable spec; the Inspector and the Agent dock are two views of it.
-- `qviz/backends/` — `solid2.py` (in process, `qchem_py`), `solid2_deck.py` (RunSpec → qchem deck), `cp2k.py`, `qe.py`,
+- `qviz/backends/` — `solid2.py` (in process, `qchem_py`: molecules through MoleculeSetup, crystals through `deck::Build`), `solid2_deck.py` (RunSpec → qchem deck), `cp2k.py`, `qe.py`,
   `abinit.py`, `fake.py`; `base.py` holds the registry and the back-end strip (option 2.2).
 - `qviz/runner.py` — the ONE launcher for external codes (`mpirun`, always).
 - `qviz/compare.py` — cross-code legs and the Codes table.
