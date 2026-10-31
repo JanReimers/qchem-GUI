@@ -36,7 +36,7 @@ from ..data import SCFStep
 from ..runner import MpiRunner, next_prefix, run_dir
 from ..spec import RunSpec
 from . import gaussian_basis
-from .base import Job, Result, StepSink, code_block, data_structure, shared_representation
+from .base import Job, Result, StepSink, code_block, data_structure, shared_representation, species_kinds
 
 NAME = "CP2K"
 CP2K_EXE = os.environ.get("CP2K_EXE", "/usr/bin/cp2k.psmp")
@@ -78,28 +78,6 @@ def _shared_basis_problem(s: RunSpec) -> Optional[str]:
     if "basis_file" in _cp2k_rep(s) or any("basis" in k for k in (_cp2k_rep(s).get("kinds") or {}).values()):
         return "a shared basis and a CP2K basis are both stated"
     return gaussian_basis.why_not_cp2k(name, [st.element for st in s.structure.sites])
-
-
-def _kinds(spec: RunSpec) -> list[dict]:
-    """One &KIND per distinct (element, tag, moment): a tag names its kind (Mn1, Mn2); untagged sites of one element
-    and one moment share the element's kind."""
-    moments = spec.physics.spin.site_moments or (0.0,) * len(spec.structure.sites)
-    kinds: dict[tuple, dict] = {}
-    names: list[str] = []
-    site_kind: list[str] = []
-    for s, m in zip(spec.structure.sites, moments):
-        key = (s.element, s.tag, float(m))
-        if key not in kinds:
-            name = s.tag or s.element
-            if name in names:                               # untagged, same element, different moment
-                name = f"{s.element}{sum(1 for n in names if n.startswith(s.element)) + 1}"
-            names.append(name)
-            kinds[key] = {"name": name, "element": s.element, "Z": s.Z, "moment": float(m), "tag": s.tag}
-        site_kind.append(kinds[key]["name"])
-    spec_kinds = list(kinds.values())
-    for k in spec_kinds:
-        k["sites"] = [i for i, n in enumerate(site_kind) if n == k["name"]]
-    return spec_kinds
 
 
 class Cp2kBackend:
@@ -160,7 +138,7 @@ class Cp2kBackend:
             return _DEFAULT_PP[ph.functional] + (f"-q{q[el.upper()]}" if el.upper() in q else "")
         basis_file = "job.basis" if shared else rep.get("basis_file") or str(CP2K_DATA / "BASIS_MOLOPT")
         pot_file = rep.get("potential_file") or str(CP2K_DATA / "GTH_POTENTIALS")
-        kinds = _kinds(spec)
+        kinds = species_kinds(spec)
         stated_kinds = rep.get("kinds") or {}
         polarized = ph.spin.polarized
         if st.kind == "molecule":

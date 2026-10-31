@@ -3,7 +3,7 @@ qviz.runner -- the ONE place an external code is launched (doc/RunSpecPlan.md §
 
 ⛔ Every oracle on this box (CP2K, QE, ABINIT, VASP) is an MPI build, and a bare binary HANGS (the OpenMPI
 singleton-init hang).  So a translator's Job.command never carries a launcher: `MpiRunner` prepends
-`mpirun -np N` (and ABINIT's `--force-mpirun`, via `extra_args`), and there is no other code path that executes
+`mpirun -np N` (`extra_args` for a code that needs flags after its argv), and there is no other code path that executes
 an oracle.  Discovery checks a binary's presence (os.access), never runs it.
 
 Run data has one home (D-RUNDATA): ~/Code/<app>-runs/<Material>/<prefix>.<ext>, the files given a self-describing
@@ -44,7 +44,7 @@ def _safe(s: str) -> str:
 class MpiRunner:
     """Launch `command` under mpirun in `cwd`, streaming stdout line by line to `on_line` and into `<prefix>.out`."""
     ranks: int = 1
-    extra_args: tuple[str, ...] = ()          # appended AFTER the program argv (ABINIT: "--force-mpirun")
+    extra_args: tuple[str, ...] = ()          # appended AFTER the program argv
     threads: int = 1                          # OMP_NUM_THREADS; 1 keeps runs comparable to the banked serial timings
 
     def argv(self, command: tuple[str, ...]) -> list[str]:

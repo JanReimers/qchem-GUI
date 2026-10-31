@@ -137,3 +137,25 @@ def data_structure(spec: RunSpec) -> Structure:
         return Structure([s.element for s in st.sites], pos, numbers, lattice=L)
     pos = np.array([s.xyz for s in st.sites], float)
     return Structure([s.element for s in st.sites], pos, numbers)
+
+
+def species_kinds(spec: RunSpec) -> list[dict]:
+    """One species (CP2K &KIND, QE ATOMIC_SPECIES) per distinct (element, tag, moment): a tag names its kind (Mn1, Mn2); untagged sites of one element
+    and one moment share the element's kind."""
+    moments = spec.physics.spin.site_moments or (0.0,) * len(spec.structure.sites)
+    kinds: dict[tuple, dict] = {}
+    names: list[str] = []
+    site_kind: list[str] = []
+    for s, m in zip(spec.structure.sites, moments):
+        key = (s.element, s.tag, float(m))
+        if key not in kinds:
+            name = s.tag or s.element
+            if name in names:                               # untagged, same element, different moment
+                name = f"{s.element}{sum(1 for n in names if n.startswith(s.element)) + 1}"
+            names.append(name)
+            kinds[key] = {"name": name, "element": s.element, "Z": s.Z, "moment": float(m), "tag": s.tag}
+        site_kind.append(kinds[key]["name"])
+    spec_kinds = list(kinds.values())
+    for k in spec_kinds:
+        k["sites"] = [i for i, n in enumerate(site_kind) if n == k["name"]]
+    return spec_kinds

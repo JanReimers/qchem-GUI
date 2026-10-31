@@ -275,14 +275,38 @@ ATOMIC_POSITIONS crystal / K_POINTS automatic`.  AFM: split the species (`Mn1`, 
 a two-step job, `pw.x` then `hp.x` (`&INPUTHP nq1..3`).  ε → `ecutwfc`, `ecutrho`, `conv_thr`,
 k-mesh, **and the FFT grid `nr1..3` stated** — pw.x evaluates E_xc on its minimal FFT grid, and on
 β-MnO₂ at 40 Ry the default grid is 107 μHa off the grid-converged value (qchem CLAUDE.md,
-2026-10-26), so a μHa-level ε must state it.  Pseudopotentials: a configured UPF directory per
-functional; the translator refuses rather than guesses a UPF.
+2026-10-26), so a μHa-level ε must state it.
+
+**Built (S7, `qviz/backends/qe.py`).**  Pseudopotentials are qchem's own GTH set as `gth2upf` UPFs
+(`<El>.pz-gth-q<q>.UPF`, q from gth-lda-valence); a missing file is a refusal naming the gth2upf
+command.  LDA is `sla+vwn`.  The grid is always stated: pw.x's own minimal grid
+(nr_i = int(√ecutrho·|a_i|/π)+1, FFT-friendly -- it reproduces the banked run's 96×96×60) times a
+`grid_factor`, 1.0 for ε ≥ 1e-4 and 1.5 below (PROVISIONAL).  **Measured 2026-10-31** on the gate deck
+(β-MnO₂ Γ, 300/1200 Ry, `~/Code/qe-runs/MnO2/gridscan_*`): E(Ry) at 96×96×60 / 120×120×75 /
+144×144×90 / 192×192×120 = −186.93546944 / −186.93546189 / −186.93546514 / −186.93546375 -- the
+default is 2.8 μHa (0.5 μHa/atom) off and every finer grid agrees to < 1 μHa.  So at a hard-PP
+cutoff the minimal grid is nearly enough; the 107 μHa of CLAUDE.md is a 40 Ry effect.  The 1.5 factor
+is the margin until a low-cutoff point is measured.  Gate: the translator reproduces the banked oracle
+deck `IntegrationTests/QE/mno2b.scf.in`, and a real run at the banked grid reproduces −186.93546944 Ry.
 
 ### 3.4 ABINIT
 
 One `.abi` file: `acell`/`rprim`, `ntypat`/`typat`/`znucl`, `xred`, `ecut` (+`pawecutdg`),
 `ngkpt`/`shiftk`, `nsppol 2` + `spinat`, DFT+U `usepawu 1 lpawu dmatpuopt upawu jpawu`, compute_U
 via the `lruj` post-processing utility (two perturbed runs).  Pseudos via `pseudos` + `pp_dirpath`.
+
+**Built (S7, `qviz/backends/abinit.py`).**  Pseudopotentials: each element's gth-lda-valence entry of qchem's
+GTH database (`BasisSetData/GTH_POTENTIALS.txt`) re-wrapped as ABINIT's native **pspcod 10** (HGH, full h
+matrix; `qviz/backends/gth.py`) and written beside the input -- one pseudopotential in a second format,
+as CP2K gets SOLID²'s basis.  Not the gth2upf UPFs QE reads: abinit 10.8 aborts on them twice over (its
+UPF→ixc map does not know gth2upf's label `SLA PZ NOGX NOGC`, and its UPF2 reader requires a linear
+radial mesh from r = 0, while gth2upf writes QE's logarithmic one; measured 2026-10-31).  LDA = `ixc -1007`
+(libxc Dirac + VWN).  `ngfft` always stated, by the QE rule.  +U refused (ABINIT's DFT+U is PAW-only).
+Gate: β-MnO₂ Γ at the QE gate's cutoff and grid, against the banked QE energy -- **passed 2026-10-31:
+ABINIT −93.467734513 Ha vs QE −93.46773472 Ha, +0.2 μHa** (38 SCF steps, toldfe 1e-10; QE's U = 1e-8 eV
+left out, energetically nil): two codes agreeing on one pseudopotential in two formats.  Parser note: a
+toldfe stop prints `etot is converged` with no `=>converged.` arrow (m_common.F90 scprqt), so convergence
+is read from either `At SCF step` line.
 
 ### 3.5 VASP — licensed
 
@@ -314,17 +338,18 @@ the box's built oracles (qchem CLAUDE.md, verified 2026-09-09) and are overridab
 | SOLID² | the `qchem_py` extension (in-process) / `rundeck` (batch) | in-process / plain exe |
 | CP2K | `/usr/bin/cp2k.psmp` | `mpirun -np N cp2k.psmp -i job.inp -o job.out` |
 | QE | `~/Code/q-e/PW/src/pw.x` (+ `hp.x`) | `mpirun -np N pw.x -in job.in` |
-| ABINIT | `~/Code/abinit/build/src/98_main/abinit` | `mpirun -np N abinit --force-mpirun job.abi` (argv order: §10 Q7) |
+| ABINIT | `~/Code/abinit/build/src/98_main/abinit` | `mpirun -np N abinit job.abi` (no `--force-mpirun`: see below) |
 | VASP | `~/Code/vasp.6.3.0/vasp.6.3.0/bin/vasp_std` | `mpirun -np N vasp_std` (in the job dir) |
 
 ⛔ **All four oracles are MPI builds: the runner ALWAYS launches through `mpirun`, even for one
-rank; ABINIT additionally needs `--force-mpirun`.  A bare binary hangs on this box (the OpenMPI
+rank.  A bare binary hangs on this box (the OpenMPI
 singleton-init hang).**  This is enforced structurally: the `Job.command` an external translator
 returns is `[...]` *without* the launcher, and the one `MpiRunner` prepends
-`mpirun -np N` (+ the ABINIT flag).  There is no code path that executes an oracle binary
-directly, and discovery checks presence (`os.access`), never `--version`.  (Exact placement of
-`--force-mpirun` on the ABINIT argv to be confirmed against the confirmation-suite command the
-first time the adapter runs — §10 Q7.)
+`mpirun -np N`.  There is no code path that executes an oracle binary
+directly, and discovery checks presence (`os.access`), never `--version`.  **Measured 2026-10-31:
+`--force-mpirun` is the ABINIT TEST-SUITE driver's flag (`runtests.py`); `abinit` 10.8 itself rejects it
+("Unsupported option") and exits without running, so the ABINIT argv carries no flag** (qchem CLAUDE.md's
+"ABINIT additionally needs `--force-mpirun`" conflates the two -- flagged to the controller).
 
 ### 4.2 The runner
 
@@ -570,8 +595,7 @@ Per the qchem repo's tracker convention, residual items from these stages go as 
    Any limit on what the agent may send off the box (structures are fine? results?).
 5. **External structure databases** (COD, Materials Project): wanted in agent v1, or later?
 6. **Default back end when several are green**: SOLID² always, or "the last one used"?
-7. **ABINIT launch line**: confirm the exact argv with `--force-mpirun` from the confirmation
-   suite's own command before the adapter is written.
+7. ~~ABINIT launch line~~ -- settled by measurement (§4.1): `mpirun -np N abinit job.abi`.
 8. **Multiplicity vs site moments for crystals**: the spec states per-site moments and derives the
    net multiplicity; the core's `SolidCalcOptions.multiplicity` + decoration fit that — confirm
    this is the representation you want users to see.

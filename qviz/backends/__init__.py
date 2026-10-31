@@ -3,13 +3,15 @@ from .base import Backend, BackendRegistry, FieldRef, Job, Result, data_structur
 from .fake import FakeBackend
 from .solid2 import Solid2Backend
 from .cp2k import Cp2kBackend
+from .qe import QeBackend
+from .abinit import AbinitBackend
 
 
 def default_registry() -> BackendRegistry:
-    """SOLID² first (the default when several can run a spec -- PROVISIONAL, RunSpecPlan §10 Q6), then CP2K, then the
+    """SOLID² first (the default when several can run a spec -- PROVISIONAL, RunSpecPlan §10 Q6), then CP2K, QE, ABINIT, then the
     analytic stand-in."""
-    return BackendRegistry([Solid2Backend(), Cp2kBackend(), FakeBackend()])
+    return BackendRegistry([Solid2Backend(), Cp2kBackend(), QeBackend(), AbinitBackend(), FakeBackend()])
 
 
 __all__ = ["Backend", "BackendRegistry", "FieldRef", "Job", "Result", "data_structure",
-           "FakeBackend", "Solid2Backend", "Cp2kBackend", "default_registry"]
+           "FakeBackend", "Solid2Backend", "Cp2kBackend", "QeBackend", "AbinitBackend", "default_registry"]
