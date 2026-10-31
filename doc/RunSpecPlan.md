@@ -7,8 +7,8 @@ banked energies), S4 compare across codes (one spec on every ticked back end; CP
 file converted, `qviz/backends/gaussian_basis.py`; per-code `representation.<code>` blocks; the Codes panel;
 F₂ runs on both).  **S4 findings, handed to qchem's tracker:** the molecular facade's default XC mesh is
 0.52 Ha/atom off (the GUI now states a mesh from ε), and the molecular PP route sits 4 mHa/atom above CP2K on F₂
-while the crystal route matches CP2K on NaF.  **Next:** the SolidSetup bind (after lane B moves the solid observer
-to a ctor argument), then S5 agent v1.  The open questions for the user are in §10; the code takes the
+while the crystal route matches CP2K on NaF.  **Next:** the SolidSetup bind: its RunSpec -> deck translator is built (§9); the bridge waits for
+lane B's inline deck structure and `deck::Build(json, Observer)` on main.  Then S5 agent v1.  The open questions for the user are in §10; the code takes the
 recommended option for each and marks it PROVISIONAL.
 
 ## 0. Why this note exists
@@ -502,9 +502,6 @@ Per the qchem repo's tracker convention, residual items from these stages go as 
 
 ## 9. Lib-side dependencies (flagged, not done here)
 
-- **Inline structure in the deck** (§1.3): `rundeck` needs a way to take atoms + lattice +
-  decoration inline, or the GUI writes a temporary materials entry.  The in-process route does
-  not need it (it builds a `Structure` directly).
 - **The SolidSetup bind (design, 2026-10-30, against lane-b 2acddd04's observer-in-ctor API).**
   Two routes:
   (a) the bridge builds `Lattice_3D` + `GaussianBasisRecipe` + `SolidCalcOptions` from a C request,
@@ -512,12 +509,17 @@ Per the qchem repo's tracker convention, residual items from these stages go as 
   with no lib change, but it duplicates in pybind/ what `qchem::deck` already knows (species -> Nelec,
   decoration -> siteSpins, eV -> Ha for U, stages, the basis registry, defaults), and the two
   translators drift.
-  (b) **RECOMMENDED: the deck is the seam.**  The GUI's SOLID² translator writes a deck JSON (the way
+  (b) **APPROVED (controller, 2026-10-31; provisional until the user answers Q3): the deck is the seam.**  The GUI's SOLID² translator writes a deck JSON (the way
   the CP2K translator writes a `.inp`), and the bridge hands it to the library's own reader, so there
   is one translator and every GUI run is a reproducible `rundeck` deck.  It needs two lib pieces
   (lane B):
-  1. an **inline `structure`** (lattice, sites, species q, decoration) beside the named one (Q3);
-  2. **`deck::Build(RunSpec, Observer) -> unique_ptr<SolidCalculation>`**, i.e. `deck::Run` split
+  1. an **inline `structure`** beside the named one (Q3).  The shape the GUI translator writes today
+     (PROVISIONAL, for lane B to accept or amend): `{"lattice": {"vectors_bohr": [[a],[b],[c]]},
+     "atoms": [{"el": "Mn", "frac": [0,0,0]}, ...]}` -- a materials.json entry with explicit lattice
+     vectors in place of `type`/`a`/`T`; the pp set and the decoration stay where the deck already
+     says them (`solid.pp`, `solid.siteSpins`).
+  2. **`deck::Build(const json& deck, Observer) -> unique_ptr<SolidCalculation>`**, i.e. `deck::Run` split
+     (the library never sees the GUI's RunSpec: RunSpec -> deck JSON is the GUI's translator)
      at "built, not yet converged", so the bridge converges with the GIL released and streams.
      The revision record is written as `Run` writes it, into the GUI's
      `~/Code/qchem6-runs/<Material>/`.
@@ -527,6 +529,18 @@ Per the qchem repo's tracker convention, residual items from these stages go as 
   around the cell's bounding box for the GUI's axis-aligned ScalarField, until the viewer learns
   non-orthogonal grids).  It does NOT expose levels (k-resolved bands are a later panel).
   Molecules keep `MoleculeSetup` (`deck::Resolve` refuses molecule names today).
+
+  **The translator is BUILT (2026-10-31): `qviz/backends/solid2_deck.py`.**  A crystal spec becomes a
+  deck: a materials.json NAME when `structure.source.materials` names an entry whose geometry the spec
+  matches (elements, fractional sites, cell volume), else the inline form above; k-mesh and basis
+  stated (no ε rule banked for either); spin as `multiplicity` (|Σ moments| + 1) + `siteSpins` (the
+  signs); +U per site with the projector mapped (lowdin -> siteShells); Fermi-Dirac kT; compute_U ->
+  a postSCF action; `representation.solid2.deck` deep-merged last.  ε is NOT mapped (the deck's
+  defaults stand, and the resolved rows say so).  Golden tests (`tests/test_solid2_deck.py`): specs
+  stating the banked bench decks translate to exactly `decks/bench/Si_Gamma_parity.json` and
+  `NaF_SR2_Gamma_parity.json`; those and an MnO AFM-II +U deck pass `rundeck --check`; the Si Γ deck
+  runs end to end (−7.1150674 Ha, 7 μHa from CP2K) and its revision record holds every value the GUI
+  stated.  Named-structure decks run today; inline ones wait for piece 1, the in-process run for piece 2.
 - **The ONE accuracy target for solids** is lane A chunk C2; until then the SOLID² ε table fills
   today's separate tolerances and says so.
 - **Forces / stress** for relax: the `GeometryGradient` capability (lane B review); until it
