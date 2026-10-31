@@ -35,28 +35,32 @@ modules. We just consume the resulting `qchem_py*.so`.
 
 ## Run
 
+The one-line launch on this box (the binding from the lane-g build; checked on the real display 2026-10-31):
 ```bash
-python app_desktop.py                # the desktop shell (auto-forces xcb on Wayland)
+cd ~/Code/qchem-GUI && QCHEM_BUILD=~/Code/qchem-lane-g/build/Release .venv/bin/python app_desktop.py
+```
+On Wayland it forces Qt's xcb platform itself (VTK's render window is X11-only).  CP2K, QE and ABINIT are found at their
+usual paths (`CP2K_EXE`, `QE_PW`, `ABINIT_EXE` override) and always launched under `mpirun`; their run data goes to
+`~/Code/<code>-runs/<Material>/`.  Without `qchem_py` the SOLID² box in the back-end strip greys out with the reason.
+
+```bash
+QCHEM_BUILD=~/Code/qchem-lane-g/build/Release .venv/bin/python -m unittest discover -s tests   # the quick suite
 python scripts/make_artifacts.py     # headless: render all plot types -> out/
 ```
 
-`app_desktop.py` uses the real qchem backend if `qchem_py` is found, and falls back
-to the analytic stand-in (`backend_analytic`) otherwise — so the UI runs even
-without a built binding.
-
 ## Layout
 
-- `qviz/data.py` — the seam: `Structure` / `ScalarField` / `VectorField` / `SCFStep`
-  records + the `ComputeBackend` protocol. **Nothing else leaks across this line.**
-- `qviz/backend_qchem.py` — real backend over `qchem_py` (set `QCHEM_BUILD`).
-- `qviz/backend_analytic.py` — closed-form water stand-in (no binding needed).
-- `qviz/scene.py` — the only PyVista-aware module (records → actors).
-- `qviz/project.py` — workspace save/restore on HDF5.
-- `qviz/molecules.py` — geometry presets (small species; benzene-class omitted, RAM).
-- `app_desktop.py` — PySide6 + pyvistaqt + pyqtgraph shell: 3D viewport, live SCF
-  convergence, iso/slice sliders, molecule picker, spin-view, project open/save.
-- `doc/MoleculeAppPlan.md` — the architecture + staged GaussView feature backlog.
-- `doc/NanobindBindingPlan.md` — how the binding (in the qchem repo) works.
+- `qviz/spec.py` — the back-end-neutral `RunSpec` (structure, physics, task, ONE accuracy target ε); imports no back end.
+- `qviz/draft.py` — `SpecDraft`: the one editable spec; the Inspector and the Agent dock are two views of it.
+- `qviz/backends/` — `solid2.py` (in process, `qchem_py`), `solid2_deck.py` (RunSpec → qchem deck), `cp2k.py`, `qe.py`,
+  `abinit.py`, `fake.py`; `base.py` holds the registry and the back-end strip (option 2.2).
+- `qviz/runner.py` — the ONE launcher for external codes (`mpirun`, always).
+- `qviz/compare.py` — cross-code legs and the Codes table.
+- `qviz/agent/` — the agent's tools, loop, consent gate and dock (no model client until RunSpec Q4 is ruled).
+- `qviz/inspector.py` — the Inspector widget.  `qviz/scene.py` — the only PyVista-aware module.
+- `qviz/data.py` — `Structure` / `ScalarField` / `VectorField` / `SCFStep` records.  `qviz/project.py` — workspace save/restore.
+- `app_desktop.py` — the PySide6 + pyvistaqt + pyqtgraph shell.
+- `doc/RunSpecPlan.md` — the plan under execution (stages, findings, the open questions for the user).
 
 ## Status
 

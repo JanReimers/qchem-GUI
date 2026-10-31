@@ -419,8 +419,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.codes.setHorizontalHeaderLabels(heads); self.codes.setVerticalHeaderLabels([k for k, _ in rows])
         for i, (_k, vals) in enumerate(rows):
             for j, v in enumerate(vals):
-                self.codes.setItem(i, j, QtWidgets.QTableWidgetItem(v))
-        self.codes.resizeColumnsToContents()
+                item = QtWidgets.QTableWidgetItem(v); item.setToolTip(v)
+                self.codes.setItem(i, j, item)
+        # the legs share the width evenly: one long resolved setting must not push the other code off-screen
+        self.codes.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
 
     def _refresh_cmp_box(self):
         """List READY runs that share the selected run's geometry and, with it, give a density (valid Δρ partners)."""
