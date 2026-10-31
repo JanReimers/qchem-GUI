@@ -80,7 +80,7 @@ class Run:
             self.result = self.backend.run(self.job, on_step)
             self._cache.clear()
             if not self.result.converged:
-                raise RuntimeError(f"SCF did not converge in {len(self.result.scf)} iterations")
+                raise RuntimeError(self.result.failure or f"SCF did not converge in {len(self.result.scf)} iterations")
             self.status = RunStatus.READY
         except Exception as e:           # noqa: BLE001 -- surface any back-end failure as a state
             self.error = str(e)

@@ -102,6 +102,19 @@ class Solid2EndToEnd(unittest.TestCase):
         self.assertEqual(rep["num_occupied"], 5)
         self.assertGreater(rep["num_orbitals"], 5, "virtuals are listed")
 
+    def test_the_row_is_the_console_s_cells_and_a_capped_run_says_why(self):
+        steps = []
+        run = self.ws().add_run(water(accuracy=Accuracy(representation={"basis": "dzvp"})), compute=False)
+        run.compute(on_step=steps.append)
+        self.assertEqual(steps[-1].titles[:4], ("Etotal", "[F,D]", "Δ[F,D]", "Δρ"), "the molecular console's columns")
+        fd = steps[-1].cells[1]
+        self.assertEqual((fd.scale, fd.tolerance), ("log", 1e-5))
+        self.assertAlmostEqual(steps[-1].value("Etotal"), steps[-1].energy)
+        capped = self.ws().add_run(water(accuracy=Accuracy(representation={"basis": "dzvp"}, scf={"max_iter": 2})))
+        self.assertIs(capped.status, RunStatus.FAILED)
+        self.assertIn("not converged after 2 iterations", capped.error, "the SCFFailure's reason, through the bridge")
+        self.assertIsNone(capped.result.energy_Ha, "a failed SCF hands back no plausible number")
+
     def test_the_O2_triplet_offers_a_spin_density(self):
         run = self.ws().add_run(molecule("O2", [8, 8], [0, 0, 1.141, 0, 0, -1.141], multiplicity=3,
                                          accuracy=Accuracy(representation={"basis": "dzvp"})))

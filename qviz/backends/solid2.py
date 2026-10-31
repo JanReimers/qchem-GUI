@@ -166,10 +166,9 @@ class Solid2Backend:
         n = job.native
         steps: list[SCFRow] = []
 
-        def step(it, E, dE, comm, drho):
-            # Until the bridge hands over the lib's IterationRow (lane B's one-home row), the three numbers it passes
-            # today, under the console's titles.  dE is the absolute |ΔE| the row retired: dropped here too.
-            s = SCFRow(it, E, (SCFCell("Etotal", E), SCFCell("[F,D]", comm, "log"), SCFCell("Δρ", drho, "log")))
+        def step(it, E, cells):
+            # the lib's IterationRow, cell for cell: the console's columns, titles, printed text, gates and scales
+            s = SCFRow(it, E, tuple(SCFCell(title, value, scale, text, tol) for title, value, text, tol, scale in cells))
             steps.append(s)
             if on_step:
                 on_step(s)
@@ -196,7 +195,9 @@ class Solid2Backend:
         if polarized:      # an unpolarized run's m(r) is the zero field: nothing to draw, so not offered
             fields["spin_density"] = FieldRef("Spin density (ρ↑−ρ↓)", True,
                                               lambda npts, pad: scalar(calc.spin_density(npts, pad), "Spin density (ρ↑−ρ↓)", True))
-        return Result(converged=calc.converged(), energy_Ha=calc.total_energy(), structure=data_structure(job.spec),
+        converged = calc.converged()
+        return Result(converged=converged, energy_Ha=calc.total_energy() if converged else None, failure=calc.failure(),
+                      structure=data_structure(job.spec),
                       scf=steps, levels=levels, polarized=polarized, fields=fields,
                       orbital=lambda i, npts, pad: scalar(calc.orbital(i, npts, pad), f"MO #{i}", True),
                       resolved=job.resolved,

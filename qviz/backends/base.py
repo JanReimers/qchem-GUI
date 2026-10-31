@@ -45,7 +45,7 @@ class FieldRef:
 @dataclass
 class Result:
     converged: bool
-    energy_Ha: Optional[float]
+    energy_Ha: Optional[float]            # None for an unconverged run: a failed SCF hands back no plausible number
     structure: Structure
     scf: list[SCFRow] = field(default_factory=list)
     levels: list[dict] = field(default_factory=list)      # ascending: {"e","occ","spin" -1/0/+1,"label","n"}
@@ -54,6 +54,7 @@ class Result:
     orbital: Optional[Callable[[int, int, float], ScalarField]] = None   # level index -> sampled MO
     resolved: dict = field(default_factory=dict)
     provenance: dict = field(default_factory=dict)
+    failure: Optional[str] = None         # why the SCF did not converge, in the code's own words (SOLID²: its SCFFailure)
 
     @property
     def num_occupied(self) -> int:
