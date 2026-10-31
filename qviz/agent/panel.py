@@ -13,7 +13,7 @@ import json
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..spec import RunSpec, SpecError
-from .draft import Edit, SpecDraft
+from ..draft import Edit, SpecDraft
 from .session import AgentSession, Event
 from .tools import RunRequest
 

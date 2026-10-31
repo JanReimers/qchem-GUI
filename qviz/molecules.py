@@ -77,3 +77,26 @@ MOLECULES = {
     "Ammonia (NH3)":        (_AMMONIA[0], _AMMONIA[1], "dzvp", 72, 0),
     "Ethene (C2H4)":        (_ETHENE[0],  _ETHENE[1],  "dzvp", 72, 0),
 }
+
+
+def preset_spec(name: str):
+    """The spec a preset starts as -- ONE rule for every view that offers presets (the Inspector, the agent): the preset's
+    basis and multiplicity; a valence (GTH) basis is LDA + pseudopotential (the only model both codes' GTH routes share),
+    an all-electron one HF; point-group blocking on (the orbital table then carries irrep labels)."""
+    from .spec import Accuracy, molecule
+    Z, pos, basis, _n, mult = MOLECULES[name]
+    pp = basis.startswith(("valence", "sipp"))
+    return molecule(name.split(" (")[0], Z, pos, theory="DFT" if pp else "HF", functional="LDA" if pp else None,
+                    multiplicity=mult or None, core="pseudopotential" if pp else "all-electron",
+                    accuracy=Accuracy(representation={"basis": basis}, scf={"impose_symmetry": True}))
+
+
+def preset_of(spec) -> str | None:
+    """The preset whose structure `spec` has (label and geometry), else None."""
+    for name, (Z, pos, *_r) in MOLECULES.items():
+        sites = spec.structure.sites
+        if (spec.structure.kind == "molecule" and name.split(" (")[0] == spec.label and len(sites) == len(Z)
+                and all(s.Z == z and all(abs(a - b) < 1e-9 for a, b in zip(s.xyz, pos[3*i:3*i+3]))
+                        for i, (s, z) in enumerate(zip(sites, Z)))):
+            return name
+    return None

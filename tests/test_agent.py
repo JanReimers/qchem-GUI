@@ -7,7 +7,7 @@ import unittest
 
 from qviz.agent.client import Message, ModelTurn, OfflinePlanner, ScriptedClient, ToolCall
 from qviz.agent.consent import ConsentGate, ConsentRefused, OutboundPolicy
-from qviz.agent.draft import SpecDraft, merge_patch
+from qviz.draft import SpecDraft, merge_patch
 from qviz.agent.session import AgentSession
 from qviz.agent.tools import Toolset
 from qviz.backends import FakeBackend
@@ -49,14 +49,14 @@ class TheDraft(unittest.TestCase):
         draft, _ws, tools = rig()
         tools.call("build_structure", {"kind": "molecule", "name": "water"})
         draft.patch({"accuracy": {"epsilon_Ha_per_atom": 1e-6}}, "user", "tighter")
-        tools.call("propose_spec_patch", {"patch": {"physics": {"functional": None, "theory": "HF"}}, "rationale": "HF reference"})
+        tools.call("propose_spec_patch", {"patch": {"physics": {"functional": "LDA", "theory": "DFT"}}, "rationale": "LDA"})
         self.assertEqual([e.author for e in draft.history], ["agent", "user", "agent"])
         before = draft.spec
         with self.assertRaises(SpecError):
             draft.patch({"physics": {"spin": {"multiplicity": 2}}}, "user")      # wrong parity for water
         self.assertIs(draft.spec, before)
         draft.undo()
-        self.assertEqual(draft.spec.physics.theory, "DFT")
+        self.assertEqual(draft.spec.physics.theory, "HF")
         self.assertEqual(draft.spec.accuracy.epsilon_Ha_per_atom, 1e-6, "the user's edit survives the agent's undo")
 
 

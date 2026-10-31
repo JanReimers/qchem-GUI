@@ -5,8 +5,9 @@ Dockable single-window layout (ParaView/Blender idiom, not GaussView MDI):
     Run Browser (left) | 3D viewport (center) | Inspector + SCF convergence (right)
 
 The window holds a Workspace; panels bind to the *selected* Run via the model's
-Qt-agnostic observer. Adding a molecule = adding a Run: a back-end-neutral RunSpec
-(doc/RunSpecPlan.md) on each back end ticked in the Inspector's back-end strip.  The strip
+Qt-agnostic observer. Adding a molecule = adding a Run: the shared draft RunSpec (doc/RunSpecPlan.md) on each back
+end ticked in the Inspector's back-end strip.  The Inspector and the Agent dock are two VIEWS of one SpecDraft (one
+undo stack, one refusal path).  The strip
 is option 2.2: every back end that CAN run the spec as stated is enabled, the others are
 greyed with their reasons on hover.  One spec on two codes gives two Runs whose energies
 and resolved settings sit side by side in the Codes panel (S4).  The Agent dock (S5) edits a shared draft spec with
@@ -30,12 +31,11 @@ from pyvistaqt import QtInteractor
 from qviz import scene, compare, geometry
 from qviz.scene import field_to_imagedata
 from qviz.workspace import Workspace, RunStatus
-from qviz.spec import Accuracy, molecule
 from qviz.backends import default_registry
-from qviz.backends.solid2 import BASES as _SOLID2_BASES
 from qviz import molecules
+from qviz.inspector import Inspector
 from qviz.agent.client import OfflinePlanner
-from qviz.agent.draft import SpecDraft
+from qviz.draft import SpecDraft
 from qviz.agent.panel import AgentPanel
 from qviz.agent.session import AgentSession
 from qviz.agent.tools import Toolset
@@ -47,7 +47,6 @@ if not _SOLID2.installed:
     print(f"SOLID² unavailable ({_SOLID2.why_absent}); analytic stand-in only")
 
 # the Inspector's method box -> the spec's (theory, functional)
-_METHOD = {"HF": ("HF", None), "LDA": ("DFT", "LDA"), "Xalpha": ("DFT", "Xalpha")}
 
 
 _STATUS_ICON = {RunStatus.PENDING: "…", RunStatus.RUNNING: "⏳",
@@ -131,13 +130,15 @@ class MainWindow(QtWidgets.QMainWindow):
         if open_path:
             self._open_workspace_path(open_path)  # CLI: load a .qproj.h5 instead of seeding
         else:
-            self._on_mol_changed(self.mol_box.currentText())   # sync multiplicity to the default molecule
-            self._add_molecule("Oxygen (O2, triplet)")  # open-shell default (polarized primary, on-tenet)
+            self.draft.set(molecules.preset_spec("Oxygen (O2, triplet)"), "user", "start-up preset")   # open-shell default (on-tenet)
+            for n in self.inspector.ticked():
+                self._add_spec(self.draft.spec, n)
         self._restore_layout()                    # after docks exist + a run is shown
 
     def _set_workspace(self, ws):
         self.ws = ws
         self.ws.on_change(lambda _w: self._bridge.changed.emit())   # model -> GUI thread, thread-safe
+        self.agent.session.tools.workspace = ws                      # the agent reads the runs of THIS workspace
 
     # -- layout -----------------------------------------------------------
     def _build_ui(self):
@@ -170,46 +171,14 @@ class MainWindow(QtWidgets.QMainWindow):
         runs_dock.raise_()
 
         # right dock (top): Inspector
-        insp = QtWidgets.QWidget(); form = QtWidgets.QFormLayout(insp)
-        self.mol_box = QtWidgets.QComboBox(); self.mol_box.addItems(molecules.MOLECULES.keys())
-        self.method_box = QtWidgets.QComboBox(); self.method_box.addItems(["HF", "LDA", "Xalpha"])
-        # the Add button names the method it will use, so it's clear BEFORE you click
-        self.add_btn = QtWidgets.QPushButton()
-        self.add_btn.clicked.connect(lambda: self._add_molecule(self.mol_box.currentText()))
-        self.method_box.currentTextChanged.connect(self._update_add_label)
-        row = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(row); h.setContentsMargins(0,0,0,0)
-        h.addWidget(self.mol_box); h.addWidget(self.method_box); h.addWidget(self.add_btn)
-        form.addRow("Molecule", row)
-        self._update_add_label()
-        self.basis_box = QtWidgets.QComboBox()
-        self.basis_box.addItems(["dzvp", "orb1", "dzvp2", "tzvp", "valence_lowq_vb", "sipp_sr"])
-        self.basis_box.setToolTip("orb1 is the smallest/fastest; valence_lowq_vb / sipp_sr are valence (GTH) bases -- "
-                                  "with the pseudopotential ticked, the same spec runs on SOLID² and CP2K")
-        form.addRow("Basis", self.basis_box)
-        self.pp_check = QtWidgets.QCheckBox("pseudopotential (GTH; LDA + a valence basis)")
-        form.addRow(self.pp_check)
-        self.mult_spin = QtWidgets.QSpinBox(); self.mult_spin.setRange(0, 7)
-        self.mult_spin.setSpecialValueText("auto")   # 0 shows as 'auto' (minimal spin)
-        self.mult_spin.setToolTip("Spin multiplicity 2S+1 (auto = minimal). >1 → open-shell, spin-polarized.")
-        form.addRow("Multiplicity", self.mult_spin)
-        self.mol_box.currentTextChanged.connect(self._on_mol_changed)
-        self.sym_check = QtWidgets.QCheckBox("point-group symmetry (SALC → irrep labels)")
-        self.sym_check.setChecked(True)          # default on so the orbital table carries irrep labels
-        form.addRow(self.sym_check)
-
-        # the back-end strip (option 2.2): one box per registered back end, enabled iff it can run the spec as
-        # stated now; the Add button runs the spec on every ticked one.
-        strip = QtWidgets.QWidget(); sh = QtWidgets.QHBoxLayout(strip); sh.setContentsMargins(0, 0, 0, 0)
-        self.be_checks = {}
-        for name in REGISTRY.names():
-            cb = QtWidgets.QCheckBox(name + (" (illustration)" if REGISTRY.get(name).capabilities().synthetic else ""))
-            cb.toggled.connect(self._update_add_label); sh.addWidget(cb); self.be_checks[name] = cb
-        sh.addStretch(1)
-        form.addRow("Run on", strip)
-        for w in (self.mol_box, self.method_box, self.basis_box):
-            w.currentTextChanged.connect(self._refresh_strip)
-        self.mult_spin.valueChanged.connect(self._refresh_strip)
-        self.pp_check.toggled.connect(self._refresh_strip); self.sym_check.toggled.connect(self._refresh_strip)
+        # The Inspector proper is a VIEW of the shared draft (qviz.inspector); the view controls below it are not spec.
+        self.draft = SpecDraft()
+        self.inspector = Inspector(self.draft, REGISTRY)
+        self.inspector.add_requested.connect(lambda spec, names: [self._add_spec(spec, n) for n in names])
+        self.inspector.refused.connect(lambda why: self.statusBar().showMessage(f"not applied: {why}"))
+        insp = QtWidgets.QWidget(); _outer = QtWidgets.QVBoxLayout(insp); _outer.setContentsMargins(0, 0, 0, 0)
+        _outer.addWidget(self.inspector)
+        _view = QtWidgets.QWidget(); form = QtWidgets.QFormLayout(_view); _outer.addWidget(_view)
 
         self.field_box = QtWidgets.QComboBox()
         self.field_box.addItems(["Electron density", "Spin density (ρ↑−ρ↓)",
@@ -292,8 +261,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._conv_dock.raise_()
 
         # left dock: Agent -- a shared draft spec; its run requests are cards only the user's click starts
-        self.draft = SpecDraft()
-        tools = Toolset(self.draft, REGISTRY, self.ws, start_run=lambda card: [self._add_spec(card.spec, b) for b in card.backends])
+        tools = Toolset(self.draft, REGISTRY, None, start_run=lambda card: [self._add_spec(card.spec, b) for b in card.backends])
         self.agent = AgentPanel(AgentSession(OfflinePlanner(), tools), self.draft)
         self._agent_dock = self._dock("Agent", self.agent, QtCore.Qt.LeftDockWidgetArea)
 
@@ -315,42 +283,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addDockWidget(area, d); return d
 
     # -- workspace <-> UI --------------------------------------------------
-    def _ticked(self):
-        return [n for n, cb in self.be_checks.items() if cb.isEnabled() and cb.isChecked()]
-
-    def _update_add_label(self, *_):
-        m = self.method_box.currentText()
-        on = self._ticked() if hasattr(self, "be_checks") else []
-        self.add_btn.setText(f"+ Add {m} run" + (f" on {' + '.join(on)}" if on else " (no back end ticked)"))
-        self.add_btn.setEnabled(bool(on))
-
-    def _make_spec(self, label, numbers, positions):
-        """The Inspector's choices as a RunSpec: the basis, the core and the point-group blocking are STATED choices.
-        A pseudopotential spec is LDA by construction (the only model both codes' GTH routes share)."""
-        theory, functional = _METHOD[self.method_box.currentText()]
-        scf = {"impose_symmetry": self.sym_check.isChecked()}
-        return molecule(label, numbers, positions, theory=theory, functional=functional,
-                        multiplicity=self.mult_spin.value() or None,
-                        core="pseudopotential" if self.pp_check.isChecked() else "all-electron",
-                        accuracy=Accuracy(representation={"basis": self.basis_box.currentText()}, scf=scf))
-
-    def _refresh_strip(self, *_):
-        """Re-judge every back end against the spec the Inspector states NOW (BackendRegistry.strip, option 2.2)."""
-        name = self.mol_box.currentText()
-        if name not in molecules.MOLECULES:
-            return
-        Z, pos, *_rest = molecules.MOLECULES[name]
-        try:
-            spec = self._make_spec(name.split(" (")[0], Z, pos)
-        except Exception as e:                   # noqa: BLE001 -- e.g. a multiplicity of the wrong parity
-            for cb in self.be_checks.values():
-                cb.setEnabled(False); cb.setToolTip(f"invalid spec: {e}")
-            self._update_add_label(); return
-        for n, (able, ticked, tip) in REGISTRY.strip(spec, self._ticked()).items():
-            cb = self.be_checks[n]
-            cb.blockSignals(True); cb.setEnabled(able); cb.setChecked(ticked); cb.setToolTip(tip); cb.blockSignals(False)
-        self._update_add_label()
-
     def _add_spec(self, spec, backend=None):
         """Add a Run on `backend` (None = the registry's default) and compute it OFF the GUI thread -- the window
         stays live; the Run Browser shows … then ⏳ then ● (or ✗).  Serialized via the single-thread pool, so a
@@ -384,23 +316,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.scf_log.clear()
         self.scf_log.appendPlainText(msg)
 
-    def _on_mol_changed(self, name):
-        if name in molecules.MOLECULES:          # default the multiplicity and basis to the preset's
-            Z, pos, basis, n, mult = molecules.MOLECULES[name]
-            self.mult_spin.setValue(mult)
-            self.basis_box.setCurrentText(basis)
-            valence = basis.startswith(("valence", "sipp"))
-            self.pp_check.setChecked(valence)
-            if valence:
-                self.method_box.setCurrentText("LDA")
-            self._refresh_strip()
-
-    def _add_molecule(self, name: str):
-        Z, pos, basis, n, mult = molecules.MOLECULES[name]
-        spec = self._make_spec(name.split(" (")[0], Z, pos)
-        for backend in self._ticked():
-            self._add_spec(spec, backend)
-
     def _import_xyz(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import molecule (xyz)", "", "XYZ (*.xyz)")
         if not path:
@@ -409,11 +324,7 @@ class MainWindow(QtWidgets.QMainWindow):
             numbers, positions, label = molecules.from_xyz(path)
         except Exception as e:                   # noqa: BLE001
             self.statusBar().showMessage(f"xyz import failed: {e}"); return
-        try:
-            spec = self._make_spec(label, numbers, positions)
-        except Exception as e:                   # noqa: BLE001 -- e.g. a multiplicity of the wrong parity
-            self.statusBar().showMessage(f"invalid run: {e}"); return
-        self._add_spec(spec)                     # the strip judged the PRESET; an import goes to the default
+        self.inspector.set_structure(label, numbers, positions)   # into the draft; the user clicks Add
 
     def _on_ws_change(self, ws: Workspace):
         self._syncing = True

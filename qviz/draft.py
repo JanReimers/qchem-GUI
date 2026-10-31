@@ -1,5 +1,5 @@
 """
-qviz.agent.draft -- the ONE editable spec the user and the agent share (doc/RunSpecPlan.md §5.1).
+qviz.draft -- the ONE editable spec the user and the agent share (doc/RunSpecPlan.md §5.1).
 
 Both authors edit through the same calls; every change is recorded as (author, rationale, before, after) on one
 undo stack, so an agent edit is a diff the user sees and can revert, and the agent holds no state that is not in
@@ -12,7 +12,7 @@ import copy
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from ..spec import RunSpec, SpecError
+from .spec import RunSpec, SpecError
 
 
 @dataclass(frozen=True)

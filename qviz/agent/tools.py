@@ -20,10 +20,10 @@ from typing import Callable, Optional
 from .. import compare, molecules
 from ..backends import solid2_deck
 from ..backends.base import BackendRegistry
-from ..spec import Accuracy, RunSpec, SpecError, molecule
+from ..spec import RunSpec, SpecError
 from ..workspace import Workspace
 from .client import ToolSchema
-from .draft import SpecDraft
+from ..draft import SpecDraft
 
 LICENSED_BACKENDS = {"VASP"}
 
@@ -217,10 +217,7 @@ class Toolset:
             key = next((k for k in molecules.MOLECULES if name.lower() in k.lower()), None)
             if key is None:
                 return {"error": f"no preset molecule matches {name!r}; presets: {list(molecules.MOLECULES)}"}
-            Z, pos, basis, _n, mult = molecules.MOLECULES[key]
-            pp = basis.startswith(("valence", "sipp"))
-            spec = molecule(key.split(" (")[0], Z, pos, theory="DFT", functional="LDA", multiplicity=mult or None,
-                            core="pseudopotential" if pp else "all-electron", accuracy=Accuracy(representation={"basis": basis}))
+            spec = molecules.preset_spec(key)
         else:
             spec = _crystal(prototype, list(elements), a_bohr)
         e = self.draft.set(spec, "agent", f"build_structure {kind} {name or prototype}")
