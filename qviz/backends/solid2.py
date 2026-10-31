@@ -99,6 +99,8 @@ class Solid2Backend:
                        lambda s: s.physics.core != "pseudopotential"
                        or (s.physics.functional == "LDA" and rep(s).get("basis") in _VALENCE_BASES),
                        "a molecular pseudopotential run is LDA with a stated valence basis (sipp*, valence_lowq*)"),
+            Capability("accuracy.representation keys", lambda s: set(rep(s)) <= {"basis"},
+                       "the stated representation names another code's settings"),
             Capability("accuracy.representation.basis", lambda s: rep(s).get("basis") in (None, *BASES),
                        "the stated basis is not a registered Gaussian basis"),
             Capability("task.kind=energy", lambda s: s.task.kind == "energy",

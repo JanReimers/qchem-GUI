@@ -1,7 +1,11 @@
 # RunSpec plan — a back-end-neutral seam, many back ends, one in-app agent
 
-Status: DESIGN NOTE (lane G step 0, 2026-10-30).  Nothing here is built yet.  The open questions
-for the user are collected in §10; everything else is a proposal to accept or redirect.
+Status (2026-10-30): plan under execution.  **Built:** G1 bridge (qchem lane-g, landed on main), S1 spec +
+capability filter + Workspace/Run/project on Backends, S2 SOLID² (molecules), S3 CP2K (crystals + molecules,
+single points; its translator reproduces the banked Si Γ and MnO AFM-II +U oracle decks, and a real run gives the
+banked Si energy).  **Next:** the SolidSetup bind (after lane B moves the solid observer to a ctor argument), S4
+compare across codes.  The open questions for the user are in §10; the code takes the recommended option for each
+and marks it PROVISIONAL.
 
 ## 0. Why this note exists
 
