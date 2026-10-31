@@ -9,7 +9,7 @@ Produces in out/:
     orbital_homo.png     two-lobe signed MO isosurface
     gradient_field.png   grad(rho) vector glyphs
     slice_sweep.gif      a slider sweeping a 2D slice through the 3D density
-    scf_convergence.gif  live-streamed dE / ||[F,D]|| / drho during SCF
+    scf_convergence.gif  the live-streamed log-scale SCF columns ([F,D], Δρ)
     water.qproj.h5       a saved project (workspace round-trip)
 """
 from __future__ import annotations
@@ -119,17 +119,14 @@ def scf_convergence():
 
     steps = be.scf
     it = [s.iteration for s in steps]
-    dE = [s.dE for s in steps]
-    comm = [s.commutator for s in steps]
-    drho = [s.drho for s in steps]
+    logs = [c.title for c in steps[0].cells if c.scale == "log"]
 
     plt.style.use("dark_background")
     frames = []
     for k in range(1, len(steps) + 1):
         fig, ax = plt.subplots(figsize=(6.4, 4.0), dpi=120)
-        ax.semilogy(it[:k], dE[:k], "o-", label=r"$|\Delta E|$", color="#4dd0e1")
-        ax.semilogy(it[:k], comm[:k], "s-", label=r"$\|[F,D]\|$", color="#ff8a65")
-        ax.semilogy(it[:k], drho[:k], "^-", label=r"$\|\Delta\rho\|$", color="#aed581")
+        for title, mark, col in zip(logs, "so^", ("#ff8a65", "#aed581", "#4dd0e1")):
+            ax.semilogy(it[:k], [abs(s.value(title)) for s in steps[:k]], mark + "-", label=title, color=col)
         ax.set_xlim(0, len(steps) - 1)
         ax.set_ylim(1e-7, 1e1)
         ax.set_xlabel("SCF iteration"); ax.set_ylabel("residual")
@@ -158,9 +155,9 @@ def save_project(steps):
     # round-trip check
     p = project.load(str(OUT / "water.qproj.h5"))
     assert p["fields"]["density"].values.shape == (64, 64, 64)
-    assert p["scf"].shape[0] == len(steps)
+    assert len(p["scf"]) == len(steps)
     print(f"  water.qproj.h5  (reloaded: {p['meta']['title']!r}, "
-          f"{len(p['fields'])} fields, {p['scf'].shape[0]} scf rows)")
+          f"{len(p['fields'])} fields, {len(p['scf'])} scf rows)")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ A *project* is a single self-describing .h5 file (or a directory with one):
   /meta            attrs: title, backend, created
   /structure       symbols, positions, numbers, [lattice]
   /fields/<name>   dataset + attrs(origin, spacing, signed)   <- densities, MOs
-  /scf             table: iteration, energy, dE, commutator, drho
+  /scf             table: iteration, energy, then one column per cell (attrs titles, scales, units: the code's own)
   /viewstate       attrs: camera, active iso level, slice axis/pos (JSON)
 
 HDF5 is the right container: native readers in C++ (HighFive) and Python (h5py),
@@ -19,13 +19,13 @@ import datetime as _dt
 import numpy as np
 import h5py
 
-from .data import Structure, ScalarField, SCFStep
+from .data import Structure, ScalarField, SCFCell, SCFRow
 
 
 def save(path: str, *, title: str, backend: str,
          structure: Structure,
          fields: dict[str, ScalarField] | None = None,
-         scf: list[SCFStep] | None = None,
+         scf: list[SCFRow] | None = None,
          viewstate: dict | None = None) -> None:
     with h5py.File(path, "w") as h:
         m = h.create_group("meta")
@@ -47,12 +47,11 @@ def save(path: str, *, title: str, backend: str,
                            signed=f.signed, display_name=f.name)
 
         if scf:
-            arr = np.array([(s.iteration, s.energy, s.dE, s.commutator, s.drho)
-                            for s in scf],
-                           dtype=[("iteration", "i4"), ("energy", "f8"),
-                                  ("dE", "f8"), ("commutator", "f8"),
-                                  ("drho", "f8")])
-            h.create_dataset("scf", data=arr)
+            titles = list(dict.fromkeys(c.title for s in scf for c in s.cells))   # the union, in first-seen order
+            cell = {c.title: c for s in scf for c in s.cells}
+            d = h.create_dataset("scf", data=np.array([[s.iteration, s.energy] + [s.value(t) for t in titles] for s in scf]))
+            d.attrs.update(titles=json.dumps(titles), scales=json.dumps([cell[t].scale for t in titles]),
+                           units=json.dumps([cell[t].unit for t in titles]))
 
         h.create_group("viewstate").attrs["json"] = json.dumps(viewstate or {})
 
@@ -74,9 +73,16 @@ def load(path: str) -> dict:
                 name=d.attrs["display_name"], values=d[:],
                 origin=tuple(d.attrs["origin"]), spacing=tuple(d.attrs["spacing"]),
                 signed=bool(d.attrs["signed"]))
-        out["scf"] = h["scf"][:] if "scf" in h else None
+        out["scf"] = _scf_rows(h["scf"]) if "scf" in h else None
         out["viewstate"] = json.loads(h["viewstate"].attrs.get("json", "{}"))
     return out
+
+
+def _scf_rows(d) -> list[SCFRow]:
+    """/scf back into SCFRows (numbers only: the printed text is not stored)."""
+    titles, scales, units = (json.loads(d.attrs[k]) for k in ("titles", "scales", "units"))
+    return [SCFRow(int(r[0]), float(r[1]), tuple(SCFCell(t, float(v), s, unit=u) for t, s, u, v in zip(titles, scales, units, r[2:])))
+            for r in d[:]]
 
 
 # --------------------------------------------------------------------------

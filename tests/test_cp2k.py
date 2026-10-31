@@ -161,7 +161,10 @@ class ParseTheOutput(unittest.TestCase):
             t.feed(line)
         self.assertEqual([s.iteration for s in seen], [1, 2, 3])
         self.assertAlmostEqual(seen[-1].energy, -7.115058)
-        self.assertAlmostEqual(seen[1].dE, 6.4e-2)
+        self.assertEqual(seen[1].titles, ("Update method", "Time", "Convergence", "Total energy", "Change"))   # CP2K's own header
+        self.assertAlmostEqual(seen[1].value("Change"), -6.4e-2)
+        self.assertEqual([c.scale for c in seen[1].cells], ["linear", "linear", "log", "linear", "log"])
+        self.assertEqual(seen[1].cells[0].text, "P_Mix/Diag. 0.40E+00")
         p = parse_output(OUTPUT)
         self.assertTrue(p["converged"])
         self.assertAlmostEqual(p["energy"], -7.115058123456789)

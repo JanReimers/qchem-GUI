@@ -141,6 +141,9 @@ class ParseTheBankedOutput(unittest.TestCase):
         self.assertTrue(p["converged"])
         self.assertAlmostEqual(p["energy"], -186.93546944 / 2, places=9)
         self.assertAlmostEqual(seen[-1].energy, p["energy"], places=6)
+        self.assertEqual(seen[-1].titles, ("total energy", "estimated scf accuracy", "total magnetization", "absolute magnetization"))
+        self.assertAlmostEqual(seen[0].value("estimated scf accuracy"), 2.86090945)       # pw.x's own number, in Ry
+        self.assertAlmostEqual(seen[0].value("absolute magnetization"), 7.20)
         self.assertFalse(parse_output(text.replace("convergence has been achieved", "convergence NOT achieved"))["converged"])
 
 

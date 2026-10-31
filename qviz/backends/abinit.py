@@ -30,7 +30,7 @@ import shutil
 from typing import Optional
 
 from ..capability import Capabilities, Capability
-from ..data import SCFStep
+from ..data import SCFCell, SCFRow
 from ..runner import MpiRunner, next_prefix, run_dir
 from ..spec import RunSpec
 from .base import Job, Result, StepSink, code_block, data_structure, shared_representation
@@ -140,7 +140,7 @@ class AbinitBackend:
     def run(self, job: Job, on_step: Optional[StepSink] = None) -> Result:
         d = run_dir("abinit", job.native["material"])
         prefix = next_prefix(d, job.native["stem"])
-        tail = AbinitTail(on_step)
+        tail = AbinitTail(on_step, abinit_columns(job.spec.physics.spin.polarized))
         files = {f"{prefix}.abi": job.files["deck"]} | {k: v for k, v in job.files.items() if k != "deck"}
         rc, out = self.runner.run(job.command + (f"{prefix}.abi",), d, prefix, files,
                                   record={"spec": job.spec.to_dict(), "resolved": job.resolved, "backend": NAME},
@@ -154,19 +154,34 @@ class AbinitBackend:
                       provenance={"code": NAME, "version": parsed["version"], "output": str(abo if abo.exists() else out), "returncode": rc})
 
 
-_ETOT = re.compile(r"^ ETOT\s+(\d+)\s+(-?\d+\.\d+)\s+(\S+)\s+(\S+)\s+(\S+)")
+_ETOT = re.compile(r"^ ETOT\s+(\d+)\s+(-?\d+\.\d+)((?:\s+\S+)*)\s*$")
+_HEADER = re.compile(r"^\s+iter\s+Etot\(hartree\)")
+# ABINIT's own column titles.  Its log (what the tail sees live) carries no header -- only the .abo does -- so the run
+# says which columns to expect: vres2 for a norm-conserving SCF on the potential (iscf < 10), the spin-sphere pair
+# difmagsph/maxmagsph in a polarized run.  A header line, when one passes by, overrides the expectation.
+_LOG_SCALE = {"deltaE(h)", "residm", "vres2", "nres2", "difmagsph", "diffor"}
+
+
+def abinit_columns(polarized: bool) -> tuple[str, ...]:
+    return ("Etot(hartree)", "deltaE(h)", "residm", "vres2") + (("difmagsph", "maxmagsph") if polarized else ())
 
 
 class AbinitTail:
-    """ABINIT's `ETOT n E deltaE residm vres2` lines -> SCFSteps."""
+    """ABINIT's `ETOT n Etot deltaE residm vres2 ...` lines -> SCFRows, one cell per column under ABINIT's own titles."""
 
-    def __init__(self, on_step: Optional[StepSink] = None):
+    def __init__(self, on_step: Optional[StepSink] = None, columns: tuple[str, ...] = abinit_columns(False)):
         self.on_step = on_step
-        self.steps: list[SCFStep] = []
+        self.columns = columns
+        self.steps: list[SCFRow] = []
 
     def feed(self, line: str) -> None:
-        if m := _ETOT.match(line):
-            s = SCFStep(len(self.steps) + 1, float(m.group(2)), abs(float(m.group(3))), float(m.group(5)), float(m.group(5)))
+        if _HEADER.match(line):
+            self.columns = tuple(line.split()[1:])
+        elif m := _ETOT.match(line):
+            words = [m.group(2)] + m.group(3).split()
+            titles = self.columns + tuple(f"column {k + 1}" for k in range(len(self.columns), len(words)))
+            s = SCFRow(len(self.steps) + 1, float(m.group(2)), tuple(
+                SCFCell(title, float(w), "log" if title in _LOG_SCALE else "linear", w) for title, w in zip(titles, words)))
             self.steps.append(s)
             if self.on_step:
                 self.on_step(s)

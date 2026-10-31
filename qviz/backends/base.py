@@ -5,7 +5,7 @@ Four verbs, and the order a Run calls them in:
 
     capabilities()            -> Capabilities   what this code can do (option 2.2: the spec filters back ends)
     translate(spec)           -> Job            PURE: the native input + the resolved settings table; nothing runs
-    run(job, on_step)         -> Result         blocking (a Run calls it on a worker thread); streams SCFStep live
+    run(job, on_step)         -> Result         blocking (a Run calls it on a worker thread); streams SCFRow live (the code's own columns)
     (parse is inside run for an in-process code; an external code's run = launch + parse(run_dir))
 
 A Result is NEUTRAL: the frontends read energies, the SCF trace, levels and lazily
@@ -17,10 +17,10 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol, runtime_checkable
 
 from ..capability import Capabilities
-from ..data import ScalarField, SCFStep, Structure, VectorField
+from ..data import ScalarField, SCFRow, Structure, VectorField
 from ..spec import RunSpec
 
-StepSink = Callable[[SCFStep], None]
+StepSink = Callable[[SCFRow], None]
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,7 @@ class Result:
     converged: bool
     energy_Ha: Optional[float]
     structure: Structure
-    scf: list[SCFStep] = field(default_factory=list)
+    scf: list[SCFRow] = field(default_factory=list)
     levels: list[dict] = field(default_factory=list)      # ascending: {"e","occ","spin" -1/0/+1,"label","n"}
     polarized: bool = False
     fields: dict[str, FieldRef] = field(default_factory=dict)   # "density", "spin_density", "gradient", "orbital:<i>"

@@ -32,7 +32,7 @@ import shutil
 from typing import Optional
 
 from ..capability import Capabilities, Capability
-from ..data import SCFStep
+from ..data import SCFCell, SCFRow
 from ..runner import MpiRunner, next_prefix, run_dir
 from ..spec import RunSpec
 from .base import Job, Result, StepSink, code_block, data_structure, shared_representation, species_kinds
@@ -237,27 +237,43 @@ def _tag_index(spec: RunSpec, tag: str) -> int:
 
 _E = re.compile(r"^[!\s]\s+total energy\s+=\s+(-?\d+\.\d+) Ry")
 _ACC = re.compile(r"^\s+estimated scf accuracy\s+<\s+(\S+) Ry")
+_MAG = re.compile(r"^\s+(total|absolute) magnetization\s+=\s+(-?\d+\.\d+) Bohr mag/cell")
+_END = re.compile(r"^\s+(iteration #|End of self-consistent calculation|convergence has been achieved|convergence NOT achieved)")
 
 
 class QeTail:
-    """pw.x's per-iteration `total energy` / `estimated scf accuracy` lines -> SCFSteps (energies in Ha)."""
+    """pw.x's per-iteration block -> SCFRows under pw.x's own names and units: `total energy` and `estimated scf
+    accuracy` (Ry), and in a polarized run `total magnetization` / `absolute magnetization` (Bohr mag/cell), which pw.x
+    prints AFTER the accuracy -- so a row is emitted when the next block (or the run's verdict) begins."""
 
     def __init__(self, on_step: Optional[StepSink] = None):
         self.on_step = on_step
-        self.steps: list[SCFStep] = []
+        self.steps: list[SCFRow] = []
+        self._cells: list[SCFCell] = []
         self._E: Optional[float] = None
 
     def feed(self, line: str) -> None:
         if m := _E.match(line):
+            self._flush()
             self._E = float(m.group(1)) / 2
-        elif (m := _ACC.match(line)) and self._E is not None:
-            acc = float(m.group(1)) / 2
-            prev = self.steps[-1].energy if self.steps else None
-            s = SCFStep(len(self.steps) + 1, self._E, abs(self._E - prev) if prev is not None else abs(self._E), acc, acc)
-            self.steps.append(s)
-            self._E = None
-            if self.on_step:
-                self.on_step(s)
+            self._cells = [SCFCell("total energy", float(m.group(1)), text=m.group(1), unit="Ry")]
+        elif self._E is None:
+            return
+        elif m := _ACC.match(line):
+            self._cells.append(SCFCell("estimated scf accuracy", float(m.group(1)), "log", m.group(1), unit="Ry"))
+        elif m := _MAG.match(line):
+            self._cells.append(SCFCell(f"{m.group(1)} magnetization", float(m.group(2)), text=m.group(2), unit="Bohr mag/cell"))
+        elif _END.match(line):
+            self._flush()
+
+    def _flush(self) -> None:
+        if self._E is None or len(self._cells) < 2:          # a block is a row once its accuracy line has arrived
+            return
+        s = SCFRow(len(self.steps) + 1, self._E, tuple(self._cells))
+        self._E, self._cells = None, []
+        self.steps.append(s)
+        if self.on_step:
+            self.on_step(s)
 
 
 def parse_output(text: str) -> dict:

@@ -25,6 +25,7 @@ the resolved settings.
 """
 from __future__ import annotations
 
+import math
 import os
 import pathlib
 import re
@@ -32,7 +33,7 @@ import shutil
 from typing import Optional
 
 from ..capability import Capabilities, Capability
-from ..data import SCFStep
+from ..data import SCFCell, SCFRow
 from ..runner import MpiRunner, next_prefix, run_dir
 from ..spec import RunSpec
 from . import gaussian_basis
@@ -272,16 +273,17 @@ class Cp2kBackend:
                       provenance={"code": NAME, "version": parsed["version"], "output": str(out), "returncode": rc})
 
 
-_STEP = re.compile(r"^\s+(\d+)\s+\S.*\s(\S+)\s+(-?\d+\.\d+)\s+(\S+)\s*$")
+# Step | Update method (its text includes the mixing parameter) | Time | Convergence | Total energy | Change
+_STEP = re.compile(r"^\s+(\d+)\s+(.+?)\s+(\d+\.\d+)\s+(\S+)\s+(-?\d+\.\d+)\s+(\S+)\s*$")
 
 
 class Cp2kTail:
-    """Turns CP2K's SCF table rows into SCFSteps as the lines arrive (the live trace).  Iterations are numbered
-    across outer loops, so the trace stays monotone."""
+    """Turns CP2K's SCF table rows into SCFRows as the lines arrive (the live trace), one cell per CP2K column
+    under CP2K's own header.  Iterations are numbered across outer loops, so the trace stays monotone."""
 
     def __init__(self, on_step: Optional[StepSink] = None):
         self.on_step = on_step
-        self.steps: list[SCFStep] = []
+        self.steps: list[SCFRow] = []
         self._in_table = False
 
     def feed(self, line: str) -> None:
@@ -292,10 +294,15 @@ class Cp2kTail:
             m = _STEP.match(line)
             if m:
                 try:
-                    conv, E, dE = float(m.group(2)), float(m.group(3)), float(m.group(4))
+                    t, conv, E, dE = float(m.group(3)), float(m.group(4)), float(m.group(5)), float(m.group(6))
                 except ValueError:
                     return
-                s = SCFStep(len(self.steps) + 1, E, abs(dE), conv, conv)   # CP2K's "Convergence" = max density change
+                s = SCFRow(len(self.steps) + 1, E, (
+                    SCFCell("Update method", math.nan, text=m.group(2)),
+                    SCFCell("Time", t, unit="s"),
+                    SCFCell("Convergence", conv, "log", m.group(4)),     # CP2K's max density-matrix change
+                    SCFCell("Total energy", E, text=m.group(5)),
+                    SCFCell("Change", dE, "log", m.group(6))))
                 self.steps.append(s)
                 if self.on_step:
                     self.on_step(s)

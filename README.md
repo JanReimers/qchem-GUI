@@ -58,7 +58,8 @@ python scripts/make_artifacts.py     # headless: render all plot types -> out/
 - `qviz/compare.py` — cross-code legs and the Codes table.
 - `qviz/agent/` — the agent's tools, loop, consent gate and dock (no model client until RunSpec Q4 is ruled).
 - `qviz/inspector.py` — the Inspector widget.  `qviz/scene.py` — the only PyVista-aware module.
-- `qviz/data.py` — `Structure` / `ScalarField` / `VectorField` / `SCFStep` records.  `qviz/project.py` — workspace save/restore.
+- `qviz/data.py` — `Structure` / `ScalarField` / `VectorField` / `SCFRow` (of `SCFCell`s: each code's own SCF columns) records.  `qviz/project.py` — workspace save/restore.
+- `qviz/scfview.py` — the Convergence dock: one plot tab per SCF column (log axis for convergence measures), the iteration table beside it.
 - `app_desktop.py` — the PySide6 + pyvistaqt + pyqtgraph shell.
 - `doc/RunSpecPlan.md` — the plan under execution (stages, findings, the open questions for the user).
 

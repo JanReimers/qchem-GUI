@@ -27,7 +27,7 @@ from typing import Optional
 import numpy as np
 
 from ..capability import Capabilities, Capability
-from ..data import ScalarField, SCFStep, VectorField
+from ..data import ScalarField, SCFCell, SCFRow, VectorField
 from ..spec import RunSpec
 from .base import FieldRef, Job, Result, StepSink, code_block, data_structure, shared_representation
 
@@ -164,10 +164,12 @@ class Solid2Backend:
         if self._qc is None:
             raise RuntimeError(self._why_absent)
         n = job.native
-        steps: list[SCFStep] = []
+        steps: list[SCFRow] = []
 
         def step(it, E, dE, comm, drho):
-            s = SCFStep(it, E, dE, comm, drho)
+            # Until the bridge hands over the lib's IterationRow (lane B's one-home row), the three numbers it passes
+            # today, under the console's titles.  dE is the absolute |ΔE| the row retired: dropped here too.
+            s = SCFRow(it, E, (SCFCell("Etotal", E), SCFCell("[F,D]", comm, "log"), SCFCell("Δρ", drho, "log")))
             steps.append(s)
             if on_step:
                 on_step(s)

@@ -72,6 +72,17 @@ class ParseABankedRun(unittest.TestCase):
         for line in (NIO / "run_op6_serial.log").read_text().splitlines(keepends=True):
             t.feed(line)
         self.assertAlmostEqual(seen[0].energy, -367.74355891699)
+        self.assertEqual(seen[0].titles, ("Etot(hartree)", "deltaE(h)", "residm", "vres2", "column 5", "column 6"))
+        self.assertAlmostEqual(seen[1].value("residm"), 6.231e-3)
+
+    def test_a_header_line_names_the_columns(self):
+        """The .abo's header (a PAW run reports nres2, not vres2) overrides the expected columns."""
+        t = AbinitTail()
+        for line in ("     iter   Etot(hartree)      deltaE(h)  residm     nres2   difmagsph maxmagsph",
+                     " ETOT  1  -367.74355891699    -3.677E+02 1.233E+01 2.253E+03 1.440E+00 1.440E+00"):
+            t.feed(line)
+        self.assertEqual(t.steps[0].titles, ("Etot(hartree)", "deltaE(h)", "residm", "nres2", "difmagsph", "maxmagsph"))
+        self.assertEqual([c.scale for c in t.steps[0].cells], ["linear", "log", "log", "log", "log", "linear"])
         p = parse_output((NIO / "nio_ucrpa_op.abo").read_text())
         self.assertAlmostEqual(p["energy"], -363.71080887, places=8)
         self.assertTrue(p["converged"])

@@ -20,7 +20,7 @@ from enum import Enum
 from typing import Callable, Optional
 
 from .backends.base import Backend, BackendRegistry, Job, Result
-from .data import ScalarField, SCFStep, Structure, VectorField
+from .data import ScalarField, SCFRow, Structure, VectorField
 from .spec import RunSpec
 
 
@@ -66,8 +66,8 @@ class Run:
             cb(self)
 
     # -- lifecycle --------------------------------------------------------
-    def compute(self, on_step: Optional[Callable[[SCFStep], None]] = None) -> None:
-        """Translate + run.  Blocking: the Qt layer calls it on a worker thread.  `on_step(SCFStep)` streams the
+    def compute(self, on_step: Optional[Callable[[SCFRow], None]] = None) -> None:
+        """Translate + run.  Blocking: the Qt layer calls it on a worker thread.  `on_step(SCFRow)` streams the
         SCF live.  Any failure (a refused capability, a throw in the code) becomes the FAILED state."""
         self.status = RunStatus.RUNNING
         self.error = None
@@ -97,7 +97,7 @@ class Run:
         return self.result.structure
 
     @property
-    def scf(self) -> list[SCFStep]:
+    def scf(self) -> list[SCFRow]:
         """The trace recorded during the one run (no re-run: a replay is a UI animation over this)."""
         self._require_ready()
         return self.result.scf

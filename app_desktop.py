@@ -2,7 +2,7 @@
 qchem viz -- desktop shell (PySide6 + pyvistaqt + pyqtgraph), Workspace{Run} driven.
 
 Dockable single-window layout (ParaView/Blender idiom, not GaussView MDI):
-    Run Browser (left) | 3D viewport (center) | Inspector + SCF convergence (right)
+    Run Browser (left) | 3D viewport (center) | Inspector + SCF convergence (right: a plot tab per column + the table)
 
 The window holds a Workspace; panels bind to the *selected* Run via the model's
 Qt-agnostic observer. Adding a molecule = adding a Run: the shared draft RunSpec (doc/RunSpecPlan.md) on each back
@@ -34,6 +34,7 @@ from qviz.workspace import Workspace, RunStatus
 from qviz.backends import default_registry
 from qviz import molecules
 from qviz.inspector import Inspector
+from qviz.scfview import SCFView, export_column
 from qviz.agent.client import OfflinePlanner
 from qviz.draft import SpecDraft
 from qviz.agent.panel import AgentPanel
@@ -62,7 +63,7 @@ class _WsBridge(QtCore.QObject):
 
 class _ComputeTask(QtCore.QRunnable):
     """Runs Run.compute() off the GUI thread, streaming the SCF live: the back end hands
-    each SCFStep over DURING the converge (SOLID² releases the GIL between steps), so the
+    each SCFRow over DURING the converge (SOLID² releases the GIL between steps), so the
     trace fills in real time and the window stays responsive. Run.compute() catches errors
     -> FAILED status; we relay that as the bridge's done payload.  `bridge` None = no live
     trace (a workspace reopen computes its runs quietly)."""
@@ -79,8 +80,8 @@ class _ComputeTask(QtCore.QRunnable):
 class _ScfBridge(QtCore.QObject):
     """Marshals the live SCF stream from a compute worker onto the GUI thread. The C++
     observer fires each iteration on the worker; `started` (the Run) resets the trace when the
-    queued run actually begins, `step` (queued cross-thread) hands the SCFStep to the
-    convergence plot/log, `done` (error string, '' = ok) writes the footer."""
+    queued run actually begins, `step` (queued cross-thread) hands the SCFRow to the
+    convergence view (plot tabs + table), `done` (error string, '' = ok) writes the footer."""
     started = QtCore.Signal(object)
     step = QtCore.Signal(object)
     done = QtCore.Signal(str)
@@ -110,7 +111,8 @@ class _SampleTask(QtCore.QRunnable):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, open_path=None):
         super().__init__()
-        self.scf_steps: list = []
+        self._live_run = None                        # the run whose trace is streaming into the SCF view
+        self._scf_shown = None                       # the run whose trace the SCF view holds
         self._syncing = False
         self._cam_run = None          # which run the camera is fitted to (reset only on change)
         self._cam_pair = None         # which (left,right) pair the split camera is fitted to
@@ -232,12 +234,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # right dock (bottom): SCF convergence
         pg.setConfigOptions(antialias=True, background="#101216", foreground="w")
-        self.conv = pg.PlotWidget(title="SCF convergence"); self.conv.setLogMode(y=True); self.conv.addLegend()
-        self.conv.setLabel("bottom", "iteration"); self.conv.setLabel("left", "residual")
-        self.c_dE   = self.conv.plot(pen="#4dd0e1", symbol="o", name="|dE|")
-        self.c_comm = self.conv.plot(pen="#ff8a65", symbol="s", name="||[F,D]||")
-        self.c_drho = self.conv.plot(pen="#aed581", symbol="t", name="||drho||")
-        self._conv_dock = self._dock("Convergence", self.conv, QtCore.Qt.RightDockWidgetArea)
+        self.scf_view = SCFView()                     # one plot tab per column of the code's own table, the table beside
+        self._conv_dock = self._dock("Convergence", self.scf_view, QtCore.Qt.RightDockWidgetArea)
         self.splitDockWidget(insp_dock, self._conv_dock, QtCore.Qt.Vertical)
 
         # right dock: MO energy-level diagram (tabbed with convergence)
@@ -247,7 +245,7 @@ class MainWindow(QtWidgets.QMainWindow):
         mo_dock = self._dock("MO diagram", self.mo_plot, QtCore.Qt.RightDockWidgetArea)
         self.tabifyDockWidget(self._conv_dock, mo_dock)
 
-        # right dock: SCF log (iteration-by-iteration text trace + run metadata)
+        # right dock: SCF log (the run's resolved settings and verdict; the iterations are the Convergence table)
         self.scf_log = QtWidgets.QPlainTextEdit(); self.scf_log.setReadOnly(True)
         self.scf_log.setFont(QtGui.QFont("monospace")); self.scf_log.setMaximumBlockCount(500)
         self._log_dock = self._dock("SCF log", self.scf_log, QtCore.Qt.RightDockWidgetArea)
@@ -299,8 +297,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pool.start(_ComputeTask(run, bridge))
 
     def _on_compute_started(self, run):
-        self.scf_steps.clear()                        # fresh convergence trace for this run
-        self.c_dE.setData([], []); self.c_comm.setData([], []); self.c_drho.setData([], [])
+        self.scf_view.clear()                         # fresh convergence trace for this run
+        self._live_run = self._scf_shown = run
         self._conv_dock.raise_()                      # bring the SCF graph forward for the live trace
         self._log(f"▶ computing {run.summary}", clear=True)
         try:
@@ -308,7 +306,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._log(f"  {k}: {v}")
         except Exception as e:                        # noqa: BLE001 -- compute() reports it as FAILED
             self._log(f"  (cannot translate: {e})")
-        self._log(f"  {'iter':>4}  {'E (Ha)':>15}  {'|dE|':>10}  {'||[F,D]||':>10}  {'||dρ||':>10}")
         self.statusBar().showMessage(f"computing {run.summary} … (window stays responsive)")
 
     def _log(self, msg, clear=False):
@@ -344,6 +341,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.struct_view.setPlainText(
             f"{sel.summary}\n\n{geometry.report(sel.structure())}"
             if (sel is not None and sel.is_ready) else "")
+        if sel is not None and sel.is_ready and self._live_run is None and sel is not self._scf_shown:
+            self.scf_view.set_rows(sel.scf); self._scf_shown = sel    # a finished run's trace, on selection
         self._update_orbitals(sel)
         self._update_codes(sel)
         self._refresh_cmp_box()
@@ -655,18 +654,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -- live SCF trace (streamed from the compute worker) ----------------
     def _on_scf_step(self, s):
-        self.scf_steps.append(s)                          # runs on the GUI thread (queued from the worker)
-        steps = self.scf_steps; it = [x.iteration for x in steps]
-        self.c_dE.setData(it, [x.dE for x in steps]); self.c_comm.setData(it, [x.commutator for x in steps])
-        self.c_drho.setData(it, [x.drho for x in steps])
+        self.scf_view.add_row(s)                          # runs on the GUI thread (queued from the worker)
         self.statusBar().showMessage(f"iter {s.iteration}  E = {s.energy:.6f} Ha")
-        self._log(f"  {s.iteration:>4}  {s.energy:>15.8f}  {s.dE:>10.2e}  {s.commutator:>10.2e}  {s.drho:>10.2e}")
 
     def _on_compute_done(self, err):
+        self._live_run = None
         if err:
             self.statusBar().showMessage(f"compute failed: {err}"); self._log(f"✗ {err}")
         else:
-            n = len(self.scf_steps); e = self.scf_steps[-1].energy if n else float("nan")
+            rows = self.scf_view.rows; n = len(rows); e = rows[-1].energy if n else float("nan")
             self._log(f"✔ converged in {n} iterations,  E = {e:.8f} Ha")
 
     def _save_workspace(self):
@@ -713,17 +709,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self, "Export SCF plot", "convergence.pdf", "PDF (*.pdf);;PNG (*.png);;SVG (*.svg)")
         if not path:
             return
-        import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-        steps = r.scf                                    # the trace recorded during the run
-        it = [s.iteration for s in steps]
-        fig, ax = plt.subplots(figsize=(6.4, 4.2))
-        ax.semilogy(it, [max(s.dE, 1e-13) for s in steps], "o-", label=r"$|\Delta E|$")
-        ax.semilogy(it, [s.commutator for s in steps], "s-", label=r"$\|[F,D]\|$")
-        ax.semilogy(it, [s.drho for s in steps], "^-", label=r"$\|\Delta\rho\|$")
-        ax.set_xlabel("SCF iteration"); ax.set_ylabel("residual")
-        ax.set_title(f"{r.summary}   E = {r.energy:.6f} Ha")
-        ax.legend(); ax.grid(alpha=0.3); fig.tight_layout()
-        fig.savefig(path); plt.close(fig)
+        title = self.scf_view.current_title if self._scf_shown is r else None
+        title = title or next(c.title for row in r.scf for c in row.cells if c.scale == "log")
+        export_column(path, r.scf, title, f"{r.summary}   E = {r.energy:.6f} Ha")
         self.statusBar().showMessage(f"exported SCF plot → {path}")
 
     def _save_layout(self):

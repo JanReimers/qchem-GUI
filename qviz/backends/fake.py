@@ -14,7 +14,7 @@ from typing import Optional
 import numpy as np
 
 from ..capability import Capabilities, Capability
-from ..data import ScalarField, SCFStep, VectorField
+from ..data import ScalarField, SCFCell, SCFRow, VectorField
 from ..spec import RunSpec
 from .base import FieldRef, Job, Result, StepSink, data_structure
 
@@ -96,10 +96,9 @@ def _trace(E_final: float, n_iter: int):
     """A geometric-ish decay with a little DIIS jitter."""
     rng = np.random.default_rng(7)
     E0 = E_final * 0.95
-    E, comm, drho, prevE = E0, 3.0, 1.0, E0
+    E, comm, drho = E0, 3.0, 1.0
     for k in range(n_iter):
         E = E_final + (E - E_final) * 0.55 + (E0 - E_final) * 0.62 ** k * 0.45
         comm = max(comm * (0.55 + 0.05 * rng.standard_normal()), 1e-7)
         drho = max(drho * (0.6 + 0.04 * rng.standard_normal()), 1e-7)
-        yield SCFStep(iteration=k + 1, energy=E, dE=abs(E - prevE) + 1e-12, commutator=comm, drho=drho)
-        prevE = E
+        yield SCFRow(k + 1, E, (SCFCell("Etotal", E), SCFCell("[F,D]", comm, "log"), SCFCell("Δρ", drho, "log")))
