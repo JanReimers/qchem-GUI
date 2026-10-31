@@ -14,7 +14,7 @@ Rules the translator enforces (each cost a wrong number once, qchem doc/OldPlans
 A STATED representation for CP2K lives under accuracy.representation["cp2k"]:
     {"basis_file": path, "potential_file": path,
      "kinds": {"<tag or element>": {"basis": "SIPP-SR", "potential": "GTH-PADE-q4"}},
-     "cutoff_Ry": 80, "rel_cutoff_Ry": 60, "ngrids": 4, "eps_default": 1e-12, "eps_pgf_orb": 1e-12}
+     "cutoff_Ry": 80, "rel_cutoff_Ry": 60, "ngrids": 4, "eps_default": 1e-12, "eps_pgf_orb": 1e-12, "added_mos": 20}
 Every key is optional; an unstated one is derived from ε (the PROVISIONAL table in `derive`).  Stating it narrows
 the back-end strip to CP2K, which is the honest consequence of naming a CP2K basis.
 
@@ -42,7 +42,8 @@ CP2K_DATA = pathlib.Path(os.environ.get("CP2K_DATA", pathlib.Path.home() / "Code
 
 _XC = {"LDA": ("LDA_X", "LDA_C_VWN"), "PBE": ("PBE",)}
 _DEFAULT_PP = {"LDA": "GTH-PADE", "PBE": "GTH-PBE"}
-_REP_KEYS = {"basis_file", "potential_file", "kinds", "cutoff_Ry", "rel_cutoff_Ry", "ngrids", "eps_default", "eps_pgf_orb"}
+_REP_KEYS = {"basis_file", "potential_file", "kinds", "cutoff_Ry", "rel_cutoff_Ry", "ngrids", "eps_default", "eps_pgf_orb",
+             "added_mos"}
 
 
 def _d_shell_n(Z: int) -> Optional[int]:
@@ -161,8 +162,12 @@ class Cp2kBackend:
         w("    &END POISSON")
         w("    &SCF"); w("      SCF_GUESS ATOMIC"); w(f"      EPS_SCF {d['eps_scf']:.1E}")
         w(f"      MAX_SCF {int(scf.get('max_iter', 100))}")
+        # ADDED_MOS bounds the smeared occupations: too few TRUNCATES them and moves the energy (MnO AFM-II +U, kT 5e-3:
+        # 16 instead of the oracle's 20 gave +15 μHa, 2026-10-30).  Generous by default; stated to reproduce an oracle.
+        added_mos = int(rep.get("added_mos", 8 * len(st.sites)))
+        if ph.occupations.smearing == "fermi-dirac" or "added_mos" in rep:
+            w(f"      ADDED_MOS {added_mos}")
         if ph.occupations.smearing == "fermi-dirac":
-            w(f"      ADDED_MOS {max(8, 4 * len(st.sites))}")
             w("      &MIXING T"); w("        METHOD BROYDEN_MIXING"); w("        ALPHA 0.2"); w("        BETA 1.5")
             w("        NBUFFER 8"); w("      &END MIXING")
             w("      &SMEAR ON"); w("        METHOD FERMI_DIRAC")
@@ -221,6 +226,8 @@ class Cp2kBackend:
             "EPS_DEFAULT / EPS_PGF_ORB": f"{d['eps_default']:.1E} / {d['eps_pgf_orb']:.1E}",
             "EPS_SCF": f"{d['eps_scf']:.1E} (ε/100)",
             "spin": f"UKS, multiplicity {mult}" if polarized else "RKS",
+            "smearing": (f"Fermi-Dirac kT {ph.occupations.kT_Ha:.1E} Ha, ADDED_MOS {added_mos}"
+                         + (" stated" if "added_mos" in rep else " (8 per site)")) if ph.occupations.smearing == "fermi-dirac" else "none",
             "kinds": ", ".join(f"{k['name']}: {(stated_kinds.get(k['name']) or stated_kinds.get(k['element']) or {}).get('basis', 'DZVP-MOLOPT-SR-GTH')}"
                                f" / {(stated_kinds.get(k['name']) or stated_kinds.get(k['element']) or {}).get('potential', _DEFAULT_PP[ph.functional])}"
                                for k in kinds),

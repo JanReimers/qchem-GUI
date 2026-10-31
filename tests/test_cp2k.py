@@ -29,7 +29,8 @@ def si_oracle() -> RunSpec:
         "accuracy": {"epsilon_Ha_per_atom": 1e-5, "scf": {"max_iter": 60},
                      "representation": {"cp2k": {"basis_file": str(ORACLES / "SIPP-SR-BASIS"),
                                                  "kinds": {"Si": {"basis": "SIPP-SR", "potential": "GTH-PADE-q4"}},
-                                                 "cutoff_Ry": 80, "rel_cutoff_Ry": 60, "eps_default": 1e-12}}},
+                                                 "cutoff_Ry": 80, "rel_cutoff_Ry": 60, "eps_default": 1e-12,
+                                                 "added_mos": 4}}},
     }).validate()
 
 
@@ -53,7 +54,7 @@ def mno_oracle() -> RunSpec:
                                                  "kinds": {"Mn1": va, "Mn2": va,
                                                            "O": {"basis": "VALENCE-LOWQ-VB", "potential": "GTH-PADE-q6"}},
                                                  "cutoff_Ry": 144, "rel_cutoff_Ry": 60,
-                                                 "eps_default": 1e-14, "eps_pgf_orb": 1e-12}}},
+                                                 "eps_default": 1e-14, "eps_pgf_orb": 1e-12, "added_mos": 20}}},
     }).validate()
 
 
@@ -97,7 +98,6 @@ class TranslateMatchesTheBankedDecks(unittest.TestCase):
         "PROJECT": "named per run",
         "BASIS_SET_FILE_NAME": "an absolute path to the same file",
         "EPS_PGF_ORB": "always stated (CP2K's default once made a 3.5 Ha 'oracle')",
-        "ADDED_MOS": "sized from the cell",
         "IGNORE_CONVERGENCE_FAILURE": "never: a capped SCF fails",
         "ALGORITHM": "CP2K's default diagonalization",
         "PRINT_LEVEL": "",
