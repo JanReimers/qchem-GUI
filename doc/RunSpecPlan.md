@@ -8,7 +8,10 @@ file converted, `qviz/backends/gaussian_basis.py`; per-code `representation.<cod
 F₂ runs on both).  **S4 findings, handed to qchem's tracker:** the molecular facade's default XC mesh is
 0.52 Ha/atom off (the GUI now states a mesh from ε), and the molecular PP route sits 4 mHa/atom above CP2K on F₂
 while the crystal route matches CP2K on NaF.  **Next:** the SolidSetup bind: its RunSpec -> deck translator is built (§9); the bridge waits for
-lane B's inline deck structure and `deck::Build(json, Observer)` on main.  Then S5 agent v1.  The open questions for the user are in §10; the code takes the
+lane B's inline deck structure and `deck::Build(json, Observer)` on main.  **S5 agent: the tool
+layer, shared draft, loop, consent gate and Agent dock are built on molecules (`qviz/agent/`), against a scripted
+client and an offline planner; no model client exists until the user answers Q4** (no API call, no key, nothing
+sent).  The open questions for the user are in §10; the code takes the
 recommended option for each and marks it PROVISIONAL.
 
 ## 0. Why this note exists
@@ -470,7 +473,10 @@ qviz/backends/        base.py (Backend protocol, Job, Result, FieldRef)
                       <code>/capabilities.json
 qviz/runner.py        Runner, MpiRunner, RunHandle, progress tailers
 qviz/accuracy.py      the per-back-end ε → native tables (one function per back end, printed)
-qviz/agent/           tools.py (the §5.2 tool set over the functions above), session.py (API loop)
+qviz/agent/           tools.py (the §5.2 tool set; RunRequest cards), draft.py (SpecDraft: one undo stack, both
+                      authors), client.py (ModelClient interface, ScriptedClient, OfflinePlanner -- the real
+                      client lands after Q4), consent.py (ConsentGate: every model call passes it; Q4_UNANSWERED
+                      refuses any off-box call; licensed results never leave), session.py (the loop), panel.py (dock)
 ```
 
 `qviz/spec.py` imports nothing from `backends/`; `backends/` imports `spec`; the agent imports

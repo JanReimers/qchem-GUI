@@ -9,7 +9,9 @@ Qt-agnostic observer. Adding a molecule = adding a Run: a back-end-neutral RunSp
 (doc/RunSpecPlan.md) on each back end ticked in the Inspector's back-end strip.  The strip
 is option 2.2: every back end that CAN run the spec as stated is enabled, the others are
 greyed with their reasons on hover.  One spec on two codes gives two Runs whose energies
-and resolved settings sit side by side in the Codes panel (S4).
+and resolved settings sit side by side in the Codes panel (S4).  The Agent dock (S5) edits a shared draft spec with
+the user; its run requests are cards the user clicks.  Until RunSpec Q4 is ruled it runs the offline planner: no
+model is called and nothing leaves the machine.
 """
 from __future__ import annotations
 import os, sys, pathlib
@@ -32,6 +34,11 @@ from qviz.spec import Accuracy, molecule
 from qviz.backends import default_registry
 from qviz.backends.solid2 import BASES as _SOLID2_BASES
 from qviz import molecules
+from qviz.agent.client import OfflinePlanner
+from qviz.agent.draft import SpecDraft
+from qviz.agent.panel import AgentPanel
+from qviz.agent.session import AgentSession
+from qviz.agent.tools import Toolset
 
 # -- the back ends (DIP): the Workspace asks the registry by name, never a concrete class ----
 REGISTRY = default_registry()
@@ -283,6 +290,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._codes_dock = self._dock("Codes", self.codes, QtCore.Qt.RightDockWidgetArea)
         self.tabifyDockWidget(self._conv_dock, self._codes_dock)
         self._conv_dock.raise_()
+
+        # left dock: Agent -- a shared draft spec; its run requests are cards only the user's click starts
+        self.draft = SpecDraft()
+        tools = Toolset(self.draft, REGISTRY, self.ws, start_run=lambda card: [self._add_spec(card.spec, b) for b in card.backends])
+        self.agent = AgentPanel(AgentSession(OfflinePlanner(), tools), self.draft)
+        self._agent_dock = self._dock("Agent", self.agent, QtCore.Qt.LeftDockWidgetArea)
 
         m = self.menuBar().addMenu("&File")
         m.addAction("Import molecule (xyz)…", self._import_xyz)
