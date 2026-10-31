@@ -34,7 +34,8 @@ def si_oracle() -> RunSpec:
 
 
 def mno_oracle() -> RunSpec:
-    """mno_afm2_gpw_va_plusU.inp, as a spec."""
+    """mno_afm2_gpw_va_plusU.inp, as a spec.  A μHa oracle, so ε 1e-6: the translator's own rule (EPS_SCF = ε/100) then
+    writes the deck's EPS_SCF 1e-8 (re-banked there by lane H: at 1e-6 it had stopped 83 μHa low)."""
     va = {"basis": "VALENCE-LOWQ-VA", "potential": "GTH-PADE-q7"}
     return RunSpec.from_dict({
         "label": "MnO AFM-II +U oracle",
@@ -47,7 +48,7 @@ def mno_oracle() -> RunSpec:
                     "spin": {"polarized": True, "site_moments": [5, -5, 0, 0]},
                     "hubbard": [{"sites": ["Mn1", "Mn2"], "l": 2, "U_eV": 4.0, "projector": "lowdin"}],
                     "occupations": {"smearing": "fermi-dirac", "kT_Ha": 5e-3}},
-        "accuracy": {"epsilon_Ha_per_atom": 1e-4, "scf": {"max_iter": 200},
+        "accuracy": {"epsilon_Ha_per_atom": 1e-6, "scf": {"max_iter": 500},
                      "representation": {"cp2k": {"basis_file": str(ORACLES / "VALENCE-LOWQ-BASIS"),
                                                  "potential_file": "/home/janr/Code/cp2k/data/GTH_POTENTIALS",
                                                  "kinds": {"Mn1": va, "Mn2": va,

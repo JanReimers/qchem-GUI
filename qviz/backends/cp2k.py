@@ -57,7 +57,9 @@ def _d_shell_n(Z: int) -> Optional[int]:
 def derive(eps: float) -> dict:
     """ε -> CP2K's accuracy settings when none is stated.  PROVISIONAL rules of thumb (RunSpecPlan §1.2), to be
     replaced by a measured ε-calibration curve: EPS_SCF two orders under ε (it is nearly free), the screening far
-    under it, EPS_PGF_ORB stated (never CP2K's default), the cutoff stepped with ε."""
+    under it, EPS_PGF_ORB stated (never CP2K's default), the cutoff stepped with ε.  So a μHa request (ε 1e-6) gets
+    EPS_SCF 1e-8 -- the floor a μHa +U oracle needs: the banked MnO +U anchor at EPS_SCF 1e-6 had stopped 83 μHa low
+    (lane H, re-banked at 1e-8; qchem main 1c9a99db)."""
     eps_default = min(1e-12, eps * 1e-7)
     return {"cutoff_Ry": 80 if eps >= 1e-4 else 120 if eps >= 1e-6 else 200, "rel_cutoff_Ry": 60, "ngrids": 4,
             "eps_default": eps_default, "eps_pgf_orb": 100 * eps_default, "eps_scf": eps / 100}
@@ -174,8 +176,9 @@ class Cp2kBackend:
         w("    &END POISSON")
         w("    &SCF"); w("      SCF_GUESS ATOMIC"); w(f"      EPS_SCF {d['eps_scf']:.1E}")
         w(f"      MAX_SCF {int(scf.get('max_iter', 100))}")
-        # ADDED_MOS bounds the smeared occupations: too few TRUNCATES them and moves the energy (MnO AFM-II +U, kT 5e-3:
-        # 16 instead of the oracle's 20 gave +15 μHa, 2026-10-30).  Generous by default; stated to reproduce an oracle.
+        # ADDED_MOS: the virtuals a smeared run occupies.  Its count did NOT move the MnO AFM-II +U energy -- a 15 μHa
+        # difference first blamed on 16 vs 20 was SCF-stopping noise at a loose EPS_SCF (lane H, qchem main 1c9a99db).
+        # Generous by default; stated to reproduce an oracle's input verbatim.
         added_mos = int(rep.get("added_mos", 8 * len(st.sites)))
         if ph.occupations.smearing == "fermi-dirac" or "added_mos" in rep:
             w(f"      ADDED_MOS {added_mos}")
