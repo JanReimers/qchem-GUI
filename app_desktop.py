@@ -6,8 +6,10 @@ Dockable single-window layout (ParaView/Blender idiom, not GaussView MDI):
 
 The window holds a Workspace; panels bind to the *selected* Run via the model's
 Qt-agnostic observer. Adding a molecule = adding a Run: a back-end-neutral RunSpec
-(doc/RunSpecPlan.md) on the first registered back end that can run it -- SOLID² in
-process when the qchem extension is built, else the analytic stand-in.
+(doc/RunSpecPlan.md) on each back end ticked in the Inspector's back-end strip.  The strip
+is option 2.2: every back end that CAN run the spec as stated is enabled, the others are
+greyed with their reasons on hover.  One spec on two codes gives two Runs whose energies
+and resolved settings sit side by side in the Codes panel (S4).
 """
 from __future__ import annotations
 import os, sys, pathlib
@@ -28,6 +30,7 @@ from qviz.scene import field_to_imagedata
 from qviz.workspace import Workspace, RunStatus
 from qviz.spec import Accuracy, molecule
 from qviz.backends import default_registry
+from qviz.backends.solid2 import BASES as _SOLID2_BASES
 from qviz import molecules
 
 # -- the back ends (DIP): the Workspace asks the registry by name, never a concrete class ----
@@ -60,6 +63,8 @@ class _ComputeTask(QtCore.QRunnable):
     def __init__(self, run, bridge=None):
         super().__init__(); self._run = run; self._bridge = bridge
     def run(self):
+        if self._bridge:
+            self._bridge.started.emit(self._run)
         self._run.compute(on_step=self._bridge.step.emit if self._bridge else None)
         if self._bridge:
             self._bridge.done.emit(self._run.error or "" if self._run.status is RunStatus.FAILED else "")
@@ -67,8 +72,10 @@ class _ComputeTask(QtCore.QRunnable):
 
 class _ScfBridge(QtCore.QObject):
     """Marshals the live SCF stream from a compute worker onto the GUI thread. The C++
-    observer fires each iteration on the worker; `step` (queued cross-thread) hands the
-    SCFStep to the convergence plot/log, `done` (error string, '' = ok) writes the footer."""
+    observer fires each iteration on the worker; `started` (the Run) resets the trace when the
+    queued run actually begins, `step` (queued cross-thread) hands the SCFStep to the
+    convergence plot/log, `done` (error string, '' = ok) writes the footer."""
+    started = QtCore.Signal(object)
     step = QtCore.Signal(object)
     done = QtCore.Signal(str)
 
@@ -167,9 +174,13 @@ class MainWindow(QtWidgets.QMainWindow):
         h.addWidget(self.mol_box); h.addWidget(self.method_box); h.addWidget(self.add_btn)
         form.addRow("Molecule", row)
         self._update_add_label()
-        self.basis_box = QtWidgets.QComboBox(); self.basis_box.addItems(["dzvp", "orb1", "dzvp2", "tzvp"])
-        self.basis_box.setToolTip("orb1 is the smallest/fastest — use it for bigger molecules (e.g. benzene)")
+        self.basis_box = QtWidgets.QComboBox()
+        self.basis_box.addItems(["dzvp", "orb1", "dzvp2", "tzvp", "valence_lowq_vb", "sipp_sr"])
+        self.basis_box.setToolTip("orb1 is the smallest/fastest; valence_lowq_vb / sipp_sr are valence (GTH) bases -- "
+                                  "with the pseudopotential ticked, the same spec runs on SOLID² and CP2K")
         form.addRow("Basis", self.basis_box)
+        self.pp_check = QtWidgets.QCheckBox("pseudopotential (GTH; LDA + a valence basis)")
+        form.addRow(self.pp_check)
         self.mult_spin = QtWidgets.QSpinBox(); self.mult_spin.setRange(0, 7)
         self.mult_spin.setSpecialValueText("auto")   # 0 shows as 'auto' (minimal spin)
         self.mult_spin.setToolTip("Spin multiplicity 2S+1 (auto = minimal). >1 → open-shell, spin-polarized.")
@@ -178,6 +189,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sym_check = QtWidgets.QCheckBox("point-group symmetry (SALC → irrep labels)")
         self.sym_check.setChecked(True)          # default on so the orbital table carries irrep labels
         form.addRow(self.sym_check)
+
+        # the back-end strip (option 2.2): one box per registered back end, enabled iff it can run the spec as
+        # stated now; the Add button runs the spec on every ticked one.
+        strip = QtWidgets.QWidget(); sh = QtWidgets.QHBoxLayout(strip); sh.setContentsMargins(0, 0, 0, 0)
+        self.be_checks = {}
+        for name in REGISTRY.names():
+            cb = QtWidgets.QCheckBox(name + (" (illustration)" if REGISTRY.get(name).capabilities().synthetic else ""))
+            cb.toggled.connect(self._update_add_label); sh.addWidget(cb); self.be_checks[name] = cb
+        sh.addStretch(1)
+        form.addRow("Run on", strip)
+        for w in (self.mol_box, self.method_box, self.basis_box):
+            w.currentTextChanged.connect(self._refresh_strip)
+        self.mult_spin.valueChanged.connect(self._refresh_strip)
+        self.pp_check.toggled.connect(self._refresh_strip); self.sym_check.toggled.connect(self._refresh_strip)
 
         self.field_box = QtWidgets.QComboBox()
         self.field_box.addItems(["Electron density", "Spin density (ρ↑−ρ↓)",
@@ -251,6 +276,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scf_log.setFont(QtGui.QFont("monospace")); self.scf_log.setMaximumBlockCount(500)
         self._log_dock = self._dock("SCF log", self.scf_log, QtCore.Qt.RightDockWidgetArea)
         self.tabifyDockWidget(self._conv_dock, self._log_dock)
+
+        # right dock: Codes -- the selected run's cross-code legs side by side (energies, then resolved settings)
+        self.codes = QtWidgets.QTableWidget(); self.codes.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.codes.setFont(QtGui.QFont("monospace"))
+        self._codes_dock = self._dock("Codes", self.codes, QtCore.Qt.RightDockWidgetArea)
+        self.tabifyDockWidget(self._conv_dock, self._codes_dock)
         self._conv_dock.raise_()
 
         m = self.menuBar().addMenu("&File")
@@ -271,38 +302,69 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addDockWidget(area, d); return d
 
     # -- workspace <-> UI --------------------------------------------------
+    def _ticked(self):
+        return [n for n, cb in self.be_checks.items() if cb.isEnabled() and cb.isChecked()]
+
     def _update_add_label(self, *_):
         m = self.method_box.currentText()
-        self.add_btn.setText(f"+ Add {m} run" if _SOLID2.installed else f"+ Add {m} run (analytic: no qchem)")
+        on = self._ticked() if hasattr(self, "be_checks") else []
+        self.add_btn.setText(f"+ Add {m} run" + (f" on {' + '.join(on)}" if on else " (no back end ticked)"))
+        self.add_btn.setEnabled(bool(on))
 
     def _make_spec(self, label, numbers, positions):
-        """The Inspector's choices as a RunSpec: the basis and the point-group blocking are STATED choices."""
+        """The Inspector's choices as a RunSpec: the basis, the core and the point-group blocking are STATED choices.
+        A pseudopotential spec is LDA by construction (the only model both codes' GTH routes share)."""
         theory, functional = _METHOD[self.method_box.currentText()]
         scf = {"impose_symmetry": self.sym_check.isChecked()}
         return molecule(label, numbers, positions, theory=theory, functional=functional,
                         multiplicity=self.mult_spin.value() or None,
+                        core="pseudopotential" if self.pp_check.isChecked() else "all-electron",
                         accuracy=Accuracy(representation={"basis": self.basis_box.currentText()}, scf=scf))
 
-    def _add_spec(self, spec):
-        """Add a Run and compute it OFF the GUI thread -- the window stays live; the
-        Run Browser shows ⏳ then ● (or ✗). Serialized via the single-thread pool."""
-        run = self.ws.add_run(spec, compute=False)   # shows immediately as pending
+    def _refresh_strip(self, *_):
+        """Re-judge every back end against the spec the Inspector states NOW (BackendRegistry.strip, option 2.2)."""
+        name = self.mol_box.currentText()
+        if name not in molecules.MOLECULES:
+            return
+        Z, pos, *_rest = molecules.MOLECULES[name]
+        try:
+            spec = self._make_spec(name.split(" (")[0], Z, pos)
+        except Exception as e:                   # noqa: BLE001 -- e.g. a multiplicity of the wrong parity
+            for cb in self.be_checks.values():
+                cb.setEnabled(False); cb.setToolTip(f"invalid spec: {e}")
+            self._update_add_label(); return
+        for n, (able, ticked, tip) in REGISTRY.strip(spec, self._ticked()).items():
+            cb = self.be_checks[n]
+            cb.blockSignals(True); cb.setEnabled(able); cb.setChecked(ticked); cb.setToolTip(tip); cb.blockSignals(False)
+        self._update_add_label()
+
+    def _add_spec(self, spec, backend=None):
+        """Add a Run on `backend` (None = the registry's default) and compute it OFF the GUI thread -- the window
+        stays live; the Run Browser shows … then ⏳ then ● (or ✗).  Serialized via the single-thread pool, so a
+        spec ticked on two back ends queues two runs; each one's trace starts when it does (_on_compute_started)."""
+        run = self.ws.add_run(spec, backend=backend, compute=False)   # shows immediately as pending
         self.ws.select(run)
+        bridge = _ScfBridge()
+        bridge.started.connect(self._on_compute_started)
+        bridge.step.connect(self._on_scf_step)
+        bridge.done.connect(self._on_compute_done)
+        # each queued run's bridge lives until its run settles (a bridge collected early drops its queued signals)
+        self._compute_bridges = [(b, r) for b, r in getattr(self, "_compute_bridges", [])
+                                 if r.status in (RunStatus.PENDING, RunStatus.RUNNING)] + [(bridge, run)]
+        self._pool.start(_ComputeTask(run, bridge))
+
+    def _on_compute_started(self, run):
         self.scf_steps.clear()                        # fresh convergence trace for this run
         self.c_dE.setData([], []); self.c_comm.setData([], []); self.c_drho.setData([], [])
         self._conv_dock.raise_()                      # bring the SCF graph forward for the live trace
         self._log(f"▶ computing {run.summary}", clear=True)
         try:
-            for k, v in run.backend.translate(spec).resolved.items():   # the resolved settings, before the run
+            for k, v in run.backend.translate(run.spec).resolved.items():   # the resolved settings, before the run
                 self._log(f"  {k}: {v}")
         except Exception as e:                        # noqa: BLE001 -- compute() reports it as FAILED
             self._log(f"  (cannot translate: {e})")
         self._log(f"  {'iter':>4}  {'E (Ha)':>15}  {'|dE|':>10}  {'||[F,D]||':>10}  {'||dρ||':>10}")
         self.statusBar().showMessage(f"computing {run.summary} … (window stays responsive)")
-        self._compute_bridge = _ScfBridge()           # kept alive on self for the task's lifetime
-        self._compute_bridge.step.connect(self._on_scf_step)
-        self._compute_bridge.done.connect(self._on_compute_done)
-        self._pool.start(_ComputeTask(run, self._compute_bridge))
 
     def _log(self, msg, clear=False):
         if clear:
@@ -310,12 +372,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scf_log.appendPlainText(msg)
 
     def _on_mol_changed(self, name):
-        if name in molecules.MOLECULES:          # default the multiplicity to the preset's
-            self.mult_spin.setValue(molecules.MOLECULES[name][4])
+        if name in molecules.MOLECULES:          # default the multiplicity and basis to the preset's
+            Z, pos, basis, n, mult = molecules.MOLECULES[name]
+            self.mult_spin.setValue(mult)
+            self.basis_box.setCurrentText(basis)
+            valence = basis.startswith(("valence", "sipp"))
+            self.pp_check.setChecked(valence)
+            if valence:
+                self.method_box.setCurrentText("LDA")
+            self._refresh_strip()
 
     def _add_molecule(self, name: str):
         Z, pos, basis, n, mult = molecules.MOLECULES[name]
-        self._add_spec(self._make_spec(name.split(" (")[0], Z, pos))
+        spec = self._make_spec(name.split(" (")[0], Z, pos)
+        for backend in self._ticked():
+            self._add_spec(spec, backend)
 
     def _import_xyz(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import molecule (xyz)", "", "XYZ (*.xyz)")
@@ -329,7 +400,7 @@ class MainWindow(QtWidgets.QMainWindow):
             spec = self._make_spec(label, numbers, positions)
         except Exception as e:                   # noqa: BLE001 -- e.g. a multiplicity of the wrong parity
             self.statusBar().showMessage(f"invalid run: {e}"); return
-        self._add_spec(spec)
+        self._add_spec(spec)                     # the strip judged the PRESET; an import goes to the default
 
     def _on_ws_change(self, ws: Workspace):
         self._syncing = True
@@ -350,6 +421,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{sel.summary}\n\n{geometry.report(sel.structure())}"
             if (sel is not None and sel.is_ready) else "")
         self._update_orbitals(sel)
+        self._update_codes(sel)
         self._refresh_cmp_box()
         self._refresh_3d()
 
@@ -413,14 +485,27 @@ class MainWindow(QtWidgets.QMainWindow):
             p.setXRange(-0.9, len(order) - 0.1, padding=0.05)   # room for α (left) / β (right) labels
             p.setYRange(min(valence) - 0.3, max(es) + 0.3, padding=0)
 
+    def _update_codes(self, run):
+        """The Codes panel: `run` and every other run of the SAME spec (its other back ends), side by side."""
+        if run is None:
+            self.codes.clear(); self.codes.setRowCount(0); self.codes.setColumnCount(0); return
+        heads, rows = compare.code_table(compare.legs(self.ws, run))
+        self.codes.clear()
+        self.codes.setColumnCount(len(heads)); self.codes.setRowCount(len(rows))
+        self.codes.setHorizontalHeaderLabels(heads); self.codes.setVerticalHeaderLabels([k for k, _ in rows])
+        for i, (_k, vals) in enumerate(rows):
+            for j, v in enumerate(vals):
+                self.codes.setItem(i, j, QtWidgets.QTableWidgetItem(v))
+        self.codes.resizeColumnsToContents()
+
     def _refresh_cmp_box(self):
-        """List READY runs that share the selected run's geometry (valid Δρ partners)."""
+        """List READY runs that share the selected run's geometry and, with it, give a density (valid Δρ partners)."""
         self._syncing = True
         self.cmp_box.clear(); self.cmp_box.addItem("— none —"); self._cmp_runs = [None]
         sel = self.ws.selected
-        if sel is not None and sel.is_ready:
+        if sel is not None and sel.offers("density"):
             for r in self.ws.runs:
-                if r is not sel and r.is_ready and compare.same_geometry(r, sel):
+                if r is not sel and r.offers("density") and compare.same_geometry(r, sel):
                     self.cmp_box.addItem(compare.method_tag(r)); self._cmp_runs.append(r)
         self._syncing = False
 

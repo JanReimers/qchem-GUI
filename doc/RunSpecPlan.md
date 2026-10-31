@@ -2,10 +2,14 @@
 
 Status (2026-10-30): plan under execution.  **Built:** G1 bridge (qchem lane-g, landed on main), S1 spec +
 capability filter + Workspace/Run/project on Backends, S2 SOLID² (molecules), S3 CP2K (crystals + molecules,
-single points; its translator reproduces the banked Si Γ and MnO AFM-II +U oracle decks, and a real run gives the
-banked Si energy).  **Next:** the SolidSetup bind (after lane B moves the solid observer to a ctor argument), S4
-compare across codes.  The open questions for the user are in §10; the code takes the recommended option for each
-and marks it PROVISIONAL.
+single points; its translator reproduces the banked Si Γ and MnO AFM-II +U oracle decks, and real runs give both
+banked energies), S4 compare across codes (one spec on every ticked back end; CP2K is handed SOLID²'s own basis
+file converted, `qviz/backends/gaussian_basis.py`; per-code `representation.<code>` blocks; the Codes panel;
+F₂ runs on both).  **S4 findings, handed to qchem's tracker:** the molecular facade's default XC mesh is
+0.52 Ha/atom off (the GUI now states a mesh from ε), and the molecular PP route sits 4 mHa/atom above CP2K on F₂
+while the crystal route matches CP2K on NaF.  **Next:** the SolidSetup bind (after lane B moves the solid observer
+to a ctor argument), then S5 agent v1.  The open questions for the user are in §10; the code takes the
+recommended option for each and marks it PROVISIONAL.
 
 ## 0. Why this note exists
 
@@ -200,7 +204,9 @@ has actually run it (rule: **a capability is earned by a parse-tested run**, not
   makes N runs of the **same spec** — the existing split-view compare (Pillar 2) becomes the
   cross-code compare for free.
 - A *stated* representation narrows the strip (a GTH basis name → only SOLID² and CP2K); the UI
-  says so on the field ("stating this disables QE, ABINIT, VASP").
+  says so on the field ("stating this disables QE, ABINIT, VASP").  What narrows is the SHARED part;
+  a `representation.<code>` block (`cp2k`, `solid2`, ...) is that code's own tuning and the other
+  codes ignore it, so one spec carries every leg's settings (S4, 2026-10-30).
 
 ---
 
@@ -499,6 +505,28 @@ Per the qchem repo's tracker convention, residual items from these stages go as 
 - **Inline structure in the deck** (§1.3): `rundeck` needs a way to take atoms + lattice +
   decoration inline, or the GUI writes a temporary materials entry.  The in-process route does
   not need it (it builds a `Structure` directly).
+- **The SolidSetup bind (design, 2026-10-30, against lane-b 2acddd04's observer-in-ctor API).**
+  Two routes:
+  (a) the bridge builds `Lattice_3D` + `GaussianBasisRecipe` + `SolidCalcOptions` from a C request,
+  calls `SolidSetup::Resolve` and constructs `SolidCalculation(setup, params, observer)`.  This works
+  with no lib change, but it duplicates in pybind/ what `qchem::deck` already knows (species -> Nelec,
+  decoration -> siteSpins, eV -> Ha for U, stages, the basis registry, defaults), and the two
+  translators drift.
+  (b) **RECOMMENDED: the deck is the seam.**  The GUI's SOLID² translator writes a deck JSON (the way
+  the CP2K translator writes a `.inp`), and the bridge hands it to the library's own reader, so there
+  is one translator and every GUI run is a reproducible `rundeck` deck.  It needs two lib pieces
+  (lane B):
+  1. an **inline `structure`** (lattice, sites, species q, decoration) beside the named one (Q3);
+  2. **`deck::Build(RunSpec, Observer) -> unique_ptr<SolidCalculation>`**, i.e. `deck::Run` split
+     at "built, not yet converged", so the bridge converges with the GIL released and streams.
+     The revision record is written as `Run` writes it, into the GUI's
+     `~/Code/qchem6-runs/<Material>/`.
+
+  What the bridge then exposes: energy, converged, iterations, the `RunDiagnostics` summary, site
+  moments, and the density from `LastIterateDensity()` sampled over one cell (an orthogonal box
+  around the cell's bounding box for the GUI's axis-aligned ScalarField, until the viewer learns
+  non-orthogonal grids).  It does NOT expose levels (k-resolved bands are a later panel).
+  Molecules keep `MoleculeSetup` (`deck::Resolve` refuses molecule names today).
 - **The ONE accuracy target for solids** is lane A chunk C2; until then the SOLID² ε table fills
   today's separate tolerances and says so.
 - **Forces / stress** for relax: the `GeometryGradient` capability (lane B review); until it

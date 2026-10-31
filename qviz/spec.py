@@ -307,7 +307,7 @@ def _read(cls: type, d: Any, path: str):
 # Constructors the app (and the agent) use
 # --------------------------------------------------------------------------
 def molecule(label: str, numbers, positions_bohr, *, theory: str = "HF", functional: Optional[str] = None,
-             multiplicity: Optional[int] = None, **kw) -> RunSpec:
+             multiplicity: Optional[int] = None, core: str = "all-electron", **kw) -> RunSpec:
     """A molecule spec from Z + flat 3N bohr positions (the shape the picker and .xyz reader give)."""
     numbers = list(numbers); pos = list(positions_bohr)
     if len(pos) != 3 * len(numbers):
@@ -315,6 +315,6 @@ def molecule(label: str, numbers, positions_bohr, *, theory: str = "HF", functio
     sites = tuple(Site(_ELEMENTS[z - 1], xyz=(float(pos[3*i]), float(pos[3*i+1]), float(pos[3*i+2])))
                   for i, z in enumerate(numbers))
     open_shell = multiplicity is not None and multiplicity > 1
-    physics = Physics(theory=theory, functional=functional if theory == "DFT" else None, core="all-electron",
+    physics = Physics(theory=theory, functional=functional if theory == "DFT" else None, core=core,
                       spin=Spin(polarized=open_shell, multiplicity=multiplicity), relativity="none")
     return RunSpec(label, Structure("molecule", sites), physics, **kw).validate()

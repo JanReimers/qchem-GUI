@@ -102,6 +102,11 @@ class Run:
         self._require_ready()
         return self.result.scf
 
+    def offers(self, field: str) -> bool:
+        """Can this run give `field` ('density', 'spin_density', ...)?  False until READY; a back end that samples no
+        fields (CP2K today) offers none, so the UI never asks it for a Δρ."""
+        return self.is_ready and field in self.result.fields
+
     def density(self, n: int = 64, pad: float = 5.0) -> ScalarField:
         return self._field("density", n, pad)
 

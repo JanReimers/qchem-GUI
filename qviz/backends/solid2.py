@@ -29,7 +29,7 @@ import numpy as np
 from ..capability import Capabilities, Capability
 from ..data import ScalarField, SCFStep, VectorField
 from ..spec import RunSpec
-from .base import FieldRef, Job, Result, StepSink, data_structure
+from .base import FieldRef, Job, Result, StepSink, code_block, data_structure, shared_representation
 
 NAME = "SOLID²"
 
@@ -40,6 +40,17 @@ _MODEL = {("HF", None): "HF", ("DFT", "LDA"): "LDA", ("DFT", "Xalpha"): "Xalpha"
 BASES = ("dzvp", "dzvp2", "tzvp", "orb", "orb1", "sipp", "sipp_sr", "valence_lowq", "valence_lowq_sph",
          "valence_lowq_sr", "valence_lowq_sr2", "valence_lowq_va", "valence_lowq_vb")
 _VALENCE_BASES = tuple(b for b in BASES if b.startswith(("sipp", "valence")))
+
+
+_REP_KEYS = {"mesh_radial", "mesh_angular"}          # representation["solid2"]: the molecular XC mesh
+
+
+def mesh_for(eps: float) -> tuple[int, int]:
+    """ε -> the molecular XC mesh (radial points, Lebedev degree) per atom.  PROVISIONAL, from one measurement
+    (2026-10-30): F₂ GTH/valence_lowq_vb converges to −48.19259 Ha (±3e-5) from 80/29 up; 50/17 is 0.6 mHa/atom
+    off, and the facade's own default (30 radial, degree 5 = 12 directions) is 0.52 Ha/atom off (all-electron LDA
+    water/dzvp: 20 mHa/atom) -- so the default is never used for a DFT run."""
+    return (50, 17) if eps >= 1e-3 else (80, 29) if eps >= 1e-6 else (120, 35)
 
 
 def basis_for(eps: float) -> str:
@@ -82,7 +93,7 @@ class Solid2Backend:
     def capabilities(self) -> Capabilities:
         def scf(s: RunSpec) -> dict:
             return s.accuracy.scf or {}
-        rep = lambda s: s.accuracy.representation or {}
+        rep = shared_representation
         return Capabilities(NAME, installed=self._qc is not None, why_absent=self._why_absent, features=[
             Capability("structure.kind=molecule", lambda s: s.structure.kind == "molecule",
                        "crystals: SolidSetup is not bound in the GUI bridge yet"),
@@ -99,8 +110,10 @@ class Solid2Backend:
                        lambda s: s.physics.core != "pseudopotential"
                        or (s.physics.functional == "LDA" and rep(s).get("basis") in _VALENCE_BASES),
                        "a molecular pseudopotential run is LDA with a stated valence basis (sipp*, valence_lowq*)"),
-            Capability("accuracy.representation keys", lambda s: set(rep(s)) <= {"basis"},
-                       "the stated representation names another code's settings"),
+            Capability("accuracy.representation keys", lambda s: set(rep(s)) <= {"basis"}
+                       and set(code_block(s, "solid2")) <= _REP_KEYS,
+                       "a stated representation is a shared basis, or SOLID² settings under representation['solid2'] "
+                       "(mesh_radial, mesh_angular)"),
             Capability("accuracy.representation.basis", lambda s: rep(s).get("basis") in (None, *BASES),
                        "the stated basis is not a registered Gaussian basis"),
             Capability("task.kind=energy", lambda s: s.task.kind == "energy",
@@ -111,8 +124,12 @@ class Solid2Backend:
     def translate(self, spec: RunSpec) -> Job:
         st, ph, ac = spec.structure, spec.physics, spec.accuracy
         scf = ac.scf or {}
-        rep = ac.representation or {}
+        rep = shared_representation(spec)
+        own = code_block(spec, "solid2")
         basis = rep.get("basis") or basis_for(ac.epsilon_Ha_per_atom)
+        dft = ph.theory == "DFT" or ph.core == "pseudopotential"
+        mr, ma = mesh_for(ac.epsilon_Ha_per_atom)
+        mesh = (int(own.get("mesh_radial", mr)), int(own.get("mesh_angular", ma))) if dft else (0, 0)
         numbers = [s.Z for s in st.sites]
         positions = [x for s in st.sites for x in s.xyz]
         native = {
@@ -125,6 +142,7 @@ class Solid2Backend:
             "multiplicity": int(ph.spin.multiplicity or 0),
             "max_iter": int(scf.get("max_iter", 100)),
             "accelerator": str(scf.get("accelerator", "DIIS")),
+            "mesh_radial": mesh[0], "mesh_angular": mesh[1],
         }
         resolved = {
             "basis": f"{basis} ({'stated' if rep.get('basis') else 'from ε, provisional'})",
@@ -134,6 +152,8 @@ class Solid2Backend:
                     + (f", 2S+1={native['multiplicity']}" if native["multiplicity"] else ""),
             "point-group blocking": native["symmetry"],
             "accelerator": native["accelerator"],
+            "XC mesh": (f"{mesh[0]} radial x Lebedev {mesh[1]} per atom"
+                        + (" stated" if own else " from ε, provisional")) if dft else "none (HF)",
             "SCF gates": "facade defaults ([F,D] 1e-5, Δρ/e 1e-4); ε not yet mapped (provisional)",
             "max_iter": native["max_iter"],
         }
@@ -155,7 +175,8 @@ class Solid2Backend:
         calc = self._qc.Calculator(n["numbers"], n["positions"], basis=n["basis"], model=n["model"],
                                    symmetry=n["symmetry"], polarized=n["polarized"],
                                    multiplicity=n["multiplicity"], max_iter=n["max_iter"], pp=n["pp"],
-                                   accelerator=n["accelerator"], on_iteration=step)
+                                   accelerator=n["accelerator"], mesh_radial=n["mesh_radial"],
+                                   mesh_angular=n["mesh_angular"], on_iteration=step)
         # the lib's label is "<n><irrep>" (e.g. "5No Symmetry "); the panel numbers levels itself
         levels = [dict(L, n=i + 1, label=L["label"].lstrip("0123456789").strip())
                   for i, L in enumerate(calc.levels())]

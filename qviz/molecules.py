@@ -70,6 +70,8 @@ _O2 = ([8, 8], [0.0, 0.0, -1.1415, 0.0, 0.0, 1.1415])
 # (closed-shell singlet for even Ne); >1 forces the open-shell / spin-polarized path.
 MOLECULES = {
     "Oxygen (O2, triplet)": (_O2[0],      _O2[1],      "dzvp", 72, 3),   # open-shell default
+    # F2 at 1.412 Å: closed shell, and every atom is in the valence (GTH) bases -- the cross-code pair
+    "Fluorine (F2)":        ([9, 9],      [0.0, 0.0, -1.3343, 0.0, 0.0, 1.3343], "valence_lowq_vb", 72, 0),
     "Water (H2O)":          (_WATER[0],   _WATER[1],   "dzvp", 80, 0),
     "Methane (CH4)":        (_METHANE[0], _METHANE[1], "dzvp", 72, 0),
     "Ammonia (NH3)":        (_AMMONIA[0], _AMMONIA[1], "dzvp", 72, 0),

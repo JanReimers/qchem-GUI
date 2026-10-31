@@ -21,7 +21,7 @@ class Capability:
     """One feature: `check(spec)` is True when the spec does NOT need what this back end lacks."""
     feature: str                                  # dotted key into the spec, e.g. "physics.hubbard.form=Liechtenstein"
     check: Callable[[RunSpec], bool]              # True = this spec is fine on this feature
-    reason: str                                   # shown when check fails: "no orbital-resolved U"
+    reason: str | Callable[[RunSpec], str]        # shown when check fails: "no orbital-resolved U" (or built from the spec)
     note: str = ""                                # shown on hover when it passes: "linear response via hp.x"
 
 
@@ -40,11 +40,12 @@ class Capabilities:
     features: list[Capability] = field(default_factory=list)
     installed: bool = True                        # discovery found the executable / extension
     why_absent: Optional[str] = None
+    synthetic: bool = False                       # its numbers are illustrations (the Fake back end): never compared
 
     def can_run(self, spec: RunSpec) -> Verdict:
         if not self.installed:
             return Verdict(False, (self.why_absent or f"{self.backend} is not installed",))
-        reasons = tuple(c.reason for c in self.features if not c.check(spec))
+        reasons = tuple(c.reason(spec) if callable(c.reason) else c.reason for c in self.features if not c.check(spec))
         return Verdict(not reasons, reasons)
 
 

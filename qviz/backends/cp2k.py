@@ -15,8 +15,9 @@ A STATED representation for CP2K lives under accuracy.representation["cp2k"]:
     {"basis_file": path, "potential_file": path,
      "kinds": {"<tag or element>": {"basis": "SIPP-SR", "potential": "GTH-PADE-q4"}},
      "cutoff_Ry": 80, "rel_cutoff_Ry": 60, "ngrids": 4, "eps_default": 1e-12, "eps_pgf_orb": 1e-12, "added_mos": 20}
-Every key is optional; an unstated one is derived from ε (the PROVISIONAL table in `derive`).  Stating it narrows
-the back-end strip to CP2K, which is the honest consequence of naming a CP2K basis.
+Every key is optional; an unstated one is derived from ε (the PROVISIONAL table in `derive`).  The block is CP2K's
+alone: the other codes ignore it (base.CODE_BLOCKS), so a cross-code spec can tune each code.  A SHARED
+representation.basis (a SOLID² Gaussian basis) is handed to CP2K converted from SOLID²'s own file (gaussian_basis).
 
 Fields (density / orbitals on a grid) are not parsed yet: CP2K's cube files live on the cell's (generally
 non-orthogonal) grid, and the frontends' ScalarField is axis-aligned.  The Result carries energies, the trace and
@@ -34,7 +35,8 @@ from ..capability import Capabilities, Capability
 from ..data import SCFStep
 from ..runner import MpiRunner, next_prefix, run_dir
 from ..spec import RunSpec
-from .base import Job, Result, StepSink, data_structure
+from . import gaussian_basis
+from .base import Job, Result, StepSink, code_block, data_structure, shared_representation
 
 NAME = "CP2K"
 CP2K_EXE = os.environ.get("CP2K_EXE", "/usr/bin/cp2k.psmp")
@@ -61,7 +63,21 @@ def derive(eps: float) -> dict:
 
 
 def _cp2k_rep(s: RunSpec) -> dict:
-    return (s.accuracy.representation or {}).get("cp2k") or {}
+    return code_block(s, "cp2k")
+
+
+def _shared_basis(s: RunSpec) -> Optional[str]:
+    """The SOLID² basis the spec states (representation.basis), which CP2K is handed converted (gaussian_basis)."""
+    return shared_representation(s).get("basis")
+
+
+def _shared_basis_problem(s: RunSpec) -> Optional[str]:
+    name = _shared_basis(s)
+    if name is None:
+        return None
+    if "basis_file" in _cp2k_rep(s) or any("basis" in k for k in (_cp2k_rep(s).get("kinds") or {}).values()):
+        return "a shared basis and a CP2K basis are both stated"
+    return gaussian_basis.why_not_cp2k(name, [st.element for st in s.structure.sites])
 
 
 def _kinds(spec: RunSpec) -> list[dict]:
@@ -114,18 +130,35 @@ class Cp2kBackend:
                        "smearing translated: none, fermi-dirac"),
             Capability("task.kind=energy", lambda s: s.task.kind == "energy",
                        "single points only so far (GEO_OPT / CELL_OPT next; CP2K cannot compute U)"),
-            Capability("accuracy.representation", lambda s: set(s.accuracy.representation or {}) <= {"cp2k"}
+            Capability("accuracy.representation", lambda s: set(shared_representation(s)) <= {"basis"}
                        and set(_cp2k_rep(s)) <= _REP_KEYS,
-                       "a stated representation for CP2K goes under representation['cp2k'] with known keys"),
+                       "a stated representation is a shared basis, or CP2K settings under representation['cp2k'] with known keys"),
+            Capability("accuracy.representation.basis converts", lambda s: _shared_basis_problem(s) is None,
+                       lambda s: _shared_basis_problem(s)),
         ])
 
     # -- translate ----------------------------------------------------------
     def translate(self, spec: RunSpec) -> Job:
         st, ph, ac = spec.structure, spec.physics, spec.accuracy
         rep = _cp2k_rep(spec)
-        d = derive(ac.epsilon_Ha_per_atom) | {k: v for k, v in rep.items() if k in derive(1.0)}
+        d = derive(ac.epsilon_Ha_per_atom)
+        shared = _shared_basis(spec)
+        if shared:
+            # a hard primitive needs the grid: F₂ valence_lowq_vb (α_max 40) is 1.8 mHa off at 200 Ry, 0.4 at 400, 2e-5 at
+            # 800 and converged by 1200 (2026-10-30).  PROVISIONAL: 20·α_max Ry, never below the ε table.
+            d["cutoff_Ry"] = max(d["cutoff_Ry"], 20 * gaussian_basis.max_exponent(shared, [s.element for s in st.sites]))
+        d |= {k: v for k, v in rep.items() if k in derive(1.0)}
         scf = ac.scf or {}
-        basis_file = rep.get("basis_file") or str(CP2K_DATA / "BASIS_MOLOPT")
+        files = {}
+        if shared:                                          # the SAME basis SOLID² reads, in CP2K's format, beside the deck
+            files["basis"] = gaussian_basis.to_cp2k(shared, [s.element for s in st.sites]).encode()
+            stated_basis = gaussian_basis.cp2k_name(shared)
+        q = gaussian_basis.pp_valence(shared) if shared else {}
+
+        def default_pp(el: str) -> str:
+            """The GTH family for the functional; with a shared basis, the valence charge its blocks were made for."""
+            return _DEFAULT_PP[ph.functional] + (f"-q{q[el.upper()]}" if el.upper() in q else "")
+        basis_file = "job.basis" if shared else rep.get("basis_file") or str(CP2K_DATA / "BASIS_MOLOPT")
         pot_file = rep.get("potential_file") or str(CP2K_DATA / "GTH_POTENTIALS")
         kinds = _kinds(spec)
         stated_kinds = rep.get("kinds") or {}
@@ -203,8 +236,8 @@ class Cp2kBackend:
             w(f"    &KIND {k['name']}")
             if k["name"] != k["element"]:
                 w(f"      ELEMENT {k['element']}")
-            w(f"      BASIS_SET {sk.get('basis', 'DZVP-MOLOPT-SR-GTH')}")
-            w(f"      POTENTIAL {sk.get('potential', _DEFAULT_PP[ph.functional])}")
+            w(f"      BASIS_SET {stated_basis if shared else sk.get('basis', 'DZVP-MOLOPT-SR-GTH')}")
+            w(f"      POTENTIAL {sk.get('potential') or default_pp(k['element'])}")
             for h in ph.hubbard:
                 if k["tag"] in h.sites:
                     w("      &DFT_PLUS_U"); w(f"        L {h.l}"); w(f"        U_MINUS_J [eV] {h.U_eV - h.J_eV:g}")
@@ -222,29 +255,35 @@ class Cp2kBackend:
 
         resolved = {
             "cutoff": f"{d['cutoff_Ry']:g} Ry (rel {d['rel_cutoff_Ry']:g}, {int(d['ngrids'])} grids)"
-                      + (" stated" if "cutoff_Ry" in rep else " from ε, provisional"),
+                      + (" stated" if "cutoff_Ry" in rep else " from ε and the basis's hardest exponent, provisional"
+                         if shared else " from ε, provisional"),
             "EPS_DEFAULT / EPS_PGF_ORB": f"{d['eps_default']:.1E} / {d['eps_pgf_orb']:.1E}",
             "EPS_SCF": f"{d['eps_scf']:.1E} (ε/100)",
             "spin": f"UKS, multiplicity {mult}" if polarized else "RKS",
             "smearing": (f"Fermi-Dirac kT {ph.occupations.kT_Ha:.1E} Ha, ADDED_MOS {added_mos}"
                          + (" stated" if "added_mos" in rep else " (8 per site)")) if ph.occupations.smearing == "fermi-dirac" else "none",
-            "kinds": ", ".join(f"{k['name']}: {(stated_kinds.get(k['name']) or stated_kinds.get(k['element']) or {}).get('basis', 'DZVP-MOLOPT-SR-GTH')}"
-                               f" / {(stated_kinds.get(k['name']) or stated_kinds.get(k['element']) or {}).get('potential', _DEFAULT_PP[ph.functional])}"
+            "kinds": ", ".join(f"{k['name']}: {stated_basis + ' (SOLID² ' + shared + '.bsd, converted)' if shared else (stated_kinds.get(k['name']) or stated_kinds.get(k['element']) or {}).get('basis', 'DZVP-MOLOPT-SR-GTH')}"
+                               f" / {(stated_kinds.get(k['name']) or stated_kinds.get(k['element']) or {}).get('potential') or default_pp(k['element'])}"
                                for k in kinds),
             "k-points": "MP " + "x".join(map(str, ac.kmesh)) if ac.kmesh and tuple(ac.kmesh) != (1, 1, 1) else "Γ",
             "launch": f"mpirun -np {self.runner.ranks} {self.exe} -i <deck>",
         }
         material = (st.source or {}).get("materials") or spec.label
         return Job(NAME, spec, native={"material": material, "stem": spec.label},
-                   resolved=resolved, files={"deck": deck.encode()}, command=(self.exe,))
+                   resolved=resolved, files={"deck": deck.encode()} | files, command=(self.exe,))
 
     # -- run + parse --------------------------------------------------------
     def run(self, job: Job, on_step: Optional[StepSink] = None) -> Result:
         d = run_dir("cp2k", job.native["material"])
         prefix = next_prefix(d, job.native["stem"])
         deck = job.files["deck"].decode().replace("  PROJECT job\n", f"  PROJECT {prefix}\n", 1)
+        files = {f"{prefix}.inp": None}
+        if "basis" in job.files:
+            deck = deck.replace("BASIS_SET_FILE_NAME job.basis\n", f"BASIS_SET_FILE_NAME {prefix}.basis\n", 1)
+            files[f"{prefix}.basis"] = job.files["basis"]
+        files[f"{prefix}.inp"] = deck.encode()
         tail = Cp2kTail(on_step)
-        rc, out = self.runner.run(job.command + ("-i", f"{prefix}.inp"), d, prefix, {f"{prefix}.inp": deck.encode()},
+        rc, out = self.runner.run(job.command + ("-i", f"{prefix}.inp"), d, prefix, files,
                                   record={"spec": job.spec.to_dict(), "resolved": job.resolved, "backend": NAME},
                                   on_line=tail.feed)
         parsed = parse_output(out.read_text())

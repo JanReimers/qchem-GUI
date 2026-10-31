@@ -11,7 +11,6 @@ import tempfile
 import unittest
 
 from qviz.backends.cp2k import Cp2kBackend, Cp2kTail, parse_output
-from qviz.backends.solid2 import Solid2Backend
 from qviz.spec import RunSpec
 
 ORACLES = pathlib.Path(os.environ.get("QCHEM_SRC", pathlib.Path.home() / "Code/qchem-main")) / "IntegrationTests/CP2K"
@@ -131,10 +130,6 @@ class TranslateMatchesTheBankedDecks(unittest.TestCase):
     def test_mno_afm2_plus_u(self):
         ours = self.compare(mno_oracle(), "mno_afm2_gpw_va_plusU.inp")
         self.assertIn(("NEL", "-5"), ours["FORCE_EVAL/SUBSYS/KIND Mn2/BS/ALPHA"], "the -m sublattice flips")
-
-    def test_stating_a_cp2k_representation_narrows_the_strip(self):
-        self.assertFalse(Solid2Backend().capabilities().can_run(si_oracle()))
-        self.assertTrue(CP2K.capabilities().features and all(c.check(si_oracle()) for c in CP2K.capabilities().features))
 
     def test_the_launch_is_always_mpirun(self):
         job = CP2K.translate(si_oracle())

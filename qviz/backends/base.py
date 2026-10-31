@@ -92,10 +92,38 @@ class BackendRegistry:
         """The back-end strip for one spec (option 2.2)."""
         return {n: b.capabilities().can_run(spec) for n, b in self._by_name.items()}
 
+    def strip(self, spec: RunSpec, ticked=()) -> dict[str, tuple[bool, bool, str]]:
+        """The back-end strip's state for `spec`: {name: (enabled, ticked, hover text)}.  Enabled = can run the spec as
+        stated (option 2.2); a tick survives while its back end stays able; with none left, the first able REAL back
+        end is ticked (a synthetic one only when no real one can)."""
+        v = self.verdicts(spec)
+        keep = [n for n in ticked if v.get(n)]
+        if not keep:
+            able = [n for n in v if v[n]]
+            real = [n for n in able if not self.get(n).capabilities().synthetic]
+            keep = (real or able)[:1]
+        return {n: (bool(v[n]), n in keep, "can run this spec" if v[n] else "cannot: " + "; ".join(v[n].reasons))
+                for n in v}
+
     def default_for(self, spec: RunSpec) -> Optional[str]:
         """The first back end that can run `spec`, in registration order (SOLID² is registered first --
         PROVISIONAL, RunSpecPlan §10 Q6)."""
         return next((n for n, v in self.verdicts(spec).items() if v), None)
+
+
+#: accuracy.representation keys that hold ONE code's stated settings ("if this runs on CP2K, use these").  A code reads its
+#: own block and ignores the others', so one spec can carry tuning for every code it is compared across; what a code
+#: must understand -- or refuse -- is the SHARED part (a stated Gaussian basis, today).
+CODE_BLOCKS = ("solid2", "cp2k", "qe", "abinit", "vasp")
+
+
+def shared_representation(spec: RunSpec) -> dict:
+    """representation minus the per-code blocks: the stated choices EVERY code that runs the spec must honour."""
+    return {k: v for k, v in (spec.accuracy.representation or {}).items() if k not in CODE_BLOCKS}
+
+
+def code_block(spec: RunSpec, code: str) -> dict:
+    return (spec.accuracy.representation or {}).get(code) or {}
 
 
 def data_structure(spec: RunSpec) -> Structure:

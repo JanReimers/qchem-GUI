@@ -34,7 +34,7 @@ class FakeBackend:
             Capability("structure.kind=molecule", lambda s: s.structure.kind == "molecule", "molecules only"),
             Capability("physics.hubbard=()", lambda s: not s.physics.hubbard, "no DFT+U"),
             Capability("task.kind=energy", lambda s: s.task.kind == "energy", "single-point energy only"),
-        ])
+        ], synthetic=True)
 
     def translate(self, spec: RunSpec) -> Job:
         n_iter = int((spec.accuracy.scf or {}).get("max_iter", 22))
