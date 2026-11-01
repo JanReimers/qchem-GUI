@@ -29,10 +29,17 @@ def field_to_imagedata(f: ScalarField) -> pv.ImageData:
     return grid
 
 
-def add_structure(p: pv.Plotter, s: Structure, *, bond_scale: float = 1.3):
-    """Ball-and-stick: spheres for atoms, tubes for bonds within range."""
+#: under a field the atoms only MARK the nuclei: small, grey (never an isosurface colour), on thin bonds
+_NUCLEUS_SCALE, _NUCLEUS_COLOUR, _NUCLEUS_BOND = 0.3, "#8c8c8c", 0.05
+
+
+def add_structure(p: pv.Plotter, s: Structure, *, bond_scale: float = 1.3, nuclei: bool = False):
+    """Ball-and-stick: spheres for atoms, tubes for bonds within range.  `nuclei`: drawn under a field, where CPK-sized,
+    CPK-coloured balls hide the density near the core and clash with the isosurface colours -- small grey markers."""
     for sym, R in zip(s.symbols, s.positions):
         colour, rad = (_CPK.get(sym, _DEFAULT[0]), _RAD.get(sym, _DEFAULT[1]))
+        if nuclei:
+            colour, rad = _NUCLEUS_COLOUR, _NUCLEUS_SCALE * rad
         p.add_mesh(pv.Sphere(radius=rad, center=R),
                    color=colour, smooth_shading=True,
                    specular=0.6, specular_power=20, name=f"atom_{sym}_{R}")
@@ -44,7 +51,7 @@ def add_structure(p: pv.Plotter, s: Structure, *, bond_scale: float = 1.3):
             rcut = bond_scale * (_RAD.get(s.symbols[i], 0.7) +
                                  _RAD.get(s.symbols[j], 0.7))
             if d < rcut:
-                p.add_mesh(pv.Tube(P[i], P[j], radius=0.12, n_sides=20),
+                p.add_mesh(pv.Tube(P[i], P[j], radius=_NUCLEUS_BOND if nuclei else 0.12, n_sides=20),
                            color="#9aa0aa", smooth_shading=True)
 
 

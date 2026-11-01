@@ -5,6 +5,7 @@ and SOLID² (when the qchem extension is built) reproduces the water anchor.
     QCHEM_BUILD=~/Code/qchem-lane-g/build/Release .venv/bin/python -m unittest discover -s tests
 """
 import json
+import math
 import os
 import pathlib
 import subprocess
@@ -110,6 +111,10 @@ class Solid2EndToEnd(unittest.TestCase):
         fd = steps[-1].cells[1]
         self.assertEqual((fd.scale, fd.tolerance), ("log", 1e-5))
         self.assertAlmostEqual(steps[-1].value("Etotal"), steps[-1].energy)
+        state = {c.title: c for c in steps[-1].cells if c.title in ("ρ_mix", "accel", "cfg")}
+        self.assertEqual(set(state), {"ρ_mix", "accel", "cfg"})
+        self.assertTrue(all(math.isnan(c.value) for c in state.values()), "solver STATE is table-only: no number to plot")
+        self.assertTrue(state["ρ_mix"].text.strip() and state["accel"].text.strip(), "the printed text is kept")
         capped = self.ws().add_run(water(accuracy=Accuracy(representation={"basis": "dzvp"}, scf={"max_iter": 2})))
         self.assertIs(capped.status, RunStatus.FAILED)
         self.assertIn("not converged after 2 iterations", capped.error, "the SCFFailure's reason, through the bridge")

@@ -28,6 +28,7 @@ import json
 import os
 import pathlib
 import sys
+import math
 from typing import Optional
 
 import numpy as np
@@ -50,6 +51,9 @@ _VALENCE_BASES = tuple(b for b in BASES if b.startswith(("sipp", "valence")))
 
 
 _REP_KEYS = {"mesh_radial", "mesh_angular"}          # representation["solid2"]: the molecular XC mesh
+#: console columns that are STATE, not a convergence trace -- the mixer ("Lin 0.50"), the accelerator ("DIIS:3") and the
+#: configuration-changed flag: their numbers plot as nonsense, so they stay table-only (their printed text is kept)
+_TABLE_ONLY = {"ρ_mix", "accel", "cfg"}
 
 
 def mesh_for(eps: float) -> tuple[int, int]:
@@ -185,7 +189,8 @@ class Solid2Backend:
 
         def step(it, E, cells):
             # the lib's IterationRow, cell for cell: the console's columns, titles, printed text, gates and scales
-            s = SCFRow(it, E, tuple(SCFCell(title, value, scale, text, tol) for title, value, text, tol, scale in cells))
+            s = SCFRow(it, E, tuple(SCFCell(title, math.nan if title in _TABLE_ONLY else value, scale, text, tol)
+                                    for title, value, text, tol, scale in cells))
             steps.append(s)
             if on_step:
                 on_step(s)

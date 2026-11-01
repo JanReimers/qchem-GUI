@@ -547,7 +547,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 level = vmax * 10.0 ** (-3.0 + (self.iso.value() / 200.0) * 2.5)  # ~0.001..0.3·max
                 scene.add_isosurface(p, f, levels=[level],
                                      style="wireframe" if rep == "Wireframe" else "surface")
-            scene.add_structure(p, struct)
+            scene.add_structure(p, struct, nuclei=True)
             if self.slice_on.isChecked():
                 grid = field_to_imagedata(f)
                 a0 = f.origin[axis]; a1 = a0 + (f.dims[axis]-1)*f.spacing[axis]
