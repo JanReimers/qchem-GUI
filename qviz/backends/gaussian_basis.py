@@ -41,6 +41,8 @@ def read_bsd(name: str) -> dict[str, list[tuple[int, tuple[tuple[float, float], 
             el = None
             continue
         if el is None:
+            if len(tok) != 2 or tok[1] != "0":    # past the last block: a free-text trailer ("Further Information")
+                break
             el = tok[0].upper()
             out[el] = []
             continue

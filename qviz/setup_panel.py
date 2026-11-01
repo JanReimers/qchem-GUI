@@ -18,7 +18,7 @@ from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import geometry, molecules, symmetry
+from . import basisinfo, geometry, molecules, symmetry
 from .backends.base import BackendRegistry, data_structure
 from .draft import Edit, SpecDraft
 from .spec import RunSpec, SpecError
@@ -87,7 +87,8 @@ class SetupPanel(QtWidgets.QWidget):
 
     # -- the tabs ---------------------------------------------------------------
     def _page(self, title: str) -> QtWidgets.QFormLayout:
-        w = QtWidgets.QWidget(); form = QtWidgets.QFormLayout(w)
+        w = QtWidgets.QWidget(); outer = QtWidgets.QVBoxLayout(w)
+        form = QtWidgets.QFormLayout(); outer.addLayout(form); outer.addStretch(1)   # rows top-aligned, spare height below
         sc = QtWidgets.QScrollArea(); sc.setWidget(w); sc.setWidgetResizable(True); sc.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.tabs.addTab(sc, title)
         return form
@@ -148,6 +149,15 @@ class SetupPanel(QtWidgets.QWidget):
         self.eps_box.activated.connect(lambda _i: self._edit({"accuracy": {"epsilon_Ha_per_atom": float(self.eps_box.currentText())}}, "ε"))
         f.addRow("Accuracy ε (Ha/atom)", self.eps_box)
         self.kmesh = QtWidgets.QLabel(); f.addRow("k-mesh", self.kmesh)
+        self.basis_summary = QtWidgets.QLabel(); self.basis_summary.setWordWrap(True)
+        self.basis_summary.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        f.addRow("Size / overlap", self.basis_summary)
+        self.basis_table = QtWidgets.QTableWidget(0, 4)
+        self.basis_table.setHorizontalHeaderLabels(["Element", "Atoms", "Shells", "Functions/atom"])
+        self.basis_table.verticalHeader().setVisible(False)
+        self.basis_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.basis_table.horizontalHeader().setStretchLastSection(True)
+        f.addRow(self.basis_table)
 
     def _build_scf(self):
         f = self._page("SCF")
@@ -327,6 +337,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.sites.setFixedHeight(self.sites.horizontalHeader().height() + rows * self.sites.verticalHeader().defaultSectionSize() + 6)
         self.lattice.setText("\n".join("  ".join(f"{x:9.4f}" for x in row) for row in st.lattice_bohr) if not mol else "—")
         self.sym_detected.setText("\n".join(symmetry.detected(s, self._qc)))
+        self._render_basis(s)
         self.sym_check.setChecked(bool((ac.scf or {}).get("impose_symmetry")))
         try:
             self.geom.setPlainText(geometry.report(data_structure(s)))
@@ -364,6 +375,17 @@ class SetupPanel(QtWidgets.QWidget):
         self.maxit.setValue(int(scf.get("max_iter", 100)))
 
     # -- back ends ----------------------------------------------------------------
+    def _render_basis(self, s: RunSpec) -> None:
+        self.basis_summary.setText("\n".join(basisinfo.summary(s, self._qc)))
+        rows = basisinfo.element_rows(s)
+        self.basis_table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, v in enumerate(row):
+                self.basis_table.setItem(r, c, QtWidgets.QTableWidgetItem(str(v)))
+        self.basis_table.resizeColumnsToContents()
+        self.basis_table.setFixedHeight(self.basis_table.horizontalHeader().height() + 4
+                                        + sum(self.basis_table.rowHeight(r) for r in range(len(rows))))
+
     def ticked(self) -> list[str]:
         return [n for n, cb in self.be_checks.items() if cb.isEnabled() and cb.isChecked()]
 

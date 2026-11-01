@@ -131,5 +131,22 @@ class DetectedSymmetry(unittest.TestCase):
         self.assertIn("class -3m (D3d)", mno[1])
 
 
+
+class BasisDetails(unittest.TestCase):
+    def test_the_shells_per_element_add_up_to_the_library_s_function_count(self):
+        from qviz import basisinfo
+        from qviz.backends.solid2 import _import_qchem_py
+        from qviz.spec import Accuracy, molecule
+        qc, why = _import_qchem_py()
+        if qc is None:
+            self.skipTest(why)
+        w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107],
+                     accuracy=Accuracy(representation={"basis": "dzvp"}))
+        rows = basisinfo.element_rows(w)
+        self.assertEqual(rows, [("O", 1, "3s 2p 1d", 15), ("H", 2, "2s", 2)], "dzvp.bsd, read past its free-text trailer")
+        lines = basisinfo.summary(w, qc)
+        self.assertEqual(lines[0], f"{sum(n * f for _, n, _, f in rows)} functions (dzvp, Cartesian)")
+        self.assertIn("condition number", lines[1])
+
 if __name__ == "__main__":
     unittest.main()
