@@ -423,7 +423,7 @@ Read / reason (no side effects):
 - `get_spec()`, `validate_spec(spec)`, `list_backends()`, `can_run(spec)` per back end;
 - `explain_resolved(spec, backend)` — the ε → native table, so it can say *why* a cutoff is 80 Ry;
 - `lookup_structure(query)` — materials.json, molecules.json, the bundled examples, a CIF file
-  the user opened (later: COD / Materials Project, with the user's consent per query);
+  the user opened (later: COD / Materials Project, with the user's consent, granted once per database and cached, §10 Q5);
 - `analyze_structure(spec)` — space group, Wyckoff sites, inequivalent magnetic sublattices,
   suggested AFM orderings (spglib), coordination, nearest distances;
 - `get_result(run_id)` / `compare_results(ids)` — parsed `Result`s only (never raw licensed files);
@@ -461,7 +461,7 @@ May not:
   it always goes through `mpirun`);
 - see or transmit licensed VASP inputs/outputs, the user's API key, or anything not in its
   tools' outputs;
-- query an external database or web service without the user's per-query consent;
+- query an external database or web service without the user's consent for that database (cached, §10 Q5);
 - state a number it did not get from a tool (a computed U, an energy) — its prose must cite the
   run id.
 
@@ -605,14 +605,14 @@ Per the qchem repo's tracker convention, residual items from these stages go as 
 ## 10. Open questions for the user
 
 1. ~~ε units and default~~ -- **RULED 2026-11-01**: `epsilon_Ha_per_atom`, default 1e-5, user-facing; the core's per-element target is derived from it.
-2. ~~Stated overrides in a novice view~~ -- **RULED 2026-11-01**: always visible, no Expert disclosure.
+2. ~~Stated overrides in a novice view~~ -- **RULED 2026-11-01**: always visible, no Expert disclosure.  Much later, once the features are all in, expert panels folded by default may be revisited.
 3. ~~Inline structures in the core deck~~ -- settled: the inline `structure` object landed in `rundeck` (lane B) and the bridge runs it.
 4. ~~The agent's model and key~~ -- **RULED 2026-11-01**: yes, the Anthropic API from the GUI process with
    the user's key; the key comes from `ANTHROPIC_API_KEY` in the environment ONLY (the app never stores it:
    no keyring, no project file); specs, structures AND parsed results (energies, iteration rows, failure
    reasons) may be sent, i.e. `OutboundPolicy(granted=True, send_results=True)`.  The licensed-VASP refusal
    in `ConsentGate` stays regardless.
-5. ~~External structure databases~~ -- **RULED 2026-11-01**: later, not in agent v1 (bundled molecules/materials, examples and opened files only).
+5. ~~External structure databases~~ -- **RULED 2026-11-01**: later, not in agent v1 (bundled molecules/materials, examples and opened files only).  When it lands, the user's consent is asked ONCE per database and CACHED: for the app run at least, preferably persisted between runs (a stored grant the user can revoke), not per query.
 6. ~~Default back end~~ -- **RULED 2026-11-01**: SOLID² always; oracles are ticked by hand.
 7. ~~ABINIT launch line~~ -- settled by measurement (§4.1): `mpirun -np N abinit job.abi`.
 8. ~~Multiplicity vs site moments~~ -- **RULED 2026-11-01**: per-site moments for crystals, net spin derived; molecules keep multiplicity.

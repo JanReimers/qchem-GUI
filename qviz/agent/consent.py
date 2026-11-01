@@ -9,8 +9,9 @@ Every model call goes through ConsentGate.outbound before the client sees the co
     the licence forbids redistribution, and a model provider is a third party;
   * a policy may also exclude results (`send_results=False`: structures and specs go, energies and fields do not).
 
-Per-query consent for an external database (COD, Materials Project; Q5) is `ask`, a callback the UI answers per
-query; the default answers no.
+Consent for an external database (COD, Materials Project; Q5) is `ask`, a callback the UI answers (to be cached per
+database for the app run, preferably persisted -- §10 Q5; not built yet, so today it asks every time); the default
+answers no.
 """
 from __future__ import annotations
 
