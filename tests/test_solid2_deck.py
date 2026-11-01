@@ -198,6 +198,12 @@ class TheBridgeRunsThem(unittest.TestCase):
                 r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
                 self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
+    def test_the_linear_alphas_reach_the_deck(self):
+        deck = json.loads(solid2().translate(si_inline(mixer="Linear", mixing_alpha=0.3, mixing_alpha_max=0.5)).native["deck"])
+        self.assertEqual((deck["scf"]["startingRelaxRo"], deck["scf"]["maxRelaxRo"]), (0.3, 0.5))
+        r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
     def test_a_molecule_takes_no_g_space_mixer(self):
         from qviz.spec import Accuracy, molecule
         w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",

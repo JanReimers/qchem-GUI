@@ -158,6 +158,9 @@ def to_deck(spec: RunSpec) -> dict:
         scf["smearingkT"] = ph.occupations.kT_Ha
     if (ac.scf or {}).get("max_iter"):
         scf["NMaxIter"] = ac.scf["max_iter"]
+    for ours, deck_key in (("mixing_alpha", "startingRelaxRo"), ("mixing_alpha_max", "maxRelaxRo")):
+        if (ac.scf or {}).get(ours):
+            scf[deck_key] = float(ac.scf[ours])           # linear D-mixing's start / adaptive ceiling (SCFParams)
     if (ac.scf or {}).get("mixer"):
         scf["mixer"] = ac.scf["mixer"]                    # SCFParams::Mixing by name: Auto | Linear | Kerker | Pulay
     if scf:

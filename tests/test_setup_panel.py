@@ -54,6 +54,15 @@ class OneDraftTwoViews(unittest.TestCase):
         self.assertEqual(self.insp.mult_spin.value(), 0, "the widget re-renders from the draft")
         self.assertIn("parity", self.insp.reason.text())
 
+    def test_the_alpha_rows_show_for_linear_mixing_only(self):
+        self.say("molecule F2")
+        form, rows = self.insp._scf_form, (self.insp.alpha, self.insp.alpha_max)
+        self.assertTrue(all(form.isRowVisible(b) for b in rows), "a molecule's Auto mixer is linear")
+        self.insp.alpha_max.setValue(0.3); self.insp.alpha_max.editingFinished.emit()
+        self.assertEqual(self.draft.spec.accuracy.scf["mixing_alpha_max"], 0.3)
+        self.insp.mix_box.setCurrentText("Kerker"); self.insp.mix_box.activated.emit(0)
+        self.assertFalse(any(form.isRowVisible(b) for b in rows), "α means nothing to Kerker")
+
     def test_one_undo_stack(self):
         self.say("set accuracy.epsilon_Ha_per_atom=1e-6")
         self.insp.sym_check.click()

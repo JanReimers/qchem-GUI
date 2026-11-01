@@ -159,6 +159,15 @@ class SetupPanel(QtWidgets.QWidget):
                                 "Kerker and Pulay mix in G space, so a molecule takes Auto or Linear")
         self.mix_box.activated.connect(lambda _i: self._edit({"accuracy": {"scf": {"mixer": self.mix_box.currentText()}}}, "mixer"))
         f.addRow("ρ mixer", self.mix_box)
+        self._scf_form = f
+        self.alpha, self.alpha_max = QtWidgets.QDoubleSpinBox(), QtWidgets.QDoubleSpinBox()
+        for box, key, tip in ((self.alpha, "mixing_alpha", "where linear mixing's step α starts"),
+                              (self.alpha_max, "mixing_alpha_max", "the ceiling the adaptive α may grow to; lower it to "
+                                                                   "tamp down an oscillating SCF")):
+            box.setRange(0.01, 1.0); box.setSingleStep(0.05); box.setDecimals(2); box.setValue(1.0); box.setToolTip(tip)
+            box.editingFinished.connect(lambda b=box, k=key: self._edit({"accuracy": {"scf": {k: round(b.value(), 4)}}}, k))
+        f.addRow("α start", self.alpha)
+        f.addRow("α max", self.alpha_max)
         self.maxit = QtWidgets.QSpinBox(); self.maxit.setRange(1, 10000); self.maxit.setValue(100)
         self.maxit.setToolTip("A safety net, never the recipe: a run that hits it FAILS")
         self.maxit.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"max_iter": self.maxit.value()}}}, "max_iter"))
@@ -251,7 +260,7 @@ class SetupPanel(QtWidgets.QWidget):
             self._render()
 
     _rendering = False
-    _EDITORS = ("mix_box", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
+    _EDITORS = ("mix_box", "alpha", "alpha_max", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
                 "acc_box", "maxit")
 
     def _render(self) -> None:
@@ -347,6 +356,11 @@ class SetupPanel(QtWidgets.QWidget):
         scf = ac.scf or {}
         self.acc_box.setCurrentText(str(scf.get("accelerator", "DIIS")))
         self.mix_box.setCurrentText(str(scf.get("mixer", "Auto")))
+        self.alpha.setValue(float(scf.get("mixing_alpha", 1.0)))
+        self.alpha_max.setValue(float(scf.get("mixing_alpha_max", 1.0)))
+        linear = self.mix_box.currentText() == "Linear" or (self.mix_box.currentText() == "Auto" and mol)
+        for box in (self.alpha, self.alpha_max):     # linear mixing's α means nothing to Kerker / Pulay
+            self._scf_form.setRowVisible(box, linear)
         self.maxit.setValue(int(scf.get("max_iter", 100)))
 
     # -- back ends ----------------------------------------------------------------

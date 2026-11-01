@@ -149,6 +149,9 @@ class Solid2Backend:
                        "the stated basis is not a registered Gaussian basis"),
             Capability("accuracy.scf.mixer", molecule(lambda s: scf(s).get("mixer", "Auto") in ("Auto", "Linear")),
                        "Kerker and Pulay mix in G space: a molecule's density mixer is Auto (= linear) or Linear"),
+            Capability("accuracy.scf.mixing_alpha", lambda s: all(0.0 < float(scf(s)[k]) <= 1.0 for k in
+                                                                 ("mixing_alpha", "mixing_alpha_max") if k in scf(s)),
+                       "a linear mixing step α is in (0, 1]"),
             Capability("the basis covers every element", molecule(lambda s: _uncovered(s) is None),
                        lambda s: _uncovered(s) or ""),
         ])
@@ -181,6 +184,7 @@ class Solid2Backend:
             "max_iter": int(scf.get("max_iter", 100)),
             "accelerator": str(scf.get("accelerator", "DIIS")),
             "mesh_radial": mesh[0], "mesh_angular": mesh[1],
+            "relax_start": float(scf.get("mixing_alpha", 0.0)), "relax_max": float(scf.get("mixing_alpha_max", 0.0)),
         }
         resolved = {
             "basis": f"{basis} ({'stated' if rep.get('basis') else 'from ε, provisional'})",
@@ -194,6 +198,8 @@ class Solid2Backend:
                         + (" stated" if own else " from ε, provisional")) if dft else "none (HF)",
             "SCF gates": "facade defaults ([F,D] 1e-5, Δρ/e 1e-4); ε not yet mapped (provisional)",
             "max_iter": native["max_iter"],
+            "linear mixing α": (f"start {native['relax_start'] or 'default (1.0)'}, "
+                                f"max {native['relax_max'] or 'default (1.0)'}"),
         }
         return Job(NAME, spec, native=native, resolved=resolved)
 
@@ -219,7 +225,8 @@ class Solid2Backend:
                                    symmetry=n["symmetry"], polarized=n["polarized"],
                                    multiplicity=n["multiplicity"], max_iter=n["max_iter"], pp=n["pp"],
                                    accelerator=n["accelerator"], mesh_radial=n["mesh_radial"],
-                                   mesh_angular=n["mesh_angular"], on_iteration=step)
+                                   mesh_angular=n["mesh_angular"], relax_start=n.get("relax_start", 0.0),
+                                   relax_max=n.get("relax_max", 0.0), on_iteration=step)
         # the lib's label is "<n><irrep>" (e.g. "5No Symmetry "); the panel numbers levels itself
         levels = [dict(L, n=i + 1, label=L["label"].lstrip("0123456789").strip())
                   for i, L in enumerate(calc.levels())]

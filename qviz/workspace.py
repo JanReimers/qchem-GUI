@@ -31,6 +31,13 @@ class RunStatus(Enum):
     FAILED  = "failed"
 
 
+class RunStopped(RuntimeError):
+    """Raised from the SCF stream when the user stops a run: the back end abandons its solve (SOLID²'s bridge unwinds
+    the SCF loop; an external code's process is terminated) and the run settles FAILED, "stopped by the user"."""
+    def __init__(self):
+        super().__init__("stopped by the user")
+
+
 class Run:
     """One calculation: a spec + the back end it runs on + a lifecycle + (when ready) the Result.
     Fields are sampled lazily on access and memoized -- a 64^3 grid is built only when a panel asks."""
@@ -44,6 +51,7 @@ class Run:
         self.result: Optional[Result] = None
         self._cache: dict = {}
         self._listeners: list[Callable[["Run"], None]] = []
+        self._stop = False                # set by stop() from the GUI thread; read at the next SCF iteration
 
     @property
     def backend_name(self) -> str:
@@ -66,18 +74,30 @@ class Run:
             cb(self)
 
     # -- lifecycle --------------------------------------------------------
+    def stop(self) -> None:
+        """Ask a running (or queued) run to stop: it does at its next SCF iteration (a queued one, before it starts).
+        Safe from any thread."""
+        self._stop = True
+
     def compute(self, on_step: Optional[Callable[[SCFRow], None]] = None) -> None:
         """Translate + run.  Blocking: the Qt layer calls it on a worker thread.  `on_step(SCFRow)` streams the
         SCF live.  Any failure (a refused capability, a throw in the code) becomes the FAILED state."""
         self.status = RunStatus.RUNNING
         self.error = None
         self._notify()
+        def step(row: SCFRow) -> None:
+            if self._stop:
+                raise RunStopped()
+            if on_step:
+                on_step(row)
         try:
+            if self._stop:
+                raise RunStopped()
             verdict = self.backend.capabilities().can_run(self.spec)
             if not verdict:
                 raise RuntimeError(f"{self.backend_name} cannot run this spec: " + "; ".join(verdict.reasons))
             self.job = self.backend.translate(self.spec)
-            self.result = self.backend.run(self.job, on_step)
+            self.result = self.backend.run(self.job, step)
             self._cache.clear()
             if not self.result.converged:
                 raise RuntimeError(self.result.failure or f"SCF did not converge in {len(self.result.scf)} iterations")

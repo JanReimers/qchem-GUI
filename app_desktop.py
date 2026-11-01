@@ -195,6 +195,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scf_log = QtWidgets.QPlainTextEdit(); self.scf_log.setReadOnly(True)
         self.scf_log.setFont(QtGui.QFont("monospace")); self.scf_log.setMaximumBlockCount(500)
         self.output.addTab(self.scf_log, "SCF log")
+        self.stop_btn = QtWidgets.QPushButton("■ Stop"); self.stop_btn.setEnabled(False)
+        self.stop_btn.setToolTip("Stop the running SCF at its next iteration (an external code's process is terminated)")
+        self.stop_btn.clicked.connect(self._stop_live_run)
+        self.output.setCornerWidget(self.stop_btn, QtCore.Qt.TopRightCorner)
         self._output_dock = self._dock("Output", self.output, QtCore.Qt.LeftDockWidgetArea)
 
         # Agent -- edits the shared draft; its run requests are cards only the user's click starts
@@ -319,6 +323,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_compute_started(self, run):
         self.scf_view.clear()                         # fresh convergence trace for this run
         self._live_run = self._scf_shown = run
+        self.stop_btn.setEnabled(True)
         self._output_dock.raise_()                    # bring the SCF graphs forward for the live trace
         self.output.setCurrentWidget(self.scf_view.tabs)
         self._log(f"▶ computing {run.summary}", clear=True)
@@ -666,8 +671,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scf_view.add_row(s)                          # runs on the GUI thread (queued from the worker)
         self.statusBar().showMessage(f"iter {s.iteration}  E = {s.energy:.6f} Ha")
 
+    def _stop_live_run(self):
+        run = getattr(self, "_live_run", None)
+        if run is not None:
+            run.stop()
+            self.stop_btn.setEnabled(False)
+            self.statusBar().showMessage(f"stopping {run.summary} at its next iteration …")
+
     def _on_compute_done(self, err):
         self._live_run = None
+        self.stop_btn.setEnabled(False)
         if err:
             self.statusBar().showMessage(f"compute failed: {err}"); self._log(f"✗ {err}")
         else:

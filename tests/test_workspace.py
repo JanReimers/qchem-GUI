@@ -103,6 +103,31 @@ class Solid2EndToEnd(unittest.TestCase):
         self.assertEqual(rep["num_occupied"], 5)
         self.assertGreater(rep["num_orbitals"], 5, "virtuals are listed")
 
+    def test_stop_ends_the_scf_at_the_next_iteration(self):
+        steps = []
+        run = self.ws().add_run(water(accuracy=Accuracy(representation={"basis": "dzvp"})), compute=False)
+
+        def watch(row):
+            steps.append(row)
+            if row.iteration == 2:
+                run.stop()                                     # the Stop button, from the GUI thread
+        run.compute(on_step=watch)
+        self.assertIs(run.status, RunStatus.FAILED)
+        self.assertEqual(run.error, "stopped by the user")
+        self.assertEqual([r.iteration for r in steps], [1, 2], "iteration 3 is where the stop lands")
+
+    def test_alpha_max_caps_the_linear_mixing_step(self):
+        steps = []
+        spec = water(theory="DFT", functional="LDA",
+                     accuracy=Accuracy(representation={"basis": "dzvp"}, scf={"mixing_alpha": 0.2, "mixing_alpha_max": 0.3}))
+        run = self.ws().add_run(spec, compute=False)
+        run.compute(on_step=steps.append)
+        self.assertIs(run.status, RunStatus.READY, run.error)
+        alphas = [float(c.text.split()[1]) for r in steps for c in r.cells if c.title == "ρ_mix" and c.text.strip().startswith("Lin")]
+        self.assertTrue(alphas, "a linear-mixing run prints its step")
+        self.assertAlmostEqual(alphas[0], 0.2)
+        self.assertLessEqual(max(alphas), 0.3)
+
     def test_the_row_is_the_console_s_cells_and_a_capped_run_says_why(self):
         steps = []
         run = self.ws().add_run(water(accuracy=Accuracy(representation={"basis": "dzvp"})), compute=False)
@@ -177,6 +202,25 @@ class Solid2BasisCoverage(unittest.TestCase):
         self.assertIn("basis valence_lowq_vb has no block for H", caps.can_run(pp).reasons)
         ae = molecule("water", *WATER, theory="DFT", functional="LDA", accuracy=Accuracy(representation={"basis": "dzvp"}))
         self.assertTrue(caps.can_run(ae).ok)
+
+
+class TheRunnerStops(unittest.TestCase):
+    def test_a_stopped_stream_terminates_the_process(self):
+        import time
+        from qviz.runner import MpiRunner
+        from qviz.workspace import RunStopped
+
+        class Direct(MpiRunner):                               # no mpirun: the stream, not the launcher, is under test
+            def argv(self, command):
+                return list(command)
+
+        def on_line(line):
+            raise RunStopped()
+        t0 = time.monotonic()
+        with tempfile.TemporaryDirectory() as d, self.assertRaises(RunStopped):
+            Direct().run((sys.executable, "-u", "-c", "import time\nwhile True: print('x'); time.sleep(0.05)"),
+                         pathlib.Path(d), "p", {}, {}, on_line)
+        self.assertLess(time.monotonic() - t0, 5, "terminated, not waited out")
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,8 +62,16 @@ class MpiRunner:
         env = os.environ | {"OMP_NUM_THREADS": str(self.threads)}
         with out.open("w") as log, subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE,
                                                      stderr=subprocess.STDOUT, text=True, bufsize=1) as p:
-            for line in p.stdout:
-                log.write(line)
-                if on_line:
-                    on_line(line)
+            try:
+                for line in p.stdout:
+                    log.write(line)
+                    if on_line:
+                        on_line(line)
+            except BaseException:            # the stream asked to stop (RunStopped) or broke: never leave the code running
+                p.terminate()                # SIGTERM: mpirun forwards it to its ranks
+                try:
+                    p.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                raise
         return p.returncode, out
