@@ -12,9 +12,7 @@ Rules carried over from qchem's doc/InputDeck.md, already paid for there:
   * a key beginning with "_" is a comment, ignored and not kept;
   * units: bohr / hartree in the spec (atomic units in memory); eV only where a person
     quotes it (U_eV, J_eV), as the key name says.
-
-PROVISIONAL (doc/RunSpecPlan.md §10, the user has not ruled yet -- the recommended
-option is taken and marked):
+RULED 2026-11-01 (doc/RunSpecPlan.md §10):
   * Q1: the accuracy knob is `epsilon_Ha_per_atom`, default 1e-5.  NOTE the core has since
     named its own target ε per Hamiltonian MATRIX ELEMENT (qchem doc/GridEpsilonPlan.md
     §1, deck `solid.accuracy`); the SOLID² translator derives that from this one.
@@ -126,7 +124,7 @@ class Task:
 
 @dataclass(frozen=True)
 class Accuracy:
-    epsilon_Ha_per_atom: float = 1e-5                   # THE knob (PROVISIONAL Q1)
+    epsilon_Ha_per_atom: float = 1e-5                   # THE knob (Q1, ruled 2026-11-01)
     representation: Optional[dict] = None               # STATED: {"basis": ...} / {"pw_cutoff_Ry": ...} / {"pp": ...}
     kmesh: Optional[tuple[int, int, int]] = None        # STATED, else derived from ε and the cell
     scf: Optional[dict] = None                          # STATED method: {"mixer": ..., "accelerator": ..., "max_iter": ...}
