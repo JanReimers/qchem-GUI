@@ -132,9 +132,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if open_path:
             self._open_workspace_path(open_path)  # CLI: load a .qproj.h5 instead of seeding
         else:
-            self.draft.set(molecules.preset_spec("Oxygen (O2, triplet)"), "user", "start-up preset")   # open-shell default (on-tenet)
-            for n in self.inspector.ticked():
-                self._add_spec(self.draft.spec, n)
+            # open-shell default (on-tenet), DRAFTED only: a run starts on the user's ▶ Run, never on its own
+            self.draft.set(molecules.preset_spec("Oxygen (O2, triplet)"), "user", "start-up preset")
         self._restore_layout()                    # after docks exist + a run is shown
 
     def _set_workspace(self, ws):
@@ -374,19 +373,22 @@ class MainWindow(QtWidgets.QMainWindow):
         far below)."""
         p = self.mo_plot; p.clear()
         shown = levels[:n_show]
+        def irrep(L):                                 # the lib labels a polarized level "Ag↑": α and β share the irrep's column
+            return L["label"].rstrip("↑↓ ")
         order = []                                    # irrep columns, in first-appearance order
         for L in shown:
-            if L["label"] not in order: order.append(L["label"])
+            if irrep(L) not in order: order.append(irrep(L))
         xmap = {lab: i for i, lab in enumerate(order)}
         for i, L in enumerate(shown):
-            x, e, occ = xmap[L["label"]], float(L["e"]), float(L["occ"])
+            x, e, occ = xmap[irrep(L)], float(L["e"]), float(L["occ"])
             if   i == n_occ - 1: col = "#7CFC00"      # HOMO green
             elif i == n_occ:     col = "#ffa500"      # LUMO orange
             elif occ > 0.5:      col = "#4dd0e1"      # occupied cyan
             else:                col = "#7a7a7a"      # virtual grey
             # offset α left / β right within the irrep column so the pair doesn't overlap;
             # narrower level lines (~0.6x) leave room and survive a scrunched panel better
-            spin = L.get("spin", "none")             # up/down (polarized) | none (restricted)
+            # +1 / -1 / 0 from the back ends (a project file may hold "up" / "down" / "none")
+            spin = {1: "up", -1: "down", 0: "none"}.get(L.get("spin", 0), L.get("spin", "none"))
             half = 0.15
             if   spin == "up":   xc, lx, la = x - 0.18, x - 0.18 - half - 0.02, (1, 0.5)
             elif spin == "down": xc, lx, la = x + 0.18, x + 0.18 + half + 0.02, (0, 0.5)

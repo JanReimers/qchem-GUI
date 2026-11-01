@@ -46,6 +46,7 @@ class SCFView(QtWidgets.QSplitter):
         self.tabs.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Expanding)
         self.addWidget(self.tabs); self.addWidget(self.table)
         self.setStretchFactor(0, 1); self.setStretchFactor(1, 1)
+        self._split_once = False
         self.rows: list[SCFRow] = []
         self._cells: dict[str, SCFCell] = {}      # first cell seen per title: its scale and unit
         self._curves: dict[str, pg.PlotDataItem] = {}
@@ -53,6 +54,15 @@ class SCFView(QtWidgets.QSplitter):
         self._auto = False                         # this run's tab was chosen for the user (a convergence measure)
         self.tabs.currentChanged.connect(self._picked)
         self.clear()
+
+    def showEvent(self, e):
+        # the stretch factors only share EXTRA space: on first show the empty tab widget's hint is ~0 and the table took
+        # everything (the plots opened 14 px wide, measured 2026-11-01).  Split evenly once; the user's drag wins after.
+        super().showEvent(e)
+        if not self._split_once:
+            self._split_once = True
+            w = max(self.width(), 2)
+            self.setSizes([w // 2, w - w // 2])
 
     # -- feed ----------------------------------------------------------------
     def clear(self) -> None:

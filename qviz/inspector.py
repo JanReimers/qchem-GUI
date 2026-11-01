@@ -35,7 +35,7 @@ class Inspector(QtWidgets.QWidget):
         self.method_box = QtWidgets.QComboBox(); self.method_box.addItems(METHODS)
         self.add_btn = QtWidgets.QPushButton()
         row = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0)
-        h.addWidget(self.mol_box); h.addWidget(self.method_box); h.addWidget(self.add_btn)
+        h.addWidget(self.mol_box); h.addWidget(self.method_box)
         form.addRow("Molecule", row)
         self.basis_box = QtWidgets.QComboBox(); self.basis_box.addItems(BASES)
         self.basis_box.setToolTip("orb1 is the smallest/fastest; valence_lowq_vb / sipp_sr are valence (GTH) bases -- "
@@ -59,6 +59,9 @@ class Inspector(QtWidgets.QWidget):
         self.undo_btn = QtWidgets.QPushButton("Undo last edit")
         self.reason = QtWidgets.QLabel(); self.reason.setWordWrap(True); self.reason.setStyleSheet("color:#cf222e")
         form.addRow(self.undo_btn, self.reason)
+        # the ONLY thing that starts a calculation: nothing runs on its own (a crystal can be hours)
+        self.add_btn.setStyleSheet("font-weight: bold; padding: 4px 12px")
+        form.addRow(self.add_btn)
 
         self.mol_box.activated.connect(lambda _i: self._pick_preset(self.mol_box.currentText()))
         self.method_box.activated.connect(lambda _i: self._edit({"physics": dict(zip(("theory", "functional"),
@@ -162,5 +165,6 @@ class Inspector(QtWidgets.QWidget):
     def _update_add_label(self, *_):
         on, s = self.ticked(), self.draft.spec
         what = s.summary if s else "nothing drafted"
-        self.add_btn.setText(f"+ Add {what}" + (f" on {' + '.join(on)}" if on else " (no back end ticked)"))
+        self.add_btn.setText("▶ Run" + (f" on {' + '.join(on)}" if on else " (no back end ticked)"))
+        self.add_btn.setToolTip(f"Start {what}" + (f" on {' + '.join(on)}" if on else ""))
         self.add_btn.setEnabled(bool(on) and s is not None)
