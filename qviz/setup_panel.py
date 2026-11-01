@@ -1,6 +1,9 @@
 """
-qviz.setup_panel -- the Setup panel: everything that DEFINES a run, in tabs (Structure, Hamiltonian, Basis, SCF, Spec,
-Codes), with the back-end strip and ▶ Run underneath (doc/RunSpecPlan.md §5.1).
+qviz.setup_panel -- the Setup panel: everything that DEFINES a run, in tabs (Structure, Hamiltonian, Basis, SCF, Grids,
+Spec, Codes), with the back-end strip and ▶ Run underneath (doc/RunSpecPlan.md §5.1).
+
+The Grids tab shows the grids ε resolves to: PLANNED from the spec, BUILT from the library's own run record (a run's, or
+for a crystal a deck::Build-only preview on the app's serial library thread).
 
 It shows ONE spec at a time:
   * the shared DRAFT (editable).  Every widget edit is a user-authored patch to the SpecDraft, on the same undo stack
@@ -18,7 +21,7 @@ from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import basisinfo, geometry, molecules, symmetry
+from . import basisinfo, geometry, gridinfo, molecules, symmetry
 from .backends.base import BackendRegistry, data_structure
 from .draft import Edit, SpecDraft
 from .spec import RunSpec, SpecError
@@ -39,13 +42,20 @@ def _mono() -> QtGui.QFont:
 class SetupPanel(QtWidgets.QWidget):
     run_requested = QtCore.Signal(object, list)        # (spec, back-end names): the user's ▶ Run click
     refused = QtCore.Signal(str)                       # an edit the spec refused, and why
+    _previewed = QtCore.Signal(str, object)            # (spec JSON, record | the exception): a grid preview finished
 
     def __init__(self, draft: SpecDraft, registry: BackendRegistry, qc=None,
-                 legs: Optional[Callable[[object], tuple[list[str], list[tuple[str, list[str]]]]]] = None, parent=None):
+                 legs: Optional[Callable[[object], tuple[list[str], list[tuple[str, list[str]]]]]] = None,
+                 serial: Optional[Callable[[Callable[[], None]], None]] = None, parent=None):
         """`qc`: the qchem_py module for the detected symmetry (None: the readout says so).  `legs(run)`: the Codes table
-        for a run and its sibling runs of the same spec (compare.code_table), supplied by the app that owns the workspace."""
+        for a run and its sibling runs of the same spec (compare.code_table), supplied by the app that owns the workspace.
+        `serial(fn)`: runs `fn` on the app's ONE library thread (the library's caches and run record are process globals,
+        so a grid preview must not overlap a run); None runs it here, synchronously."""
         super().__init__(parent)
         self.draft, self.registry, self._qc, self._legs = draft, registry, qc, legs
+        self._serial = serial or (lambda fn: fn())
+        self._previews: dict[str, object] = {}         # spec JSON -> its preview's record, or the exception it raised
+        self._previewed.connect(self._on_previewed)
         self._run = None                               # the run shown read-only; None = the draft
         outer = QtWidgets.QVBoxLayout(self); outer.setContentsMargins(4, 4, 4, 4)
 
@@ -58,7 +68,7 @@ class SetupPanel(QtWidgets.QWidget):
 
         self.tabs = QtWidgets.QTabWidget(); self.tabs.setDocumentMode(True)
         outer.addWidget(self.tabs, 1)
-        self._build_structure(); self._build_hamiltonian(); self._build_basis(); self._build_scf()
+        self._build_structure(); self._build_hamiltonian(); self._build_basis(); self._build_scf(); self._build_grids()
         self._build_spec(); self._build_codes()
 
         foot = QtWidgets.QFormLayout()
@@ -182,6 +192,27 @@ class SetupPanel(QtWidgets.QWidget):
         self.maxit.setToolTip("A safety net, never the recipe: a run that hits it FAILS")
         self.maxit.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"max_iter": self.maxit.value()}}}, "max_iter"))
         f.addRow("Max iterations", self.maxit)
+
+    def _build_grids(self):
+        f = self._page("Grids")
+        self.grids_planned = QtWidgets.QLabel(); self.grids_planned.setWordWrap(True)
+        self.grids_planned.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        f.addRow("Planned", self.grids_planned)
+        self.grids_source = QtWidgets.QLabel(); self.grids_source.setWordWrap(True)
+        self.preview_btn = QtWidgets.QPushButton("Build grids (no SCF)")
+        self.preview_btn.setToolTip("Runs the library's deck::Build for this crystal -- basis, grids, audits -- and stops "
+                                    "before the SCF; seconds for a small cell")
+        self.preview_btn.clicked.connect(self._preview_grids)
+        f.addRow(self.preview_btn, self.grids_source)
+        self.grids_built = QtWidgets.QLabel(); self.grids_built.setWordWrap(True)
+        self.grids_built.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        f.addRow("Built", self.grids_built)
+        self.grids_table = QtWidgets.QTableWidget(0, len(gridinfo.LADDER_COLUMNS))
+        self.grids_table.setHorizontalHeaderLabels(gridinfo.LADDER_COLUMNS)
+        self.grids_table.verticalHeader().setVisible(False)
+        self.grids_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.grids_table.horizontalHeader().setStretchLastSection(True)
+        f.addRow(self.grids_table)
 
     def _build_spec(self):
         w = QtWidgets.QWidget(); lay = QtWidgets.QVBoxLayout(w)
@@ -338,6 +369,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.lattice.setText("\n".join("  ".join(f"{x:9.4f}" for x in row) for row in st.lattice_bohr) if not mol else "—")
         self.sym_detected.setText("\n".join(symmetry.detected(s, self._qc)))
         self._render_basis(s)
+        self._render_grids(s)
         self.sym_check.setChecked(bool((ac.scf or {}).get("impose_symmetry")))
         try:
             self.geom.setPlainText(geometry.report(data_structure(s)))
@@ -376,7 +408,9 @@ class SetupPanel(QtWidgets.QWidget):
 
     # -- back ends ----------------------------------------------------------------
     def _render_basis(self, s: RunSpec) -> None:
-        self.basis_summary.setText("\n".join(basisinfo.summary(s, self._qc)))
+        lines = basisinfo.summary(s, self._qc)
+        trim = gridinfo.conditioning(self._record(s)[0]) if s.structure.kind == "crystal" else []
+        self.basis_summary.setText("\n".join(lines[1:] + ["overlap per k (the library's record):"] + trim if trim else lines))
         rows = basisinfo.element_rows(s)
         self.basis_table.setRowCount(len(rows))
         for r, row in enumerate(rows):
@@ -385,6 +419,67 @@ class SetupPanel(QtWidgets.QWidget):
         self.basis_table.resizeColumnsToContents()
         self.basis_table.setFixedHeight(self.basis_table.horizontalHeader().height() + 4
                                         + sum(self.basis_table.rowHeight(r) for r in range(len(rows))))
+
+    def _record(self, s: RunSpec) -> tuple[Optional[dict], str]:
+        """The run record to read grids from, and where it came from: the viewed run's, else this spec's preview."""
+        if self._run is not None:
+            rec = self._run.result.record if self._run.result is not None else None
+            return rec, ("from this run's record" if rec else "this run left no record (not finished, or not SOLID²)")
+        got = self._previews.get(s.to_json())
+        if isinstance(got, Exception):
+            return None, f"the build refused: {got}"
+        if got == "pending":
+            return None, "building…"
+        if got is not None:
+            return got, "from a build of this spec (no SCF)"
+        if s.structure.kind == "crystal":
+            return None, "not built yet"
+        return None, "a molecule's XC mesh is built inside its SCF: its point count arrives with the run"
+
+    def _render_grids(self, s: RunSpec) -> None:
+        try:
+            self.grids_planned.setText("\n".join(gridinfo.planned(s)))
+        except Exception as e:                        # noqa: BLE001 -- a readout, never a crash
+            self.grids_planned.setText(f"(no plan: {e})")
+        rec, source = self._record(s)
+        self.grids_source.setText(source)
+        crystal = s.structure.kind == "crystal"
+        self.preview_btn.setVisible(crystal and self._run is None)
+        self.preview_btn.setEnabled(self._qc is not None and self._previews.get(s.to_json()) != "pending")
+        lines, rows = gridinfo.built(rec)
+        trim = gridinfo.conditioning(rec) if crystal else []
+        self.grids_built.setText("\n".join(lines + (["basis overlap per k:"] + trim if trim else [])) or "—")
+        self.grids_table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, v in enumerate(row):
+                self.grids_table.setItem(r, c, QtWidgets.QTableWidgetItem(str(v)))
+        self.grids_table.setVisible(bool(rows))
+        self.grids_table.resizeColumnsToContents()
+        self.grids_table.setFixedHeight(self.grids_table.horizontalHeader().height() + 4
+                                        + sum(self.grids_table.rowHeight(r) for r in range(len(rows))))
+
+    def _preview_grids(self) -> None:
+        s = self._spec()
+        if s is None or self._qc is None:
+            return
+        key = s.to_json()
+        self._previews[key] = "pending"
+        self._render_grids(s)
+
+        def job():
+            try:
+                got = gridinfo.preview(s, self._qc)
+            except Exception as e:                    # noqa: BLE001 -- the library's refusal, shown in the tab
+                got = e
+            self._previewed.emit(key, got)
+        self._serial(job)
+
+    def _on_previewed(self, key: str, got) -> None:
+        self._previews[key] = got
+        s = self._spec()
+        if s is not None:
+            self._render_basis(s)                     # the same record carries the crystal's per-k overlap
+            self._render_grids(s)
 
     def ticked(self) -> list[str]:
         return [n for n, cb in self.be_checks.items() if cb.isEnabled() and cb.isChecked()]

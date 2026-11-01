@@ -113,6 +113,14 @@ class _SampleTask(QtCore.QRunnable):
 
 
 
+class _FnTask(QtCore.QRunnable):
+    """Any library call on the serial compute pool (the library's caches and run record are process globals)."""
+    def __init__(self, fn):
+        super().__init__(); self._fn = fn
+    def run(self):
+        self._fn()
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, open_path=None):
         super().__init__()
@@ -173,7 +181,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.draft = SpecDraft()
         qc, _why = _import_qchem_py()
         self.setup = SetupPanel(self.draft, REGISTRY, qc=qc,
-                                legs=lambda run: compare.code_table(compare.legs(self.ws, run)))
+                                legs=lambda run: compare.code_table(compare.legs(self.ws, run)),
+                                serial=lambda fn: self._pool.start(_FnTask(fn)))
         self.setup.run_requested.connect(lambda spec, names: [self._add_spec(spec, n) for n in names])
         self.setup.refused.connect(lambda why: self.statusBar().showMessage(f"not applied: {why}"))
         self._setup_dock = self._dock("Setup", self.setup, QtCore.Qt.LeftDockWidgetArea)

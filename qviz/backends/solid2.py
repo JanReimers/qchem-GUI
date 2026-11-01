@@ -221,6 +221,7 @@ class Solid2Backend:
         if "deck" in n:
             return self._run_deck(job, step, steps)
 
+        self._qc.clear_report()
         calc = self._qc.Calculator(n["numbers"], n["positions"], basis=n["basis"], model=n["model"],
                                    symmetry=n["symmetry"], polarized=n["polarized"],
                                    multiplicity=n["multiplicity"], max_iter=n["max_iter"], pp=n["pp"],
@@ -250,12 +251,14 @@ class Solid2Backend:
                       scf=steps, levels=levels, polarized=polarized, fields=fields,
                       orbital=lambda i, npts, pad: scalar(calc.orbital(i, npts, pad), f"MO #{i}", True),
                       resolved=job.resolved,
-                      provenance={"code": NAME, "iterations": calc.iterations()})   # the closures above own `calc`
+                      provenance={"code": NAME, "iterations": calc.iterations()}, record=json.loads(self._qc.report()))   # the closures above own `calc`
 
     def _run_deck(self, job: Job, step, steps: list[SCFRow]) -> Result:
         """A crystal: deck::Build (a refusal raises with the library's text), then the deck's schedule, streamed."""
+        self._qc.clear_report()
         run = self._qc.SolidRun(job.native["deck"])
         converged = run.converge(step)
         return Result(converged=converged, energy_Ha=run.total_energy(), failure=run.failure(),
                       structure=data_structure(job.spec), scf=steps, resolved=job.resolved,
-                      provenance={"code": NAME, "iterations": run.iterations(), "deck": json.loads(run.resolved())})
+                      provenance={"code": NAME, "iterations": run.iterations(), "deck": json.loads(run.resolved())},
+                      record=json.loads(self._qc.report()))
