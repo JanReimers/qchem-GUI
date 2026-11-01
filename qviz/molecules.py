@@ -80,7 +80,7 @@ MOLECULES = {
 
 
 def preset_spec(name: str):
-    """The spec a preset starts as -- ONE rule for every view that offers presets (the Inspector, the agent): the preset's
+    """The spec a preset starts as -- ONE rule for every view that offers presets (the Setup panel, the agent): the preset's
     basis and multiplicity; a valence (GTH) basis is LDA + pseudopotential (the only model both codes' GTH routes share),
     an all-electron one HF; point-group blocking on (the orbital table then carries irrep labels)."""
     from .spec import Accuracy, molecule

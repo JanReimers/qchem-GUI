@@ -1,18 +1,22 @@
 """
 qchem viz -- desktop shell (PySide6 + pyvistaqt + pyqtgraph), Workspace{Run} driven.
 
-Dockable single-window layout (ParaView/Blender idiom, not GaussView MDI):
-    Run Browser (left) | 3D viewport (center) | Inspector + SCF convergence (right: a plot tab per column + the table)
+Default layout (every panel is a dock: move, tab or float it; File > Save Layout keeps yours):
 
-The window holds a Workspace; panels bind to the *selected* Run via the model's
-Qt-agnostic observer. Adding a molecule = adding a Run: the shared draft RunSpec (doc/RunSpecPlan.md) on each back
-end ticked in the Inspector's back-end strip.  The Inspector and the Agent dock are two VIEWS of one SpecDraft (one
-undo stack, one refusal path).  The strip
-is option 2.2: every back end that CAN run the spec as stated is enabled, the others are
-greyed with their reasons on hover.  One spec on two codes gives two Runs whose energies
-and resolved settings sit side by side in the Codes panel (S4).  The Agent dock (S5) edits a shared draft spec with
-the user; its run requests are cards the user clicks.  Until RunSpec Q4 is ruled it runs the offline planner: no
-model is called and nothing leaves the machine.
+    | Runs · Setup · Output · Agent |     3D view      |
+    |  (tabbed, full height)        |------------------|
+    |                               |   3D controls    |
+
+  * Runs   -- the workspace's runs; selecting one shows its spec read-only in Setup and its results in Output.
+  * Setup  -- what DEFINES a run (qviz.setup_panel): Structure, Hamiltonian, Basis, SCF, Spec (the neutral JSON),
+              Codes (each code's resolved settings and native input); the back-end strip and ▶ Run.  Nothing runs
+              on its own.  Setup and the Agent are two VIEWS of one SpecDraft (one undo stack, one refusal path).
+  * Output -- the selected run's results: Iteration log, SCF graphs (a plot per column of the code's own table),
+              Levels (the orbital list beside the MO diagram), SCF log.
+  * Agent  -- edits the shared draft with the user; its run requests are cards the user clicks.  Until RunSpec Q4
+              is ruled it runs the offline planner: no model is called and nothing leaves the machine.
+The back-end strip is option 2.2: every back end that CAN run the spec as stated is enabled, the others are greyed
+with their reasons on hover.
 """
 from __future__ import annotations
 import os, sys, pathlib
@@ -33,7 +37,8 @@ from qviz.scene import field_to_imagedata
 from qviz.workspace import Workspace, RunStatus
 from qviz.backends import default_registry
 from qviz import molecules
-from qviz.inspector import Inspector
+from qviz.setup_panel import SetupPanel
+from qviz.backends.solid2 import _import_qchem_py
 from qviz.scfview import SCFView, export_column
 from qviz.agent.client import OfflinePlanner
 from qviz.draft import SpecDraft
@@ -47,8 +52,8 @@ _SOLID2 = REGISTRY.get("SOLID²").capabilities()
 if not _SOLID2.installed:
     print(f"SOLID² unavailable ({_SOLID2.why_absent}); analytic stand-in only")
 
-# the Inspector's method box -> the spec's (theory, functional)
-
+#: bumped when the DEFAULT dock layout changes: a layout saved under another version is not restored
+_LAYOUT_VERSION = 2
 
 _STATUS_ICON = {RunStatus.PENDING: "…", RunStatus.RUNNING: "⏳",
                 RunStatus.READY: "●", RunStatus.FAILED: "✗"}
@@ -134,7 +139,8 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             # open-shell default (on-tenet), DRAFTED only: a run starts on the user's ▶ Run, never on its own
             self.draft.set(molecules.preset_spec("Oxygen (O2, triplet)"), "user", "start-up preset")
-        self._restore_layout()                    # after docks exist + a run is shown
+        self._default_state = self.saveState(_LAYOUT_VERSION)   # File > Reset Layout returns here
+        self._restore_layout()                    # after docks exist
 
     def _set_workspace(self, ws):
         self.ws = ws
@@ -153,33 +159,73 @@ class MainWindow(QtWidgets.QMainWindow):
         scene.style(self.plotter)
         lay.addWidget(self.plotter.interactor)
         self.setCentralWidget(self._viewport)
+        # the left dock area owns the bottom-left corner: the run panels run full height, the 3D controls sit under the view
+        self.setCorner(QtCore.Qt.BottomLeftCorner, QtCore.Qt.LeftDockWidgetArea)
+        self.setDockOptions(self.dockOptions() | QtWidgets.QMainWindow.AllowTabbedDocks)
+        pg.setConfigOptions(antialias=True, background="#101216", foreground="w")
 
-        # left dock: Run Browser + Structure readout (tabbed together)
+        # Runs
         self.run_list = QtWidgets.QListWidget()
         self.run_list.currentRowChanged.connect(self._on_row_changed)
-        runs_dock = self._dock("Runs", self.run_list, QtCore.Qt.LeftDockWidgetArea)
+        self._runs_dock = self._dock("Runs", self.run_list, QtCore.Qt.LeftDockWidgetArea)
 
-        self.struct_view = QtWidgets.QPlainTextEdit(); self.struct_view.setReadOnly(True)
-        self.struct_view.setFont(QtGui.QFont("monospace"))
-        struct_dock = self._dock("Structure", self.struct_view, QtCore.Qt.LeftDockWidgetArea)
-
-        self.orb_view = QtWidgets.QPlainTextEdit(); self.orb_view.setReadOnly(True)
-        self.orb_view.setFont(QtGui.QFont("monospace"))
-        orb_dock = self._dock("Orbitals", self.orb_view, QtCore.Qt.LeftDockWidgetArea)
-
-        self.tabifyDockWidget(runs_dock, struct_dock)
-        self.tabifyDockWidget(struct_dock, orb_dock)
-        runs_dock.raise_()
-
-        # right dock (top): Inspector
-        # The Inspector proper is a VIEW of the shared draft (qviz.inspector); the view controls below it are not spec.
+        # Setup: one view of the shared draft (or a run's spec, read-only)
         self.draft = SpecDraft()
-        self.inspector = Inspector(self.draft, REGISTRY)
-        self.inspector.add_requested.connect(lambda spec, names: [self._add_spec(spec, n) for n in names])
-        self.inspector.refused.connect(lambda why: self.statusBar().showMessage(f"not applied: {why}"))
-        insp = QtWidgets.QWidget(); _outer = QtWidgets.QVBoxLayout(insp); _outer.setContentsMargins(0, 0, 0, 0)
-        _outer.addWidget(self.inspector)
-        _view = QtWidgets.QWidget(); form = QtWidgets.QFormLayout(_view); _outer.addWidget(_view)
+        qc, _why = _import_qchem_py()
+        self.setup = SetupPanel(self.draft, REGISTRY, qc=qc,
+                                legs=lambda run: compare.code_table(compare.legs(self.ws, run)))
+        self.setup.run_requested.connect(lambda spec, names: [self._add_spec(spec, n) for n in names])
+        self.setup.refused.connect(lambda why: self.statusBar().showMessage(f"not applied: {why}"))
+        self._setup_dock = self._dock("Setup", self.setup, QtCore.Qt.LeftDockWidgetArea)
+
+        # Output: the selected run's results
+        self.output = QtWidgets.QTabWidget(); self.output.setDocumentMode(True)
+        self.scf_view = SCFView(self)                 # one plot tab per column of the code's own table + the table
+        self.output.addTab(self.scf_view.table, "Iteration log")
+        self.output.addTab(self.scf_view.tabs, "SCF graphs")
+        self.orb_view = QtWidgets.QPlainTextEdit(); self.orb_view.setReadOnly(True)
+        self.orb_view.setFont(QtGui.QFont("monospace")); self.orb_view.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        self.mo_plot = pg.PlotWidget(title="MO diagram")
+        self.mo_plot.setLabel("left", "Energy (Ha)"); self.mo_plot.showGrid(x=False, y=True, alpha=0.2)
+        self.mo_plot.setMouseEnabled(x=False, y=True)    # irreps are categorical; zoom the energy axis
+        levels = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        levels.addWidget(self.orb_view); levels.addWidget(self.mo_plot)
+        levels.setSizes([400, 600])                   # proportional until shown: the list keeps 40% (its hint is ~0)
+        self.output.addTab(levels, "Levels")
+        self.scf_log = QtWidgets.QPlainTextEdit(); self.scf_log.setReadOnly(True)
+        self.scf_log.setFont(QtGui.QFont("monospace")); self.scf_log.setMaximumBlockCount(500)
+        self.output.addTab(self.scf_log, "SCF log")
+        self._output_dock = self._dock("Output", self.output, QtCore.Qt.LeftDockWidgetArea)
+
+        # Agent -- edits the shared draft; its run requests are cards only the user's click starts
+        tools = Toolset(self.draft, REGISTRY, None, start_run=lambda card: [self._add_spec(card.spec, b) for b in card.backends])
+        self.agent = AgentPanel(AgentSession(OfflinePlanner(), tools), self.draft)
+        self._agent_dock = self._dock("Agent", self.agent, QtCore.Qt.LeftDockWidgetArea)
+
+        for d in (self._setup_dock, self._output_dock, self._agent_dock):
+            self.tabifyDockWidget(self._runs_dock, d)
+        self._setup_dock.raise_()
+
+        # 3D controls, under the view
+        self._controls_dock = self._dock("3D controls", self._build_controls(), QtCore.Qt.BottomDockWidgetArea)
+        self.resizeDocks([self._runs_dock], [560], QtCore.Qt.Horizontal)
+        self.resizeDocks([self._controls_dock], [300], QtCore.Qt.Vertical)
+
+        m = self.menuBar().addMenu("&File")
+        m.addAction("Import molecule (xyz)…", self._import_xyz)
+        m.addSeparator()
+        m.addAction("Open Workspace…", self._open_workspace)
+        m.addAction("Save Workspace…", self._save_workspace)
+        m.addSeparator()
+        m.addAction("Export 3D image…", self._export_image)
+        m.addAction("Export SCF plot…", self._export_scf)
+        m.addSeparator()
+        m.addAction("Save Layout", self._save_layout)
+        m.addAction("Reset Layout", self._reset_layout)
+
+    def _build_controls(self) -> QtWidgets.QWidget:
+        """The 3D view's controls.  A control shows only when it does something (_sync_controls)."""
+        w = QtWidgets.QWidget(); form = QtWidgets.QFormLayout(w); self._controls = form
 
         self.field_box = QtWidgets.QComboBox()
         self.field_box.addItems(["Electron density", "Spin density (ρ↑−ρ↓)",
@@ -194,8 +240,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rep_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Representation", self.rep_box)
 
         self.logrho = QtWidgets.QCheckBox("log₁₀ height (density surface)")
-        self.logrho.setToolTip("Height surface only: plot log₁₀ρ to reveal shell structure "
-                               "(density fields only -- a signed field can't be logged)")
+        self.logrho.setToolTip("Plot log₁₀ρ to reveal shell structure (a signed field can't be logged)")
         self.logrho.toggled.connect(self._refresh_3d); form.addRow(self.logrho)
 
         # compare against another SAME-GEOMETRY run (populated on workspace change).
@@ -211,67 +256,43 @@ class MainWindow(QtWidgets.QMainWindow):
         self.iso.valueChanged.connect(self._refresh_3d); form.addRow("Iso level", self.iso)
 
         self.slice_on = QtWidgets.QCheckBox("show slice"); self.slice_on.toggled.connect(self._refresh_3d)
+        form.addRow(self.slice_on)
         self.axis_box = QtWidgets.QComboBox(); self.axis_box.addItems(["Z", "X", "Y"])
         self.axis_box.setToolTip("Plane-normal axis for the slice and the height surface")
-        self.axis_box.currentTextChanged.connect(self._refresh_3d)
-        _sl = QtWidgets.QHBoxLayout(); _sl.addWidget(self.slice_on); _sl.addStretch(1)
-        _sl.addWidget(QtWidgets.QLabel("axis")); _sl.addWidget(self.axis_box)
-        form.addRow(_sl)
+        self.axis_box.currentTextChanged.connect(self._refresh_3d); form.addRow("Axis", self.axis_box)
         self.slice = QtWidgets.QSlider(QtCore.Qt.Horizontal); self.slice.setRange(0, 100); self.slice.setValue(50)
         self.slice.valueChanged.connect(self._refresh_3d); form.addRow("Slice pos", self.slice)
+        self.sweep_on = QtWidgets.QCheckBox("sweep (animate the slice along the axis)")
+        self.sweep_on.toggled.connect(self._toggle_sweep); form.addRow(self.sweep_on)
 
-        self.spin_on = QtWidgets.QCheckBox("spin view"); self.spin_on.toggled.connect(self._toggle_spin)
-        self.sweep_on = QtWidgets.QCheckBox("sweep view"); self.sweep_on.toggled.connect(self._toggle_sweep)
-        self.sweep_on.setToolTip("Animate the slice plane back and forth along the selected axis")
-        _sv = QtWidgets.QHBoxLayout(); _sv.addWidget(self.spin_on); _sv.addWidget(self.sweep_on); _sv.addStretch(1)
-        form.addRow(_sv)
+        self.spin_on = QtWidgets.QCheckBox("spin view (rotate the camera)"); self.spin_on.toggled.connect(self._toggle_spin)
+        form.addRow(self.spin_on)
         self._spin_timer = QtCore.QTimer(self); self._spin_timer.timeout.connect(self._spin_tick)
         self._sweep_timer = QtCore.QTimer(self); self._sweep_timer.timeout.connect(self._sweep_tick)
         self._sweep_dir = 1
+        for c in (self.rep_box, self.field_box, self.cmp_box):
+            (c.currentIndexChanged).connect(self._sync_controls)
+        self.slice_on.toggled.connect(self._sync_controls)
+        self._sync_controls()
+        return w
 
-        insp_dock = self._dock("Inspector", insp, QtCore.Qt.RightDockWidgetArea)
-
-        # right dock (bottom): SCF convergence
-        pg.setConfigOptions(antialias=True, background="#101216", foreground="w")
-        self.scf_view = SCFView()                     # one plot tab per column of the code's own table, the table beside
-        self._conv_dock = self._dock("Convergence", self.scf_view, QtCore.Qt.RightDockWidgetArea)
-        self.splitDockWidget(insp_dock, self._conv_dock, QtCore.Qt.Vertical)
-
-        # right dock: MO energy-level diagram (tabbed with convergence)
-        self.mo_plot = pg.PlotWidget(title="MO diagram")
-        self.mo_plot.setLabel("left", "Energy (Ha)"); self.mo_plot.showGrid(x=False, y=True, alpha=0.2)
-        self.mo_plot.setMouseEnabled(x=False, y=True)    # irreps are categorical; zoom the energy axis
-        mo_dock = self._dock("MO diagram", self.mo_plot, QtCore.Qt.RightDockWidgetArea)
-        self.tabifyDockWidget(self._conv_dock, mo_dock)
-
-        # right dock: SCF log (the run's resolved settings and verdict; the iterations are the Convergence table)
-        self.scf_log = QtWidgets.QPlainTextEdit(); self.scf_log.setReadOnly(True)
-        self.scf_log.setFont(QtGui.QFont("monospace")); self.scf_log.setMaximumBlockCount(500)
-        self._log_dock = self._dock("SCF log", self.scf_log, QtCore.Qt.RightDockWidgetArea)
-        self.tabifyDockWidget(self._conv_dock, self._log_dock)
-
-        # right dock: Codes -- the selected run's cross-code legs side by side (energies, then resolved settings)
-        self.codes = QtWidgets.QTableWidget(); self.codes.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.codes.setFont(QtGui.QFont("monospace"))
-        self._codes_dock = self._dock("Codes", self.codes, QtCore.Qt.RightDockWidgetArea)
-        self.tabifyDockWidget(self._conv_dock, self._codes_dock)
-        self._conv_dock.raise_()
-
-        # left dock: Agent -- a shared draft spec; its run requests are cards only the user's click starts
-        tools = Toolset(self.draft, REGISTRY, None, start_run=lambda card: [self._add_spec(card.spec, b) for b in card.backends])
-        self.agent = AgentPanel(AgentSession(OfflinePlanner(), tools), self.draft)
-        self._agent_dock = self._dock("Agent", self.agent, QtCore.Qt.LeftDockWidgetArea)
-
-        m = self.menuBar().addMenu("&File")
-        m.addAction("Import molecule (xyz)…", self._import_xyz)
-        m.addSeparator()
-        m.addAction("Open Workspace…", self._open_workspace)
-        m.addAction("Save Workspace…", self._save_workspace)
-        m.addSeparator()
-        m.addAction("Export 3D image…", self._export_image)
-        m.addAction("Export SCF plot…", self._export_scf)
-        m.addSeparator()
-        m.addAction("Save Layout", self._save_layout)
+    def _sync_controls(self, *_):
+        """Show a control only when it changes the picture: the iso level for a surface, the slice position (and its
+        sweep) with a slice or the height surface, log height for an unsigned height surface, split with a partner."""
+        rep = self.rep_box.currentText()
+        height = rep == "Surface (height)"
+        signed = not self.field_box.currentText().startswith("Electron")
+        sliced = height or self.slice_on.isChecked()
+        f = self._controls
+        f.setRowVisible(self.iso, not height)
+        f.setRowVisible(self.slice_on, not height)
+        f.setRowVisible(self.logrho, height and not signed)
+        f.setRowVisible(self.axis_box, sliced)
+        f.setRowVisible(self.slice, sliced)
+        f.setRowVisible(self.sweep_on, sliced)
+        f.setRowVisible(self.split_on, self.cmp_box.currentIndex() > 0)
+        if not sliced and self.sweep_on.isChecked():
+            self.sweep_on.setChecked(False)
 
     def _dock(self, title, widget, area):
         d = QtWidgets.QDockWidget(title, self); d.setWidget(widget)
@@ -298,7 +319,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_compute_started(self, run):
         self.scf_view.clear()                         # fresh convergence trace for this run
         self._live_run = self._scf_shown = run
-        self._conv_dock.raise_()                      # bring the SCF graph forward for the live trace
+        self._output_dock.raise_()                    # bring the SCF graphs forward for the live trace
+        self.output.setCurrentWidget(self.scf_view.tabs)
         self._log(f"▶ computing {run.summary}", clear=True)
         try:
             for k, v in run.backend.translate(run.spec).resolved.items():   # the resolved settings, before the run
@@ -320,7 +342,8 @@ class MainWindow(QtWidgets.QMainWindow):
             numbers, positions, label = molecules.from_xyz(path)
         except Exception as e:                   # noqa: BLE001
             self.statusBar().showMessage(f"xyz import failed: {e}"); return
-        self.inspector.set_structure(label, numbers, positions)   # into the draft; the user clicks Add
+        self.setup.set_structure(label, numbers, positions)   # into the draft; the user clicks ▶ Run
+        self._setup_dock.raise_()
 
     def _on_ws_change(self, ws: Workspace):
         self._syncing = True
@@ -337,13 +360,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"{sel.summary}:  E = {sel.energy:.6f} Ha")
         elif sel is not None and sel.status is RunStatus.FAILED:
             self.statusBar().showMessage(f"{sel.summary} failed: {sel.error}")
-        self.struct_view.setPlainText(
-            f"{sel.summary}\n\n{geometry.report(sel.structure())}"
-            if (sel is not None and sel.is_ready) else "")
         if sel is not None and sel.is_ready and self._live_run is None and sel is not self._scf_shown:
             self.scf_view.set_rows(sel.scf); self._scf_shown = sel    # a finished run's trace, on selection
         self._update_orbitals(sel)
-        self._update_codes(sel)
+        if self.setup.viewing_run is not None:        # a run's status / energy moved: its Codes legs re-read
+            self.setup.show_run(self.setup.viewing_run if self.setup.viewing_run in ws.runs else None)
         self._refresh_cmp_box()
         self._refresh_3d()
 
@@ -410,21 +431,6 @@ class MainWindow(QtWidgets.QMainWindow):
             p.setXRange(-0.9, len(order) - 0.1, padding=0.05)   # room for α (left) / β (right) labels
             p.setYRange(min(valence) - 0.3, max(es) + 0.3, padding=0)
 
-    def _update_codes(self, run):
-        """The Codes panel: `run` and every other run of the SAME spec (its other back ends), side by side."""
-        if run is None:
-            self.codes.clear(); self.codes.setRowCount(0); self.codes.setColumnCount(0); return
-        heads, rows = compare.code_table(compare.legs(self.ws, run))
-        self.codes.clear()
-        self.codes.setColumnCount(len(heads)); self.codes.setRowCount(len(rows))
-        self.codes.setHorizontalHeaderLabels(heads); self.codes.setVerticalHeaderLabels([k for k, _ in rows])
-        for i, (_k, vals) in enumerate(rows):
-            for j, v in enumerate(vals):
-                item = QtWidgets.QTableWidgetItem(v); item.setToolTip(v)
-                self.codes.setItem(i, j, item)
-        # the legs share the width evenly: one long resolved setting must not push the other code off-screen
-        self.codes.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
-
     def _refresh_cmp_box(self):
         """List READY runs that share the selected run's geometry and, with it, give a density (valid Δρ partners)."""
         self._syncing = True
@@ -440,6 +446,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._syncing or row < 0 or row >= len(self.ws.runs):
             return
         self.ws.select(self.ws.runs[row])
+        self.setup.show_run(self.ws.runs[row])       # the user picked a run: Setup shows what it ran, read-only
 
     # -- 3D viewport ------------------------------------------------------
     def _partner(self):
@@ -718,13 +725,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _save_layout(self):
         self._settings.setValue("geometry", self.saveGeometry())
-        self._settings.setValue("windowState", self.saveState())
+        self._settings.setValue("windowState", self.saveState(_LAYOUT_VERSION))
         self.statusBar().showMessage("layout saved (~/.config/qchem-GUI/desktop.conf)")
 
     def _restore_layout(self):
         geo = self._settings.value("geometry"); st = self._settings.value("windowState")
         if geo is not None: self.restoreGeometry(geo)
-        if st is not None:  self.restoreState(st)
+        if st is not None:  self.restoreState(st, _LAYOUT_VERSION)   # another version's layout: the default stands
+
+    def _reset_layout(self):
+        """Back to the default dock layout (the one _build_ui made, kept before any saved layout was restored)."""
+        self.restoreState(self._default_state, _LAYOUT_VERSION)
+        self.statusBar().showMessage("layout reset to the default")
 
     def closeEvent(self, e):
         self._save_layout()                      # persist dock arrangement on exit

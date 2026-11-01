@@ -51,13 +51,13 @@ python scripts/make_artifacts.py     # headless: render all plot types -> out/
 ## Layout
 
 - `qviz/spec.py` — the back-end-neutral `RunSpec` (structure, physics, task, ONE accuracy target ε); imports no back end.
-- `qviz/draft.py` — `SpecDraft`: the one editable spec; the Inspector and the Agent dock are two views of it.
+- `qviz/draft.py` — `SpecDraft`: the one editable spec; the Setup panel and the Agent dock are two views of it.
 - `qviz/backends/` — `solid2.py` (in process, `qchem_py`: molecules through MoleculeSetup, crystals through `deck::Build`), `solid2_deck.py` (RunSpec → qchem deck), `cp2k.py`, `qe.py`,
   `abinit.py`, `fake.py`; `base.py` holds the registry and the back-end strip (option 2.2).
 - `qviz/runner.py` — the ONE launcher for external codes (`mpirun`, always).
 - `qviz/compare.py` — cross-code legs and the Codes table.
 - `qviz/agent/` — the agent's tools, loop, consent gate and dock (no model client until RunSpec Q4 is ruled).
-- `qviz/inspector.py` — the Inspector widget.  `qviz/scene.py` — the only PyVista-aware module.
+- `qviz/setup_panel.py` — the Setup panel (Structure / Hamiltonian / Basis / SCF / Spec / Codes, ▶ Run; a run read-only).  `qviz/symmetry.py` — the detected point / space group.  `qviz/scene.py` — the only PyVista-aware module.
 - `qviz/data.py` — `Structure` / `ScalarField` / `VectorField` / `SCFRow` (of `SCFCell`s: each code's own SCF columns) records.  `qviz/project.py` — workspace save/restore.
 - `qviz/scfview.py` — the Convergence dock: one plot tab per SCF column (log axis for convergence measures), the iteration table beside it.
 - `app_desktop.py` — the PySide6 + pyvistaqt + pyqtgraph shell.

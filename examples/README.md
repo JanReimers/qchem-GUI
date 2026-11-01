@@ -1,7 +1,7 @@
 # Example geometries (.xyz, Ångström)
 
-Import via **File → Import molecule (xyz)**. The run uses the current **Basis** and
-**Method** selectors in the Inspector.
+Import via **File → Import molecule (xyz)**: it replaces the draft's structure (Setup panel); the run uses the
+draft's **Basis** and **Method** (Setup → Basis / Hamiltonian) and starts on **▶ Run**.
 
 - **water, methane, ammonia, ethene, co, formaldehyde** — fine at `dzvp` (default).
 - **benzene** — heavy. `dzvp` will OOM a ~14 GB box (the 2-electron integral cache

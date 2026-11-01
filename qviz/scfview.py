@@ -1,5 +1,6 @@
 """
-qviz.scfview -- the live SCF view: one plot TAB per column of the code's iteration table, the table alongside.
+qviz.scfview -- the live SCF view: one plot TAB per column of the code's iteration table (`tabs`), and the table itself
+(`table`) -- two widgets the Output panel shows as its "SCF graphs" and "Iteration log" tabs, fed by one object.
 
 The columns are whatever the code prints, under the code's own titles (qviz.data.SCFCell): SOLID²'s console headers,
 CP2K's `Convergence` / `Change`, pw.x's `estimated scf accuracy`, ABINIT's `residm`.  Nothing here knows which code
@@ -31,22 +32,16 @@ def column_xy(rows: list[SCFRow], title: str, log: bool) -> tuple[list[int], lis
     return [i for i, _ in pts], [v for _, v in pts]
 
 
-class SCFView(QtWidgets.QSplitter):
-    """Plot tabs (left) | iteration table (right).  add_row() is the live feed; set_rows() shows a finished trace."""
+class SCFView(QtCore.QObject):
+    """The plot tabs (`tabs`) and the iteration table (`table`).  add_row() is the live feed; set_rows() shows a finished trace."""
 
     def __init__(self, parent=None):
-        super().__init__(QtCore.Qt.Horizontal, parent)
+        super().__init__(parent)
         self.tabs = QtWidgets.QTabWidget(); self.tabs.setDocumentMode(True)
         self.table = QtWidgets.QTableWidget(0, 1)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.setFont(QtGui.QFont("monospace"))
         self.table.verticalHeader().setVisible(False)
-        # the table's content width must not decide the split: the plot keeps its share and the table scrolls
-        self.table.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Expanding)
-        self.tabs.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Expanding)
-        self.addWidget(self.tabs); self.addWidget(self.table)
-        self.setStretchFactor(0, 1); self.setStretchFactor(1, 1)
-        self._split_once = False
         self.rows: list[SCFRow] = []
         self._cells: dict[str, SCFCell] = {}      # first cell seen per title: its scale and unit
         self._curves: dict[str, pg.PlotDataItem] = {}
@@ -54,15 +49,6 @@ class SCFView(QtWidgets.QSplitter):
         self._auto = False                         # this run's tab was chosen for the user (a convergence measure)
         self.tabs.currentChanged.connect(self._picked)
         self.clear()
-
-    def showEvent(self, e):
-        # the stretch factors only share EXTRA space: on first show the empty tab widget's hint is ~0 and the table took
-        # everything (the plots opened 14 px wide, measured 2026-11-01).  Split evenly once; the user's drag wins after.
-        super().showEvent(e)
-        if not self._split_once:
-            self._split_once = True
-            w = max(self.width(), 2)
-            self.setSizes([w // 2, w - w // 2])
 
     # -- feed ----------------------------------------------------------------
     def clear(self) -> None:
