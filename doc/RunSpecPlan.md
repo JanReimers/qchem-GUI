@@ -604,23 +604,16 @@ Per the qchem repo's tracker convention, residual items from these stages go as 
 
 ## 10. Open questions for the user
 
-1. **ε units and default.** Proposed: `epsilon_Ha_per_atom`, default 1e-5 (≈ 0.3 meV/atom).  The
-   core ruled "Ha per matrix element" for its internal target — should the user-facing GUI knob
-   be per atom (what a user quotes) with the core's per-element target derived from it, or the
-   same unit end to end?
-2. **Stated overrides in a novice view.** Should `representation` / `kmesh` / `scf` be hidden
-   behind an "expert" disclosure, or always visible?
-3. **Inline structures in the core deck** (§9): add an inline `structure` object to `rundeck`
-   (a lib change, lane B's territory), or keep SOLID² batch runs on temporary materials entries?
+1. ~~ε units and default~~ -- **RULED 2026-11-01**: `epsilon_Ha_per_atom`, default 1e-5, user-facing; the core's per-element target is derived from it.
+2. ~~Stated overrides in a novice view~~ -- **RULED 2026-11-01**: always visible, no Expert disclosure.
+3. ~~Inline structures in the core deck~~ -- settled: the inline `structure` object landed in `rundeck` (lane B) and the bridge runs it.
 4. ~~The agent's model and key~~ -- **RULED 2026-11-01**: yes, the Anthropic API from the GUI process with
    the user's key; the key comes from `ANTHROPIC_API_KEY` in the environment ONLY (the app never stores it:
    no keyring, no project file); specs, structures AND parsed results (energies, iteration rows, failure
    reasons) may be sent, i.e. `OutboundPolicy(granted=True, send_results=True)`.  The licensed-VASP refusal
    in `ConsentGate` stays regardless.
-5. **External structure databases** (COD, Materials Project): wanted in agent v1, or later?
-6. **Default back end when several are green**: SOLID² always, or "the last one used"?
+5. ~~External structure databases~~ -- **RULED 2026-11-01**: later, not in agent v1 (bundled molecules/materials, examples and opened files only).
+6. ~~Default back end~~ -- **RULED 2026-11-01**: SOLID² always; oracles are ticked by hand.
 7. ~~ABINIT launch line~~ -- settled by measurement (§4.1): `mpirun -np N abinit job.abi`.
-8. **Multiplicity vs site moments for crystals**: the spec states per-site moments and derives the
-   net multiplicity; the core's `SolidCalcOptions.multiplicity` + decoration fit that — confirm
-   this is the representation you want users to see.
-9. **Name**: write "SOLID²" in the UI already, or keep "qchem" until the rename lands?
+8. ~~Multiplicity vs site moments~~ -- **RULED 2026-11-01**: per-site moments for crystals, net spin derived; molecules keep multiplicity.
+9. ~~Name~~ -- **RULED 2026-11-01**: "SOLID²" in the UI now.
