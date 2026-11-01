@@ -11,7 +11,7 @@ while the crystal route matches CP2K on NaF.  **SolidSetup BOUND (2026-10-31, §
 process (`qchem_py.SolidRun`); the Si inline cell lands on `rundeck`'s energy to 1e-9 Ha.  **Next:** a crystal's density
 over the cell, and its revision record in the run directory.  **S5 agent: the tool
 layer, shared draft, loop, consent gate and Agent dock are built on molecules (`qviz/agent/`), against a scripted
-client and an offline planner; no model client exists until the user answers Q4** (no API call, no key, nothing
+client and an offline planner; no model client exists until the user answers Q4** (answered 2026-11-01, §10 Q4; the client is the next step) (no API call, no key, nothing
 sent).  The open questions for the user are in §10; the code takes the
 recommended option for each and marks it PROVISIONAL.
 
@@ -612,8 +612,11 @@ Per the qchem repo's tracker convention, residual items from these stages go as 
    behind an "expert" disclosure, or always visible?
 3. **Inline structures in the core deck** (§9): add an inline `structure` object to `rundeck`
    (a lib change, lane B's territory), or keep SOLID² batch runs on temporary materials entries?
-4. **The agent's model and key.** Anthropic API from the GUI process with the user's key — OK?
-   Any limit on what the agent may send off the box (structures are fine? results?).
+4. ~~The agent's model and key~~ -- **RULED 2026-11-01**: yes, the Anthropic API from the GUI process with
+   the user's key; the key comes from `ANTHROPIC_API_KEY` in the environment ONLY (the app never stores it:
+   no keyring, no project file); specs, structures AND parsed results (energies, iteration rows, failure
+   reasons) may be sent, i.e. `OutboundPolicy(granted=True, send_results=True)`.  The licensed-VASP refusal
+   in `ConsentGate` stays regardless.
 5. **External structure databases** (COD, Materials Project): wanted in agent v1, or later?
 6. **Default back end when several are green**: SOLID² always, or "the last one used"?
 7. ~~ABINIT launch line~~ -- settled by measurement (§4.1): `mpirun -np N abinit job.abi`.
