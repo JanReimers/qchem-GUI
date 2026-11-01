@@ -58,10 +58,11 @@ _ETHENE = ([6, 6, 1, 1, 1, 1],
                (0, 0.9289, 1.2321), (0, -0.9289, 1.2321),
                (0, 0.9289, -1.2321), (0, -0.9289, -1.2321)]]))
 
-# NOTE: benzene (C6H6) is deliberately NOT here. At dzvp it is ~114 basis
-# functions; the 2-electron integral cache scales ~N^4 (~500x water) and OOM'd a
-# 14 GB box. Re-add it only with a memory budget / a smaller basis, or on a rig
-# with more RAM. Everything below is <=16 electrons -- comparable to water.
+# NOTE: benzene (C6H6) is not a preset. At dzvp it is ~114 basis functions; under
+# HF the 2-electron integral cache scales ~N^4 (~500x water) and OOM'd a 14 GB box.
+# DFT is fine for RAM (user, 2026-11-01) -- the memory risk is HF's exact exchange
+# only; examples/benzene.xyz is there to load for a DFT run.
+# Everything below is <=16 electrons -- comparable to water.
 
 # O2, experimental bond 1.208 Å = 2.283 bohr; ground state is a TRIPLET (paramagnetic)
 _O2 = ([8, 8], [0.0, 0.0, -1.1415, 0.0, 0.0, 1.1415])
