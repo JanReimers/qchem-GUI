@@ -168,5 +168,15 @@ class Solid2EndToEnd(unittest.TestCase):
         self.assertTrue(any("accuracy.kmesh" in r for r in v.reasons), v.reasons)   # the deck translator's own reason
 
 
+
+class Solid2BasisCoverage(unittest.TestCase):
+    def test_a_basis_without_a_block_for_an_element_is_refused_by_name(self):
+        caps = Solid2Backend().capabilities()
+        pp = molecule("water", *WATER, theory="DFT", functional="LDA", core="pseudopotential",
+                      accuracy=Accuracy(representation={"basis": "valence_lowq_vb"}))
+        self.assertIn("basis valence_lowq_vb has no block for H", caps.can_run(pp).reasons)
+        ae = molecule("water", *WATER, theory="DFT", functional="LDA", accuracy=Accuracy(representation={"basis": "dzvp"}))
+        self.assertTrue(caps.can_run(ae).ok)
+
 if __name__ == "__main__":
     unittest.main()

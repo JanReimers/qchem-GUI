@@ -189,6 +189,23 @@ class TheBridgeRunsThem(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unknown key 'run.kmseh'"):
             be.run(job)
 
+    def test_the_stated_mixer_reaches_the_deck_and_the_library_takes_it(self):
+        be = solid2()
+        for mixer in ("Linear", "Kerker", "Pulay"):
+            with self.subTest(mixer):
+                deck = json.loads(be.translate(si_inline(mixer=mixer)).native["deck"])
+                self.assertEqual(deck["scf"]["mixer"], mixer)
+                r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
+                self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
+    def test_a_molecule_takes_no_g_space_mixer(self):
+        from qviz.spec import Accuracy, molecule
+        w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
+                     accuracy=Accuracy(scf={"mixer": "Kerker"}))
+        v = solid2().capabilities().can_run(w)
+        self.assertFalse(v)
+        self.assertTrue(any("mix in G space" in r for r in v.reasons), v.reasons)
+
     def test_compute_u_is_rundeck_s(self):
         s = mno_plus_u()
         v = solid2().capabilities().can_run(RunSpec.from_dict(s.to_dict() | {"task": {"kind": "compute_U", "compute_U": {"method": "ACBN0"}}}))

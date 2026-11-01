@@ -27,6 +27,7 @@ from .spec import RunSpec, SpecError
 METHODS = {"HF": ("HF", None), "LDA": ("DFT", "LDA"), "Xalpha": ("DFT", "Xalpha")}
 BASES = ("dzvp", "orb1", "dzvp2", "tzvp", "valence_lowq_vb", "sipp_sr")
 ACCELERATORS = ("DIIS", "GDM", "Ladder")
+MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mixing; Kerker/Pulay mix in G space (crystals)
 EPSILONS = ("1e-3", "1e-4", "1e-5", "1e-6", "1e-7")
 _NOT_PRESET = "— draft —"
 
@@ -153,6 +154,11 @@ class SetupPanel(QtWidgets.QWidget):
         self.acc_box = QtWidgets.QComboBox(); self.acc_box.addItems(ACCELERATORS)
         self.acc_box.activated.connect(lambda _i: self._edit({"accuracy": {"scf": {"accelerator": self.acc_box.currentText()}}}, "accelerator"))
         f.addRow("Accelerator", self.acc_box)
+        self.mix_box = QtWidgets.QComboBox(); self.mix_box.addItems(MIXERS)
+        self.mix_box.setToolTip("The density mixer.  Auto: Pulay on D for a crystal without a Fock history, else linear; "
+                                "Kerker and Pulay mix in G space, so a molecule takes Auto or Linear")
+        self.mix_box.activated.connect(lambda _i: self._edit({"accuracy": {"scf": {"mixer": self.mix_box.currentText()}}}, "mixer"))
+        f.addRow("ρ mixer", self.mix_box)
         self.maxit = QtWidgets.QSpinBox(); self.maxit.setRange(1, 10000); self.maxit.setValue(100)
         self.maxit.setToolTip("A safety net, never the recipe: a run that hits it FAILS")
         self.maxit.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"max_iter": self.maxit.value()}}}, "max_iter"))
@@ -245,7 +251,7 @@ class SetupPanel(QtWidgets.QWidget):
             self._render()
 
     _rendering = False
-    _EDITORS = ("mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
+    _EDITORS = ("mix_box", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
                 "acc_box", "maxit")
 
     def _render(self) -> None:
@@ -340,6 +346,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.kmesh.setText("×".join(map(str, ac.kmesh)) if ac.kmesh else ("—" if mol else "not stated"))
         scf = ac.scf or {}
         self.acc_box.setCurrentText(str(scf.get("accelerator", "DIIS")))
+        self.mix_box.setCurrentText(str(scf.get("mixer", "Auto")))
         self.maxit.setValue(int(scf.get("max_iter", 100)))
 
     # -- back ends ----------------------------------------------------------------

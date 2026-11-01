@@ -158,6 +158,8 @@ def to_deck(spec: RunSpec) -> dict:
         scf["smearingkT"] = ph.occupations.kT_Ha
     if (ac.scf or {}).get("max_iter"):
         scf["NMaxIter"] = ac.scf["max_iter"]
+    if (ac.scf or {}).get("mixer"):
+        scf["mixer"] = ac.scf["mixer"]                    # SCFParams::Mixing by name: Auto | Linear | Kerker | Pulay
     if scf:
         deck["scf"] = scf
     if tk.kind == "compute_U":

@@ -34,6 +34,7 @@ from typing import Optional
 import numpy as np
 
 from ..capability import Capabilities, Capability
+from . import gaussian_basis
 from ..data import ScalarField, SCFCell, SCFRow, VectorField
 from ..spec import RunSpec
 from . import solid2_deck
@@ -62,6 +63,18 @@ def mesh_for(eps: float) -> tuple[int, int]:
     off, and the facade's own default (30 radial, degree 5 = 12 directions) is 0.52 Ha/atom off (all-electron LDA
     water/dzvp: 20 mHa/atom) -- so the default is never used for a DFT run."""
     return (50, 17) if eps >= 1e-3 else (80, 29) if eps >= 1e-6 else (120, 35)
+
+
+def _uncovered(s: RunSpec) -> Optional[str]:
+    """The reason a molecule's basis (stated, else basis_for) has no block for some of its elements -- None when it
+    covers them all, or when BasisSetData cannot be read (then the facade itself refuses, with its own message)."""
+    name = shared_representation(s).get("basis") or basis_for(s.accuracy.epsilon_Ha_per_atom)
+    try:
+        have = gaussian_basis.read_bsd(name)
+    except (OSError, ValueError):
+        return None
+    missing = sorted({x.element for x in s.structure.sites} - {e.capitalize() for e in have})
+    return f"basis {name} has no block for {', '.join(missing)}" if missing else None
 
 
 def basis_for(eps: float) -> str:
@@ -134,6 +147,10 @@ class Solid2Backend:
                        "(mesh_radial, mesh_angular)"),
             Capability("accuracy.representation.basis", molecule(lambda s: rep(s).get("basis") in (None, *BASES)),
                        "the stated basis is not a registered Gaussian basis"),
+            Capability("accuracy.scf.mixer", molecule(lambda s: scf(s).get("mixer", "Auto") in ("Auto", "Linear")),
+                       "Kerker and Pulay mix in G space: a molecule's density mixer is Auto (= linear) or Linear"),
+            Capability("the basis covers every element", molecule(lambda s: _uncovered(s) is None),
+                       lambda s: _uncovered(s) or ""),
         ])
 
     # -- translate ----------------------------------------------------------
