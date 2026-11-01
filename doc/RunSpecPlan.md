@@ -591,7 +591,8 @@ Per the qchem repo's tracker convention, residual items from these stages go as 
   (`HostLocale`); the defect itself is reported to the lib.
   **Not yet exposed:** the density over the cell, site moments, `RunDiagnostics`; the revision record (Build writes
   none -- the GUI will write `resolved()` into `~/Code/qchem6-runs/<Material>/`).  Lane B's electron-count refusal
-  (cfdd1e04) reaches the GUI through the same RuntimeError path once it is on main.
+  (qchem main 1285c82a) reaches the GUI at Build, before any iteration: the run FAILS with the library's text ("Nelec 7
+  disagrees with the species: the cell's valence sums to 8 ..."; `tests/test_workspace.py`).
 - **The ONE accuracy target for solids** is lane A chunk C2; until then the SOLID² ε table fills
   today's separate tolerances and says so.
 - **Forces / stress** for relax: the `GeometryGradient` capability (lane B review); until it

@@ -146,6 +146,14 @@ class Solid2EndToEnd(unittest.TestCase):
         self.assertIs(run.status, RunStatus.READY, run.error)
         self.assertAlmostEqual(run.energy, -7.1150676382, places=8)     # rundeck decks/Si_diamond_inline.json, same deck
         self.assertEqual(steps[0].titles[:3], ("Etotal", "[F,D]", "ΔE/E"), "the periodic console's columns")
+        # a cell whose stated electron count is not its valence sum: the setup refuses it, in its own words, before any SCF
+        bad = RunSpec.from_dict(spec.to_dict() | {"accuracy": {"kmesh": [1, 1, 1], "representation": {
+            "basis": "sipp_sr", "solid2": {"deck": {"solid": {"densityEcut": 20.0, "Nelec": 7}}}}}})
+        refused, steps = self.ws().add_run(bad, compute=False), []
+        refused.compute(on_step=steps.append)
+        self.assertIs(refused.status, RunStatus.FAILED)
+        self.assertIn("Nelec 7 disagrees with the species", refused.error)
+        self.assertEqual(steps, [], "refused at setup: no iteration ran")
 
     def test_a_crystal_the_deck_cannot_say_is_refused_by_capability_not_by_a_crash(self):
         v = SOLID2.capabilities().can_run(RunSpec.from_dict({
