@@ -107,6 +107,9 @@ def _import_qchem_py():
                   "-DCMAKE_POSITION_INDEPENDENT_CODE=ON) and set QCHEM_BUILD to that build dir")
 
 
+#: the spec's DIIS knobs (accuracy.scf) -> the molecular facade's AcceleratorOptions (the Ladder's DIIS rung reads them too)
+DIIS_KNOBS = {"diis_depth": ("diis_depth", 0), "diis_sv_tol": ("diis_sv_tol", 0.0), "diis_engage_fd": ("diis_engage_fd", 0.0)}
+
 _OFF = 1e29   # TODO(lane A 3bf35f8e): gates become std::optional, recorded "off"; drop this sentinel on that merge
 _GATES = (("minFD", "[F,D]"), ("minDrho", "Δρ"), ("minDE", "ΔE"), ("minDFD", "Δ[F,D]"))
 
@@ -200,6 +203,8 @@ class Solid2Backend:
             Capability("accuracy.scf.mixing_alpha", lambda s: all(0.0 < float(scf(s)[k]) <= 1.0 for k in
                                                                  ("mixing_alpha", "mixing_alpha_max") if k in scf(s)),
                        "a linear mixing step α is in (0, 1]"),
+            Capability("accuracy.scf.diis_*", lambda s: s.structure.kind == "molecule" or not set(scf(s)) & set(DIIS_KNOBS),
+                       "a crystal's deck has no DIIS knobs yet (the library's SolidAcceleratorOptions has no deck keys)"),
             Capability("the basis covers every element", molecule(lambda s: _uncovered(s) is None),
                        lambda s: _uncovered(s) or ""),
         ])
@@ -233,6 +238,8 @@ class Solid2Backend:
             "accelerator": str(scf.get("accelerator", "DIIS")),
             "mesh_radial": mesh[0], "mesh_angular": mesh[1],
             "relax_start": float(scf.get("mixing_alpha", 0.0)), "relax_max": float(scf.get("mixing_alpha_max", 0.0)),
+            **{arg: type(zero)(scf.get(key, zero)) for key, (arg, zero) in DIIS_KNOBS.items()},
+            "mom": bool(scf.get("mom", False)), "mom_start": int(scf.get("mom_start", 0)),
         }
         resolved = {
             "basis": f"{basis} ({'stated' if rep.get('basis') else 'from ε, provisional'})",
@@ -248,6 +255,9 @@ class Solid2Backend:
             "max_iter": native["max_iter"],
             "linear mixing α": (f"start {native['relax_start'] or 'default (1.0)'}, "
                                 f"max {native['relax_max'] or 'default (1.0)'}"),
+            "DIIS": (f"depth {native['diis_depth'] or 'default (4)'}, SV floor {native['diis_sv_tol'] or 'default (5e-9)'}, "
+                     f"engages below [F,D] {native['diis_engage_fd'] or 'default (Z-scaled)'}"),
+            "MOM": (f"on, reference captured at iteration {native['mom_start'] or 'default (10)'}" if native["mom"] else "off"),
         }
         return Job(NAME, spec, native=native, resolved=resolved)
 
@@ -280,7 +290,8 @@ class Solid2Backend:
                                    multiplicity=n["multiplicity"], max_iter=n["max_iter"], pp=n["pp"],
                                    accelerator=n["accelerator"], mesh_radial=n["mesh_radial"],
                                    mesh_angular=n["mesh_angular"], relax_start=n.get("relax_start", 0.0),
-                                   relax_max=n.get("relax_max", 0.0), on_iteration=step)
+                                   relax_max=n.get("relax_max", 0.0), diis_depth=n["diis_depth"], diis_sv_tol=n["diis_sv_tol"],
+                                   diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"], on_iteration=step)
         # the lib's label is "<n><irrep>" (e.g. "5No Symmetry "); the panel numbers levels itself
         levels = [dict(L, n=i + 1, label=L["label"].lstrip("0123456789").strip())
                   for i, L in enumerate(calc.levels())]

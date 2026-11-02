@@ -163,6 +163,10 @@ def to_deck(spec: RunSpec) -> dict:
             scf[deck_key] = float(ac.scf[ours])           # linear D-mixing's start / adaptive ceiling (SCFParams)
     if (ac.scf or {}).get("mixer"):
         scf["mixer"] = ac.scf["mixer"]                    # SCFParams::Mixing by name: Auto | Linear | Kerker | Pulay
+    if (ac.scf or {}).get("mom"):
+        scf["useMOM"] = True                              # SCFParams::UseMOM, and its delayed reference capture
+        if (ac.scf or {}).get("mom_start"):
+            scf["momStartIter"] = int(ac.scf["mom_start"])
     if scf:
         deck["scf"] = scf
     if tk.kind == "compute_U":

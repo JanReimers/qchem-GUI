@@ -149,6 +149,45 @@ class BasisDetails(unittest.TestCase):
         self.assertIn("condition number", lines[1])
 
 
+class ScfKnobs(unittest.TestCase):
+    def setUp(self):
+        from qviz.backends.solid2 import Solid2Backend
+        self.be = Solid2Backend()
+        self.draft = SpecDraft(molecules.preset_spec("Water (H2O)"))
+        self.panel = SetupPanel(self.draft, BackendRegistry([FakeBackend(), self.be]))
+
+    def test_diis_and_mom_knobs_reach_the_facade_s_arguments(self):
+        p = self.panel
+        p.acc_box.setCurrentText("Ladder"); p.acc_box.activated.emit(0)
+        self.assertFalse(p.ladder_info.isHidden(), "the Ladder says what it does")
+        p.diis_depth.setValue(8); p.diis_depth.editingFinished.emit()
+        p.diis_sv.setCurrentText("1e-7"); p.diis_sv.activated.emit(0)
+        p.mom_check.setChecked(True)
+        self.assertFalse(p.mom_start.isHidden())
+        p.mom_start.setValue(5); p.mom_start.editingFinished.emit()
+        scf = self.draft.spec.accuracy.scf
+        self.assertEqual((scf["diis_depth"], scf["diis_sv_tol"], scf["mom"], scf["mom_start"]), (8, 1e-7, True, 5))
+        n = self.be.translate(self.draft.spec).native
+        self.assertEqual((n["diis_depth"], n["diis_sv_tol"], n["diis_engage_fd"], n["mom"], n["mom_start"]), (8, 1e-7, 0.0, True, 5))
+        p.mom_check.setChecked(False)
+        self.assertNotIn("mom", self.draft.spec.accuracy.scf, "unticking removes the key (the lib's default)")
+
+    def test_a_crystal_takes_mom_through_its_deck_and_refuses_diis_knobs(self):
+        from qviz.backends import solid2_deck
+        from tests.test_solid2_deck import SI, crystal
+        si = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}, "scf": {"mom": True, "mom_start": 4}})
+        self.assertEqual({k: v for k, v in solid2_deck.to_deck(si)["scf"].items() if "MOM" in k or "mom" in k},
+                         {"useMOM": True, "momStartIter": 4})
+        bad = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}, "scf": {"diis_depth": 6}})
+        self.assertIn("no DIIS knobs", "; ".join(self.be.capabilities().can_run(bad).reasons))
+
+    def test_the_offline_agent_explains_itself_in_plain_lines(self):
+        from qviz.agent.client import OfflinePlanner, _offline_help
+        text = _offline_help()
+        self.assertTrue(text.startswith("No language model is connected yet"))
+        self.assertIn("\n  molecule water", text)
+
+
 def gridinfo_built(rec):
     from qviz import gridinfo
     return gridinfo.built(rec)[0]
@@ -198,6 +237,21 @@ class GridsTab(unittest.TestCase):
             self.assertEqual(len(made), 1)
         finally:
             self.qc.SolidRun = real
+
+    def test_the_draft_reads_the_newest_run_of_its_own_spec(self):
+        from qviz.backends.base import Result
+        from qviz.workspace import Run
+        spec = molecules.preset_spec("Water (H2O)")
+        run = Run(spec, FakeBackend())
+        run.result = Result(converged=True, energy_Ha=-1.0, structure=None,
+                            record={"water@t": {"grids": {"xcQuadrature": {"kind": "Becke", "natom": 3, "nRadial": 50,
+                                                                           "nDirs": 194, "L": 23, "points": 29100}}}})
+        runs = []
+        panel = SetupPanel(SpecDraft(spec), BackendRegistry([FakeBackend()]), runs=lambda: runs)
+        self.assertNotIn("XC mesh", panel.grids_built.text())
+        runs.append(run); panel.refresh_records()
+        self.assertIn("from the run of this spec", panel.grids_source.text())
+        self.assertIn("29,100 points", panel.grids_built.text())
 
     def test_a_molecule_cannot_build_yet(self):
         from qviz.backends.solid2 import Solid2Backend

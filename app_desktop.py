@@ -182,7 +182,8 @@ class MainWindow(QtWidgets.QMainWindow):
         qc, _why = _import_qchem_py()
         self.setup = SetupPanel(self.draft, REGISTRY, qc=qc,
                                 legs=lambda run: compare.code_table(compare.legs(self.ws, run)),
-                                serial=lambda fn: self._pool.start(_FnTask(fn)))
+                                serial=lambda fn: self._pool.start(_FnTask(fn)),
+                                runs=lambda: self.ws.runs)
         self.setup.run_requested.connect(lambda spec, names: [self._add_spec(spec, n) for n in names])
         self.setup.refused.connect(lambda why: self.statusBar().showMessage(f"not applied: {why}"))
         self._setup_dock = self._dock("Setup", self.setup, QtCore.Qt.LeftDockWidgetArea)
@@ -379,6 +380,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_orbitals(sel)
         if self.setup.viewing_run is not None:        # a run's status / energy moved: its Codes legs re-read
             self.setup.show_run(self.setup.viewing_run if self.setup.viewing_run in ws.runs else None)
+        else:
+            self.setup.refresh_records()             # the draft reads the newest run of its own spec
         self._refresh_cmp_box()
         self._refresh_3d()
 

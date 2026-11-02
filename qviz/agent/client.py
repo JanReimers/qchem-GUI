@@ -115,7 +115,21 @@ class OfflinePlanner:
             return self._call("request_run", {"backends": names, "purpose": "requested in the agent panel"})
         if re.fullmatch(r"undo", text, re.I):
             return self._call("undo_last_edit", {})
-        return ModelTurn("I am the offline planner (no model is connected).  " + " ".join(OfflinePlanner.__doc__.split("Commands")[1].split()))
+        return ModelTurn(_offline_help())
+
+
+def _offline_help() -> str:
+    """What the offline planner answers to anything it does not understand: plain words, one command per line."""
+    from ..molecules import MOLECULES
+    names = ", ".join(n.split(" (")[0].lower() for n in MOLECULES)
+    return ("No language model is connected yet, so I cannot read requests written in plain English.\n"
+            "Until one is, I understand only these short commands, one per message:\n\n"
+            "  molecule water          load a preset molecule (" + names + ")\n"
+            "  set accuracy.scf.accelerator=\"Ladder\"   change one setting of the draft\n"
+            "  check                   say which codes can run the draft\n"
+            "  run                     ask to run the draft\n"
+            "  undo                    take back the last change\n\n"
+            "Most settings are quicker to change in the Setup panel.")
 
 
 def _say(messages: Sequence[Message]) -> str:

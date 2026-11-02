@@ -35,7 +35,12 @@ ACCELERATORS = ("DIIS", "GDM", "Ladder")
 MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mixing; Kerker/Pulay mix in G space (crystals)
 EPSILONS = ("1e-3", "1e-4", "1e-5", "1e-6", "1e-7")
 _NOT_PRESET = "— draft —"
-_SOLID2 = "SOLID²"                                     # the back end Build runs on (the library's own pre-SCF steps)
+_SOLID2 = "SOLID²"
+SV_TOLS = ("default (5e-9)", "1e-10", "1e-9", "1e-8", "1e-7", "1e-6", "1e-5")
+ENGAGE_FDS = ("default (Z-scaled)", "10", "1", "0.1", "0.01", "0.001")
+LADDER_INFO = ("Ladder: plain mixing while [F,D] is above DIIS's engage threshold, then DIIS, then GDM once DIIS stalls "
+               "(out of history and no progress for 5 iterations while |ΔE/E| > 1e-8).  The DIIS rows below set its DIIS rung; "
+               "the DIIS → GDM switch settings are not adjustable yet (a library change).")                                     # the back end Build runs on (the library's own pre-SCF steps)
 
 
 def _mono() -> QtGui.QFont:
@@ -49,14 +54,17 @@ class SetupPanel(QtWidgets.QWidget):
 
     def __init__(self, draft: SpecDraft, registry: BackendRegistry, qc=None,
                  legs: Optional[Callable[[object], tuple[list[str], list[tuple[str, list[str]]]]]] = None,
-                 serial: Optional[Callable[[Callable[[], None]], None]] = None, parent=None):
+                 serial: Optional[Callable[[Callable[[], None]], None]] = None,
+                 runs: Optional[Callable[[], list]] = None, parent=None):
         """`qc`: the qchem_py module for the detected symmetry (None: the readout says so).  `legs(run)`: the Codes table
         for a run and its sibling runs of the same spec (compare.code_table), supplied by the app that owns the workspace.
         `serial(fn)`: runs `fn` on the app's ONE library thread (the library's caches and run record are process globals,
-        so a Build must not overlap a run); None runs it here, synchronously."""
+        so a Build must not overlap a run); None runs it here, synchronously.  `runs()`: the workspace's runs, newest last --
+        the draft's Basis and Grids tabs read the newest run of the SAME spec when it has no Build of its own."""
         super().__init__(parent)
         self.draft, self.registry, self._qc, self._legs = draft, registry, qc, legs
         self._serial = serial or (lambda fn: fn())
+        self._runs = runs or (lambda: [])
         self._builds: dict[str, object] = {}           # spec JSON -> its Build's record, "pending", or the exception it raised
         self._built.connect(self._on_built)
         self._run = None                               # the run shown read-only; None = the draft
@@ -181,6 +189,23 @@ class SetupPanel(QtWidgets.QWidget):
         self.acc_box = QtWidgets.QComboBox(); self.acc_box.addItems(ACCELERATORS)
         self.acc_box.activated.connect(lambda _i: self._edit({"accuracy": {"scf": {"accelerator": self.acc_box.currentText()}}}, "accelerator"))
         f.addRow("Accelerator", self.acc_box)
+        self.ladder_info = QtWidgets.QLabel(LADDER_INFO); self.ladder_info.setWordWrap(True)
+        self.ladder_info.setStyleSheet("color: palette(mid)")
+        f.addRow("", self.ladder_info)
+        self.diis_depth = QtWidgets.QSpinBox(); self.diis_depth.setRange(0, 30); self.diis_depth.setSpecialValueText("default (4)")
+        self.diis_depth.setToolTip("How many past Fock/error pairs DIIS extrapolates over")
+        self.diis_depth.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"diis_depth": self.diis_depth.value() or None}}}, "DIIS depth"))
+        f.addRow("DIIS depth", self.diis_depth)
+        self.diis_sv, self.diis_engage = QtWidgets.QComboBox(), QtWidgets.QComboBox()
+        for box, key, choices, tip in ((self.diis_sv, "diis_sv_tol", SV_TOLS, "DIIS drops history directions whose singular "
+                                        "value falls below this: raise it if DIIS goes wild on a near-singular subspace"),
+                                       (self.diis_engage, "diis_engage_fd", ENGAGE_FDS, "DIIS sits out (plain mixing) until "
+                                        "[F,D] falls below this, then engages")):
+            box.addItems(choices); box.setToolTip(tip)
+            box.activated.connect(lambda _i, b=box, k=key: self._edit(
+                {"accuracy": {"scf": {k: None if b.currentIndex() == 0 else float(b.currentText())}}}, k))
+        f.addRow("DIIS SV floor", self.diis_sv)
+        f.addRow("DIIS engages below [F,D]", self.diis_engage)
         self.mix_box = QtWidgets.QComboBox(); self.mix_box.addItems(MIXERS)
         self.mix_box.setToolTip("The density mixer.  Auto: Pulay on D for a crystal without a Fock history, else linear; "
                                 "Kerker and Pulay mix in G space, so a molecule takes Auto or Linear")
@@ -195,6 +220,16 @@ class SetupPanel(QtWidgets.QWidget):
             box.editingFinished.connect(lambda b=box, k=key: self._edit({"accuracy": {"scf": {k: round(b.value(), 4)}}}, k))
         f.addRow("α start", self.alpha)
         f.addRow("α max", self.alpha_max)
+        self.mom_check = QtWidgets.QCheckBox("Maximum Overlap Method")
+        self.mom_check.setToolTip("Occupy the orbitals that overlap most with a fixed reference occupied set, instead of the "
+                                  "lowest eigenvalues: the cure when the occupied configuration keeps changing (the '*'s in "
+                                  "the iteration log's cfg column)")
+        self.mom_check.toggled.connect(lambda on: self._edit({"accuracy": {"scf": {"mom": on or None}}}, "MOM"))
+        f.addRow("Occupations", self.mom_check)
+        self.mom_start = QtWidgets.QSpinBox(); self.mom_start.setRange(0, 1000); self.mom_start.setSpecialValueText("default (10)")
+        self.mom_start.setToolTip("Plain aufbau for this many iterations, then capture the reference once and hold it")
+        self.mom_start.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"mom_start": self.mom_start.value() or None}}}, "MOM start"))
+        f.addRow("MOM reference at iteration", self.mom_start)
         self.maxit = QtWidgets.QSpinBox(); self.maxit.setRange(1, 10000); self.maxit.setValue(100)
         self.maxit.setToolTip("A safety net, never the recipe: a run that hits it FAILS")
         self.maxit.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"max_iter": self.maxit.value()}}}, "max_iter"))
@@ -304,7 +339,7 @@ class SetupPanel(QtWidgets.QWidget):
             self._render()
 
     _rendering = False
-    _EDITORS = ("mix_box", "alpha", "alpha_max", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
+    _EDITORS = ("mix_box", "alpha", "alpha_max", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
                 "acc_box", "maxit")
 
     def _render(self) -> None:
@@ -408,6 +443,20 @@ class SetupPanel(QtWidgets.QWidget):
         for box in (self.alpha, self.alpha_max):     # linear mixing's α means nothing to Kerker / Pulay
             self._scf_form.setRowVisible(box, linear)
         self.maxit.setValue(int(scf.get("max_iter", 100)))
+        acc = self.acc_box.currentText()
+        self._scf_form.setRowVisible(self.ladder_info, acc == "Ladder" and mol)
+        for w in (self.diis_depth, self.diis_sv, self.diis_engage):   # the molecular facade's AcceleratorOptions only
+            self._scf_form.setRowVisible(w, acc in ("DIIS", "Ladder") and mol)
+        self.diis_depth.setValue(int(scf.get("diis_depth") or 0))
+        for box, key in ((self.diis_sv, "diis_sv_tol"), (self.diis_engage, "diis_engage_fd")):
+            v = scf.get(key)
+            i = box.findText(f"{v:g}") if v else 0
+            if v and i < 0:
+                box.addItem(f"{v:g}"); i = box.count() - 1
+            box.setCurrentIndex(i)
+        self.mom_check.setChecked(bool(scf.get("mom")))
+        self.mom_start.setValue(int(scf.get("mom_start") or 0))
+        self._scf_form.setRowVisible(self.mom_start, bool(scf.get("mom")))
 
     # -- back ends ----------------------------------------------------------------
     def _render_basis(self, s: RunSpec) -> None:
@@ -435,13 +484,21 @@ class SetupPanel(QtWidgets.QWidget):
             if job is not None and job.live:
                 return job.live, "from this run's record so far (it is running)"
             return None, "this run has no record yet (not started, or not SOLID²)"
-        got = self._builds.get(s.to_json())
+        key = s.to_json()
+        got = self._builds.get(key)
         if isinstance(got, Exception):
             return None, f"the Build refused: {got}"
         if got == "pending":
             return None, "building…"
         if got is not None:
             return got, "from this spec's Build (no SCF)"
+        for run in reversed(self._runs()):            # the newest run of this very spec, finished or still running
+            if run.spec.to_json() != key:
+                continue
+            if run.result is not None and run.result.record:
+                return run.result.record, f"from the run of this spec ({run.backend_name}, {run.status.value})"
+            if run.job is not None and run.job.live:
+                return run.job.live, f"from the run of this spec, so far ({run.backend_name}, running)"
         why = self._why_no_build(s)
         return None, f"not built ({why})" if why else "not built yet: Build (or Run) fills this from the library's record"
 
@@ -464,6 +521,13 @@ class SetupPanel(QtWidgets.QWidget):
         self.grids_table.resizeColumnsToContents()
         self.grids_table.setFixedHeight(self.grids_table.horizontalHeader().height() + 4
                                         + sum(self.grids_table.rowHeight(r) for r in range(len(rows))))
+
+    def refresh_records(self) -> None:
+        """Re-read the Basis and Grids tabs' records (a run of the shown spec started, streamed its setup, or finished)."""
+        s = self._spec()
+        if s is not None:
+            self._render_basis(s)
+            self._render_grids(s)
 
     def _solid2(self):
         return self.registry.get(_SOLID2) if _SOLID2 in self.registry.names() else None
