@@ -40,6 +40,7 @@ from qviz import molecules
 from qviz.setup_panel import SetupPanel
 from qviz.backends.solid2 import _import_qchem_py
 from qviz.scfview import SCFView, export_column
+from qviz.agent.bridge import AgentBridge
 from qviz.agent.client import AnthropicClient, OfflinePlanner
 from qviz.agent.consent import ConsentGate, Q4_RULED
 from qviz.draft import SpecDraft
@@ -218,6 +219,14 @@ class MainWindow(QtWidgets.QMainWindow):
         client = AnthropicClient() if AnthropicClient.why_absent() is None else OfflinePlanner()
         self.agent = AgentPanel(AgentSession(client, tools, ConsentGate(Q4_RULED)), self.draft)
         self._agent_dock = self._dock("Agent", self.agent, QtCore.Qt.LeftDockWidgetArea)
+        # Claude Code (on the user's subscription) drives the same tools through scripts/qchem_mcp.py -> this localhost bridge
+        try:
+            self._bridge_agent = AgentBridge(tools, on_call=self.agent.note_external, parent=self)
+            self.agent.note_bridge(f"Claude Code can drive this draft: the qchem-gui MCP server reaches this window "
+                                   f"(127.0.0.1:{self._bridge_agent.port})")
+        except RuntimeError as e:
+            self._bridge_agent = None
+            self.agent.note_bridge(str(e))
 
         for d in (self._setup_dock, self._output_dock, self._agent_dock):
             self.tabifyDockWidget(self._runs_dock, d)
@@ -768,6 +777,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, e):
         self._save_layout()                      # persist dock arrangement on exit
+        if self._bridge_agent is not None:
+            self._bridge_agent.close()           # removes the bridge file: Claude Code's calls then say the GUI is closed
         super().closeEvent(e)
 
 

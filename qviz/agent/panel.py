@@ -8,6 +8,7 @@ client is connected and that nothing leaves the machine while Q4 is unanswered.
 from __future__ import annotations
 
 import html
+import json
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -91,6 +92,18 @@ class AgentPanel(QtWidgets.QWidget):
         who = {"user": "you", "assistant": "agent", "tool_call": "→", "tool_result": "←"}.get(e.kind, e.kind)
         body = html.escape(e.text).replace("\n", "<br>")
         self.chat.append(f'<span style="color:{_STYLE[e.kind]}"><b>{who}</b></span> {body}')
+
+    # -- Claude Code, through the MCP bridge --------------------------------------
+    def note_bridge(self, text: str) -> None:
+        self.chat.append(f'<span style="color:#8b949e"><i>{html.escape(text)}</i></span>')
+
+    def note_external(self, name: str, args: dict, result: dict) -> None:
+        """A tool call Claude Code made through the bridge: logged here like the in-app agent's."""
+        brief = ", ".join(f"{k}={json.dumps(v)[:60]}" for k, v in args.items())
+        said = result.get("summary") or result.get("error") or ""
+        self.chat.append(f'<span style="color:#8250df"><b>Claude Code →</b></span> {html.escape(name)}'
+                         f'<span style="color:#8b949e">({html.escape(brief)})</span>'
+                         + (f'<br><span style="color:#8b949e">← {html.escape(str(said))}</span>' if said else ""))
 
     # -- cards ----------------------------------------------------------------
     def _on_card(self, card: RunRequest):
