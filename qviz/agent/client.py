@@ -1,14 +1,18 @@
 """
-qviz.agent.client -- the model client INTERFACE, and the scripted client the agent runs on until RunSpec Q4 is ruled.
+qviz.agent.client -- the model client INTERFACE; the Anthropic client (RunSpec Q4, ruled 2026-11-01); and the scripted
+and offline clients for tests and for running with no key.
 
 A client turns (system prompt, conversation, tool schemas) into one assistant turn: prose and/or tool calls.  It
-declares whether a call LEAVES THE BOX; the consent gate (qviz.agent.consent) reads that before every call.  The real
-Anthropic client drops in behind this interface once the user answers Q4 (model, key, what may leave the machine);
-until then there is none in the code -- no API call, no key, nothing sent anywhere.
+declares whether a call LEAVES THE BOX; the consent gate (qviz.agent.consent) reads that before every call.
+
+AnthropicClient is the one that leaves the box: Claude through the Anthropic API, the key from ANTHROPIC_API_KEY ONLY
+(Q4b), sending specs, structures and results (Q4c) -- never a licensed (VASP) result, which the gate stops.  One call per
+model turn: the agent session owns the tool loop, so every call passes the gate and every tool runs on the GUI thread.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Protocol, Sequence
@@ -29,6 +33,7 @@ class Message:
     tool_call_id: str = ""                      # tool: the call this answers
     content: Any = None                         # tool: the result (JSON-able)
     licensed: bool = False                      # tool: derived from licensed (VASP) inputs/outputs -- never leaves the box
+    raw: Any = None                             # assistant: the provider's own content, handed back to it VERBATIM next call
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,7 @@ class ToolSchema:
 class ModelTurn:
     text: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
+    raw: Any = None                             # the provider's own content blocks (Claude's thinking must go back unchanged)
 
 
 class ModelClient(Protocol):
@@ -118,11 +124,84 @@ class OfflinePlanner:
         return ModelTurn(_offline_help())
 
 
+MODEL = "claude-opus-5-5"
+KEY_ENV = "ANTHROPIC_API_KEY"                   # Q4b: the key comes from this environment variable and nowhere else
+
+
+class AnthropicClient:
+    """Claude through the Anthropic API: one Messages call per model turn.  The conversation goes up as the API's own
+    shapes -- an assistant turn as the content Claude sent (its thinking blocks verbatim, as Opus 5.5 requires), the tool
+    results that answer it as ONE user message.  The prompt prefix (tools, system, conversation so far) is cached, so a
+    long chat re-sends cheaply.  Refusal fallback is on: a request Claude's safeguards decline is retried server-side on
+    another model (the API's "default" routing) instead of ending the turn."""
+    leaves_box = True
+
+    def __init__(self, model: str = MODEL, effort: str = "medium", sdk=None):
+        """`sdk`: an anthropic.Anthropic-shaped client (tests); None builds one from ANTHROPIC_API_KEY."""
+        if sdk is None:
+            key = os.environ.get(KEY_ENV)
+            if not key:
+                raise RuntimeError(f"{KEY_ENV} is not set: the agent's key comes from that environment variable only")
+            import anthropic
+            sdk = anthropic.Anthropic(api_key=key)
+        self._sdk, self.model, self.effort = sdk, model, effort
+        self.name = f"Claude ({model})"
+
+    @staticmethod
+    def why_absent() -> Optional[str]:
+        """Why no AnthropicClient can be made here (None: it can)."""
+        if not os.environ.get(KEY_ENV):
+            return f"{KEY_ENV} is not set"
+        try:
+            import anthropic  # noqa: F401
+        except ImportError:
+            return "the anthropic package is not installed (pip install -r requirements.txt)"
+        return None
+
+    def respond(self, system, messages, tools) -> ModelTurn:
+        r = self._sdk.beta.messages.create(
+            model=self.model, max_tokens=16000, system=system, messages=_to_api(messages),
+            tools=[{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools],
+            output_config={"effort": self.effort}, cache_control={"type": "ephemeral"},
+            betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+        if r.stop_reason == "refusal":
+            why = getattr(r.stop_details, "explanation", None) if r.stop_details else None
+            return ModelTurn(f"Claude declined this request{': ' + why if why else ''}.")
+        text = "\n".join(b.text for b in r.content if b.type == "text").strip()
+        calls = tuple(ToolCall(b.id, b.name, dict(b.input)) for b in r.content if b.type == "tool_use")
+        if r.stop_reason == "max_tokens":
+            text = (text + "\n" if text else "") + "(the reply hit its length limit and was cut off)"
+            calls = ()                                           # a truncated tool call's input is not trustworthy
+        return ModelTurn(text, calls, raw=[b.model_dump(exclude_none=True) for b in r.content])
+
+
+def _to_api(messages: Sequence[Message]) -> list[dict]:
+    """The session's conversation as Messages-API turns: consecutive tool results fold into ONE user message."""
+    out: list[dict] = []
+    for m in messages:
+        if m.role == "user":
+            out.append({"role": "user", "content": m.text})
+        elif m.role == "assistant":
+            content = m.raw if m.raw is not None else (
+                ([{"type": "text", "text": m.text}] if m.text else [])
+                + [{"type": "tool_use", "id": c.id, "name": c.name, "input": c.args} for c in m.tool_calls])
+            out.append({"role": "assistant", "content": content})
+        elif m.role == "tool":
+            block = {"type": "tool_result", "tool_use_id": m.tool_call_id, "content": json.dumps(m.content, default=str),
+                     **({"is_error": True} if isinstance(m.content, dict) and "error" in m.content else {})}
+            if out and out[-1]["role"] == "user" and isinstance(out[-1]["content"], list):
+                out[-1]["content"].append(block)
+            else:
+                out.append({"role": "user", "content": [block]})
+    return out
+
+
 def _offline_help() -> str:
     """What the offline planner answers to anything it does not understand: plain words, one command per line."""
     from ..molecules import MOLECULES
     names = ", ".join(n.split(" (")[0].lower() for n in MOLECULES)
-    return ("No language model is connected yet, so I cannot read requests written in plain English.\n"
+    return ("No language model is connected, so I cannot read requests written in plain English.  To connect Claude, set "
+            f"{KEY_ENV} in the environment and restart the app.\n"
             "Until one is, I understand only these short commands, one per message:\n\n"
             "  molecule water          load a preset molecule (" + names + ")\n"
             "  set accuracy.scf.accelerator=\"Ladder\"   change one setting of the draft\n"

@@ -32,6 +32,11 @@ class OutboundPolicy:
     note: str = ""
 
 
+#: RunSpec Q4 as the user ruled it (2026-11-01): the Anthropic API, key from ANTHROPIC_API_KEY only, and specs, structures
+#: AND results may be sent (licensed VASP results still never are: that check is not a policy, it is the licence)
+Q4_RULED = OutboundPolicy(True, send_results=True, note="RunSpec Q4 (ruled 2026-11-01): specs, structures and results go "
+                                                        "to the Anthropic API; licensed (VASP) results never leave the box")
+
 Q4_UNANSWERED = OutboundPolicy(False, note="RunSpec Q4 (the agent's model, key and what may leave the box) is the user's "
                                           "decision and is unanswered: nothing is sent off this machine")
 

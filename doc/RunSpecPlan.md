@@ -11,8 +11,9 @@ while the crystal route matches CP2K on NaF.  **SolidSetup BOUND (2026-10-31, §
 process (`qchem_py.SolidRun`); the Si inline cell lands on `rundeck`'s energy to 1e-9 Ha.  **Next:** a crystal's density
 over the cell, and its revision record in the run directory.  **S5 agent: the tool
 layer, shared draft, loop, consent gate and Agent dock are built on molecules (`qviz/agent/`), against a scripted
-client and an offline planner; no model client exists until the user answers Q4** (answered 2026-11-01, §10 Q4; the client is the next step) (no API call, no key, nothing
-sent).  The open questions for the user are in §10; the code takes the
+client and an offline planner, and the Anthropic client (`AnthropicClient`, built 2026-11-02 per §10 Q4): Claude
+(`claude-opus-5-5`) when ANTHROPIC_API_KEY is set, the offline planner otherwise; model calls run off the GUI thread, tools
+on it; licensed (VASP) results still never leave the box.**  The open questions for the user are in §10; the code takes the
 recommended option for each and marks it PROVISIONAL.
 
 ## 0. Why this note exists

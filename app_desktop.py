@@ -40,7 +40,8 @@ from qviz import molecules
 from qviz.setup_panel import SetupPanel
 from qviz.backends.solid2 import _import_qchem_py
 from qviz.scfview import SCFView, export_column
-from qviz.agent.client import OfflinePlanner
+from qviz.agent.client import AnthropicClient, OfflinePlanner
+from qviz.agent.consent import ConsentGate, Q4_RULED
 from qviz.draft import SpecDraft
 from qviz.agent.panel import AgentPanel
 from qviz.agent.session import AgentSession
@@ -213,7 +214,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Agent -- edits the shared draft; its run requests are cards only the user's click starts
         tools = Toolset(self.draft, REGISTRY, None, start_run=lambda card: [self._add_spec(card.spec, b) for b in card.backends])
-        self.agent = AgentPanel(AgentSession(OfflinePlanner(), tools), self.draft)
+        # Claude when ANTHROPIC_API_KEY is set (RunSpec Q4), else the offline planner, which says how to connect
+        client = AnthropicClient() if AnthropicClient.why_absent() is None else OfflinePlanner()
+        self.agent = AgentPanel(AgentSession(client, tools, ConsentGate(Q4_RULED)), self.draft)
         self._agent_dock = self._dock("Agent", self.agent, QtCore.Qt.LeftDockWidgetArea)
 
         for d in (self._setup_dock, self._output_dock, self._agent_dock):

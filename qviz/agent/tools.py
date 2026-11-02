@@ -20,7 +20,7 @@ from typing import Callable, Optional
 from .. import compare, molecules
 from ..backends import solid2_deck
 from ..backends.base import BackendRegistry
-from ..spec import RunSpec, SpecError
+from ..spec import Z_OF, RunSpec, SpecError, molecule
 from ..workspace import Workspace
 from .client import ToolSchema
 from ..draft import SpecDraft
@@ -92,9 +92,15 @@ class Toolset:
                   self.search_docs)
         self._add("propose_spec_patch", f"{W} Apply a JSON merge patch (RFC 7386) to the draft, with the reason.",
                   _schema({"patch": {"type": "object"}, "rationale": {"type": "string"}}, ["patch", "rationale"]), self.propose_spec_patch)
-        self._add("build_structure", f"{W} Replace the draft's structure: a preset molecule by name, or a crystal prototype "
-                  "(rocksalt | diamond | fcc) with elements and the cubic lattice constant a_bohr.",
+        self._add("build_structure", f"{W} Replace the draft's structure: a preset molecule by name; a molecule no preset has, "
+                  "from explicit atoms (element + Cartesian position in angstrom; the geometry is then yours, so say it is "
+                  "approximate); or a crystal prototype (rocksalt | diamond | fcc) with elements and the cubic lattice "
+                  "constant a_bohr.  A new structure starts as Hartree-Fock: set the method with propose_spec_patch.",
                   _schema({"kind": {"enum": ["molecule", "crystal"]}, "name": {"type": "string"},
+                           "atoms": {"type": "array", "items": {"type": "object", "properties": {
+                               "element": {"type": "string"}, "xyz_angstrom": {"type": "array", "items": {"type": "number"},
+                                                                                 "minItems": 3, "maxItems": 3}},
+                               "required": ["element", "xyz_angstrom"]}},
                            "prototype": {"enum": ["rocksalt", "diamond", "fcc"]}, "elements": {"type": "array", "items": {"type": "string"}},
                            "a_bohr": {"type": "number"}}, ["kind"]), self.build_structure)
         self._add("undo_last_edit", f"{W} Revert the last draft edit (either author's).", _schema({}), self.undo_last_edit)
@@ -212,7 +218,17 @@ class Toolset:
         return {"applied": True, "diff": [list(d) for d in e.diff()],
                 "summary": "draft: " + "; ".join(f"{p} {o!r} -> {n!r}" for p, o, n in e.diff()) + f" ({rationale})"}
 
-    def build_structure(self, kind: str, name: str = "", prototype: str = "", elements: tuple = (), a_bohr: float = 0.0) -> dict:
+    def build_structure(self, kind: str, name: str = "", prototype: str = "", elements: tuple = (), a_bohr: float = 0.0,
+                        atoms: tuple = ()) -> dict:
+        if kind == "molecule" and atoms:
+            unknown = [a["element"] for a in atoms if a["element"] not in Z_OF]
+            if unknown:
+                return {"error": f"unknown elements {unknown}"}
+            spec = molecule(name or "molecule", [Z_OF[a["element"]] for a in atoms],
+                            [x * molecules._A for a in atoms for x in a["xyz_angstrom"]])
+            e = self.draft.set(spec, "agent", f"build_structure {name or 'molecule'} from {len(atoms)} given atoms")
+            return {"applied": True, "summary": f"draft is now {spec.summary} ({len(atoms)} atoms, geometry as given -- "
+                                                "not a preset or database structure)", "diff_paths": len(e.diff())}
         if kind == "molecule":
             key = next((k for k in molecules.MOLECULES if name.lower() in k.lower()), None)
             if key is None:

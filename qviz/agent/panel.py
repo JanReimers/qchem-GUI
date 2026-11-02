@@ -11,12 +11,31 @@ import html
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from typing import Callable
+
 from ..draft import Edit, SpecDraft
 from .session import AgentSession, Event
 from .tools import RunRequest
 
 _STYLE = {"user": "#1f6feb", "assistant": "#2da44e", "tool_call": "#8b949e", "tool_result": "#8b949e",
-          "refused": "#cf222e", "stopped": "#cf222e"}
+          "refused": "#cf222e", "stopped": "#cf222e", "error": "#cf222e"}
+
+
+class _Done(QtCore.QObject):
+    """Brings a finished model call back to the GUI thread (queued across threads)."""
+    done = QtCore.Signal(object, object)          # (the continuation, the ModelTurn or the exception)
+
+
+class _Call(QtCore.QRunnable):
+    def __init__(self, call, done, bridge):
+        super().__init__(); self._call, self._done, self._bridge = call, done, bridge
+
+    def run(self):
+        try:
+            got = self._call()
+        except Exception as e:                        # noqa: BLE001 -- the session reports it in the chat
+            got = e
+        self._bridge.done.emit(self._done, got)
 
 
 class AgentPanel(QtWidgets.QWidget):
@@ -25,9 +44,11 @@ class AgentPanel(QtWidgets.QWidget):
         self.session, self.draft = session, draft
         lay = QtWidgets.QVBoxLayout(self)
         gate = session.gate.policy
+        off = session.client.leaves_box
         head = QtWidgets.QLabel(f"<b>{html.escape(session.client.name)}</b> · "
-                                + ("runs on this machine" if not session.client.leaves_box else "off-box client")
-                                + ("" if gate.granted else " · nothing leaves this machine (RunSpec Q4 unanswered)"))
+                                + ("runs on this machine" if not off else
+                                   "sends the conversation (specs, structures, results) to the Anthropic API"
+                                   if gate.granted else "would send off the machine, but nothing is sent: Q4 unanswered"))
         head.setWordWrap(True)
         lay.addWidget(head)
 
@@ -39,7 +60,12 @@ class AgentPanel(QtWidgets.QWidget):
         split.addWidget(self._cards_box)
         lay.addWidget(split, 1)
 
-        self.entry = QtWidgets.QLineEdit(); self.entry.setPlaceholderText("Ask the agent…  (offline planner: molecule water, set …, check, run)")
+        self.entry = QtWidgets.QLineEdit()
+        self.entry.setPlaceholderText("Ask the agent…" if off else "Ask the agent…  (offline: molecule water, set …, check, run)")
+        self._bridge = _Done(); self._bridge.done.connect(lambda k, got: k(got))
+        self._pool = QtCore.QThreadPool(); self._pool.setMaxThreadCount(1)   # model calls only: never the library
+        self._runner: Callable = ((lambda call, done: self._pool.start(_Call(call, done, self._bridge))) if off else
+                                  (lambda call, done: done(call())))
         self.entry.returnPressed.connect(self._send)
         lay.addWidget(self.entry)
 
@@ -51,11 +77,17 @@ class AgentPanel(QtWidgets.QWidget):
     # -- chat -----------------------------------------------------------------
     def _send(self):
         text = self.entry.text().strip()
-        if text:
+        if text and not self.session.busy:
             self.entry.clear()
-            self.session.send(text)
+            self.entry.setEnabled(False)                      # one message at a time; "idle" re-enables
+            self.session.start(text, self._runner)
 
     def _on_event(self, e: Event):
+        if e.kind == "idle":
+            self.entry.setEnabled(True); self.entry.setFocus()
+            return
+        if e.kind == "user" and self.session.client.leaves_box:
+            QtCore.QTimer.singleShot(0, lambda: self.chat.append('<span style="color:#8b949e"><i>thinking…</i></span>'))
         who = {"user": "you", "assistant": "agent", "tool_call": "→", "tool_result": "←"}.get(e.kind, e.kind)
         body = html.escape(e.text).replace("\n", "<br>")
         self.chat.append(f'<span style="color:{_STYLE[e.kind]}"><b>{who}</b></span> {body}')

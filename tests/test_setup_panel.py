@@ -184,7 +184,8 @@ class ScfKnobs(unittest.TestCase):
     def test_the_offline_agent_explains_itself_in_plain_lines(self):
         from qviz.agent.client import OfflinePlanner, _offline_help
         text = _offline_help()
-        self.assertTrue(text.startswith("No language model is connected yet"))
+        self.assertTrue(text.startswith("No language model is connected"))
+        self.assertIn("ANTHROPIC_API_KEY", text, "it says how to connect Claude")
         self.assertIn("\n  molecule water", text)
 
 
