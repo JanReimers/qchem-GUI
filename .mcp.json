@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "qchem-gui": {
+      "type": "stdio",
+      "command": "/home/janr/Code/qchem-GUI/.venv/bin/python",
+      "args": ["/home/janr/Code/qchem-GUI/scripts/qchem_mcp.py"]
+    }
+  }
+}

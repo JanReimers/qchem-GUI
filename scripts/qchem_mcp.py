@@ -6,7 +6,8 @@ Claude Code launches this process and speaks MCP (JSON-RPC 2.0, one message per 
 is forwarded to the GUI's agent bridge (qviz.agent.bridge: 127.0.0.1, the port and token in ~/.config/qchem-GUI/
 agent-bridge.json), where it runs against the GUI's own draft and workspace -- the edits appear in the Setup panel, undoable.
 
-Register once (from any directory):
+Registered for Claude Code sessions opened in ~/Code/qchem-GUI by its .mcp.json (the desktop app needs no CLI).  With the
+`claude` CLI installed it can instead be registered for every directory:
     claude mcp add --scope user qchem-gui -- /home/janr/Code/qchem-GUI/.venv/bin/python /home/janr/Code/qchem-GUI/scripts/qchem_mcp.py
 
 The tool list comes from the GUI when it is running, else from the same Toolset built here (so Claude Code sees the tools
