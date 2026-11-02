@@ -60,6 +60,20 @@ def _grids(record: dict) -> Optional[dict]:
     return None
 
 
+#: the meshes a run files under grids, as the Grids tab names them
+_MESHES = (("xcQuadrature", "XC mesh"), ("ppQuadrature", "PP mesh"), ("auxiliaryFit", "auxiliary-fit mesh"))
+
+
+def _mesh_line(what: str, m: dict) -> str:
+    """One mesh as its report states it: atom-centred (radial × directions) or uniform (N)."""
+    if "nDirs" in m:
+        return (f"{what}: {m.get('kind', 'Becke')}, {m.get('natom', '?')} atoms × {m.get('nRadial', m.get('radial'))} radial"
+                f" × {m['nDirs']} directions (Lebedev L={m.get('L', '?')}) = {m['points']:,} points"
+                + (f", {m['dropped']:,} dropped" if m.get("dropped") else ""))
+    n = m.get("N")
+    return f"{what}: {m.get('kind', '')} " + (f"{n[0]}×{n[1]}×{n[2]} " if n else "") + f"= {m['points']:,} points"
+
+
 def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
     """(summary lines, density-ladder rows) from a run record; ([], []) when it holds no grids."""
     if not record:
@@ -67,14 +81,10 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
     lines, rows = [], []
     g = _grids(record)
     q = (g or {}).get("xcQuadrature") or {}
-    if "points" in q:                                 # the mesh's own report (each mesh files itself, lane B b2dabdd0)
-        if "nDirs" in q:
-            lines.append(f"XC mesh: {q.get('kind', 'Becke')}, {q.get('natom', '?')} atoms × {q.get('nRadial', q.get('radial'))} radial"
-                         f" × {q['nDirs']} directions (Lebedev L={q.get('L', '?')}) = {q['points']:,} points"
-                         + (f", {q['dropped']:,} dropped" if q.get("dropped") else ""))
-        else:
-            n = q.get("N")
-            lines.append(f"XC mesh: {q.get('kind', '')} " + (f"{n[0]}×{n[1]}×{n[2]} " if n else "") + f"= {q['points']:,} points")
+    for key, what in _MESHES:                         # each mesh's own report (it files itself, lane B b2dabdd0)
+        m = (g or {}).get(key) or {}
+        if "points" in m:
+            lines.append(_mesh_line(what, m))
     for build in (True, False):
         for run in _runs(record, build):
             mesh = (run.get("folds") or {}).get("XC mesh")

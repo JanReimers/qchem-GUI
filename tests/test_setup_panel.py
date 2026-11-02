@@ -191,7 +191,9 @@ class GridsTab(unittest.TestCase):
         res = be.run(job)
         self.assertIn("basis", job.live["running@live"], "the record so far, taken at iteration 1 on the run's own thread")
         lines, rows = gridinfo.built(res.record)
-        self.assertRegex(lines[0], r"XC mesh: [\d,]+ points")
+        self.assertRegex(lines[0], r"^XC mesh: Becke, 3 atoms × \d+ radial × \d+ directions \(Lebedev L=\d+\) = [\d,]+ points",
+                         "the mesh's own report (grids.xcQuadrature), filed before iteration 1")
+        self.assertEqual(gridinfo.built(job.live)[0][0], lines[0], "the live snapshot already has it")
         self.assertEqual(rows, [], "a molecule has no density ladder")
         cond = gridinfo.conditioning(res.record)
         self.assertEqual(cond[0], "19 functions (dzvp)", "the run's basis section, read")

@@ -241,7 +241,8 @@ class Solid2Backend:
             steps.append(s)
             if not job.live:                          # setup has filed its sections (grids, basis) by iteration 1
                 snap = self._qc.current_report()
-                if snap:
+                if snap:                              # + the runs already filed: a crystal's grids are its BUILD run's
+                    job.live.update(json.loads(self._qc.report()))
                     job.live["running@live"] = json.loads(snap)
             if on_step:
                 on_step(s)
