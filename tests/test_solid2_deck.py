@@ -303,6 +303,22 @@ class TheBridgeRunsThem(unittest.TestCase):
         r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
+    def test_the_panel_s_gate_defaults_are_the_deck_s(self):
+        from qviz.setup_panel import GATE_DEFAULTS
+        be = solid2()
+        scf = json.loads(be._qc.SolidRun(be.translate(si_inline()).native["deck"]).resolved())["scf"]
+        for key, deck_key in D.DECK_GATES:
+            self.assertEqual(scf[deck_key], GATE_DEFAULTS[key], deck_key)
+
+    def test_levels_are_numbered_within_their_irrep(self):
+        from qviz import molecules
+        from qviz.spec import RunSpec
+        d = molecules.preset_spec("Methane (CH4)").to_dict()
+        d["accuracy"]["scf"] = {"impose_symmetry": True}
+        res = solid2().run(solid2().translate(RunSpec.from_dict(d)))
+        occ = [f"{L['n']}{L['label'].lower()}" for L in res.levels if L["occ"] > 0.5]
+        self.assertEqual(sorted(occ), ["1a1", "1b1", "1b2", "2a1", "3a1"], "C2v blocking: t2 splits into 3a1 + 1b1 + 1b2")
+
     def test_a_molecular_ladder_hands_over_to_gdm(self):
         from qviz.spec import Accuracy, molecule
         be = solid2()

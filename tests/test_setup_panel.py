@@ -191,16 +191,36 @@ class ScfKnobs(unittest.TestCase):
         from tests.test_solid2_deck import SI, crystal
         p = self.panel
         p.gates["gate_de"].setCurrentText("1e-8"); p.gates["gate_de"].activated.emit(p.gates["gate_de"].currentIndex())
-        p.gates["gate_fd"].setCurrentIndex(1); p.gates["gate_fd"].activated.emit(1)
+        p.gates["gate_fd"].setCurrentText("off"); p.gates["gate_fd"].activated.emit(p.gates["gate_fd"].currentIndex())
         scf = self.draft.spec.accuracy.scf
         self.assertEqual((scf["gate_de"], scf["gate_fd"]), (1e-8, "off"))
         n = self.be.translate(self.draft.spec).native
         self.assertEqual((n["gate_fd"], n["gate_drho"], n["gate_de"], n["gate_dfd"]), (0.0, -1.0, 1e-8, -1.0))
-        p.gates["gate_fd"].setCurrentIndex(0); p.gates["gate_fd"].activated.emit(0)
-        self.assertNotIn("gate_fd", self.draft.spec.accuracy.scf, "default removes the key")
+        p.gates["gate_fd"].setCurrentText("1e-5"); p.gates["gate_fd"].activated.emit(p.gates["gate_fd"].currentIndex())
+        self.assertNotIn("gate_fd", self.draft.spec.accuracy.scf, "picking the default's value removes the key")
         si = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}, "scf": {"gate_drho": 1e-6, "gate_dfd": "off"}})
         deck = solid2_deck.to_deck(si)["scf"]
         self.assertEqual((deck["minDeltaRhoPerElectron"], deck["minDeltaFD"]), (1e-6, "off"))
+
+    def test_an_unstated_gate_shows_its_value(self):
+        p = self.panel
+        self.assertEqual({k: b.currentText() for k, b in p.gates.items()},
+                         {"gate_fd": "1e-5", "gate_drho": "1e-4", "gate_de": "off", "gate_dfd": "off"})
+
+    def test_the_xc_mesh_knobs_show_eps_s_mesh_and_state_both_when_one_is_set(self):
+        from qviz.backends.solid2 import mesh_for
+        p = self.panel
+        self.draft.patch({"physics": {"theory": "DFT", "functional": "LDA"}}, "test")
+        mr, ma = mesh_for(self.draft.spec.accuracy.epsilon_Ha_per_atom)
+        self.assertEqual((p.mesh_radial.value(), p.mesh_angular.currentText()), (mr, str(ma)))
+        self.assertFalse(p.mesh_reset.isEnabled())
+        p.mesh_angular.setCurrentText("17"); p.mesh_angular.activated.emit(p.mesh_angular.currentIndex())
+        own = self.draft.spec.accuracy.representation["solid2"]
+        self.assertEqual((own["mesh_radial"], own["mesh_angular"]), (mr, 17))
+        self.assertEqual((self.be.translate(self.draft.spec).native["mesh_radial"],
+                          self.be.translate(self.draft.spec).native["mesh_angular"]), (mr, 17))
+        p.mesh_reset.click()
+        self.assertNotIn("mesh_angular", (self.draft.spec.accuracy.representation or {}).get("solid2") or {})
 
     def test_the_ladder_switch_over_and_alpha_min_reach_the_molecular_facade(self):
         p = self.panel

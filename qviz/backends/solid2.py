@@ -309,9 +309,10 @@ class Solid2Backend:
                                    diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"],
                                    relax_min=n["relax_min"], ladder_switch_at=n["ladder_switch_at"],
                                    **{k: n[k] for k, _ in solid2_deck.DECK_GATES}, on_iteration=step)
-        # the lib's label is "<n><irrep>" (e.g. "5No Symmetry "); the panel numbers levels itself
-        levels = [dict(L, n=i + 1, label=L["label"].lstrip("0123456789").strip())
-                  for i, L in enumerate(calc.levels())]
+        # the lib's label is "<n><irrep>" -- n counts WITHIN the irrep (methane C2v: 1A1 2A1 1B2 3A1 1B1), the Mulliken
+        # numbering; with no symmetry there is one irrep and n is the global count ("5No Symmetry")
+        levels = [dict(L, n=int(L["label"].strip()[:len(L["label"].strip()) - len(lab)] or i + 1), label=lab)
+                  for i, L in enumerate(calc.levels()) for lab in [L["label"].strip().lstrip("0123456789")]]
         polarized = any(L["spin"] for L in levels)
 
         def scalar(d, name, signed) -> ScalarField:

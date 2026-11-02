@@ -28,6 +28,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import basisinfo, geometry, gridinfo, molecules, states, symmetry
 from .backends import solid2_deck
 from .backends.base import BackendRegistry, data_structure
+from .backends.solid2 import mesh_for
 from .draft import Edit, SpecDraft
 from .spec import RunSpec, SpecError
 
@@ -51,8 +52,17 @@ GATE_KNOBS = (("gate_fd", "[F,D] below", "the worst irrep's orbital gradient [F,
                                          "Δρ limit-cycle above a fit floor while the energy has settled"),
               ("gate_dfd", "|Δ[F,D]| below", "the change in [F,D] between iterations (default off: a stagnation measure -- "
                                             "it passes by accident when [F,D] stalls high)"))
-GATE_CHOICES = ("default", "off", "1e-3", "1e-4", "1e-5", "1e-6", "1e-7", "1e-8", "1e-9", "1e-10")
+GATE_CHOICES = ("off", "1e-3", "1e-4", "1e-5", "1e-6", "1e-7", "1e-8", "1e-9", "1e-10")
+#: what an unstated gate IS (SCFParams' defaults; a crystal's deck reads the same struct -- tests pin it to the resolved deck)
+GATE_DEFAULTS = {"gate_fd": 1e-5, "gate_drho": 1e-4, "gate_de": "off", "gate_dfd": "off"}
+LEBEDEV_DEGREES = (5, 7, 9, 11, 15, 17, 19, 21, 23, 29, 31, 35, 41, 47)   # the library's Lebedev menu (13/25/27: excluded there)
 SWITCH_ATS = ("default (1e-6)", "1e-4", "1e-5", "1e-6", "1e-7", "1e-8", "off (stall only)")                                     # the back end Build runs on (the library's own pre-SCF steps)
+
+
+def _sci(v: float) -> str:
+    """A gate as its menu spells it: 1e-4, not 0.0001 (a non-power of ten keeps its digits: 5e-9, 2.5e-6)."""
+    t = f"{v:.0e}"
+    return (t if float(t) == v else f"{v:.6g}" if "e" in f"{v:.6g}" else f"{v:.1e}").replace("e-0", "e-")
 
 
 def _mono() -> QtGui.QFont:
@@ -263,7 +273,7 @@ class SetupPanel(QtWidgets.QWidget):
             box = QtWidgets.QComboBox(); box.addItems(GATE_CHOICES)
             box.setToolTip(f"Converged once every gate that is on is met.  This one: {tip}")
             box.activated.connect(lambda i, k=key, b=box: self._edit({"accuracy": {"scf": {k:
-                None if i == 0 else "off" if i == 1 else float(b.currentText())}}}, f"gate {k}"))
+                None if (v := "off" if i == 0 else float(b.currentText())) == GATE_DEFAULTS[k] else v}}}, f"gate {k}"))
             f.addRow(label, box)
             self.gates[key] = box
         self.maxit = QtWidgets.QSpinBox(); self.maxit.setRange(1, 10000); self.maxit.setValue(100)
@@ -276,6 +286,25 @@ class SetupPanel(QtWidgets.QWidget):
         self.grids_planned = QtWidgets.QLabel(); self.grids_planned.setWordWrap(True)
         self.grids_planned.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         f.addRow("Planned", self.grids_planned)
+        self.mesh_radial = QtWidgets.QSpinBox(); self.mesh_radial.setRange(10, 400); self.mesh_radial.setSingleStep(10)
+        self.mesh_radial.setToolTip("Radial points per atom of the molecular XC mesh (shown: ε's choice until you set it)")
+        self.mesh_angular = QtWidgets.QComboBox(); self.mesh_angular.addItems([str(d) for d in LEBEDEV_DEGREES])
+        self.mesh_angular.setToolTip("Lebedev angular degree L per radial shell (the directions grow ~ L²/3: 17 -> 110, 29 -> 302)")
+        self.mesh_radial.editingFinished.connect(lambda: self._mesh_edit("mesh_radial", self.mesh_radial.value()))
+        self.mesh_angular.activated.connect(lambda _i: self._mesh_edit("mesh_angular", int(self.mesh_angular.currentText())))
+        self.mesh_reset = QtWidgets.QPushButton("Back to ε's mesh")
+        self.mesh_reset.clicked.connect(lambda: self._mesh_edit(None, None))
+        mesh = QtWidgets.QWidget(); ml = QtWidgets.QHBoxLayout(mesh); ml.setContentsMargins(0, 0, 0, 0)
+        ml.addWidget(QtWidgets.QLabel("radial")); ml.addWidget(self.mesh_radial)
+        ml.addWidget(QtWidgets.QLabel("Lebedev L")); ml.addWidget(self.mesh_angular); ml.addWidget(self.mesh_reset); ml.addStretch(1)
+        f.addRow("XC mesh per atom", mesh)
+        self.density_ecut = QtWidgets.QDoubleSpinBox(); self.density_ecut.setRange(0.0, 2000.0); self.density_ecut.setDecimals(1)
+        self.density_ecut.setSingleStep(10.0); self.density_ecut.setSuffix(" Ha")
+        self.density_ecut.setSpecialValueText("the library's floor")
+        self.density_ecut.setToolTip("A crystal's density-grid cutoff (deck solid.densityEcut); 0 = the library's floor from the basis")
+        self.density_ecut.editingFinished.connect(lambda: self._deck_edit({"solid": {"densityEcut": self.density_ecut.value() or None}}))
+        f.addRow("Density Ecut", self.density_ecut)
+        self._grids_form = f
         self.grids_source = QtWidgets.QLabel(); self.grids_source.setWordWrap(True)
         f.addRow("Source", self.grids_source)
         self.grids_built = QtWidgets.QLabel(); self.grids_built.setWordWrap(True)
@@ -392,7 +421,7 @@ class SetupPanel(QtWidgets.QWidget):
 
     _rendering = False
     _EDITORS = ("mix_box", "alpha", "alpha_min", "alpha_max", "ladder_switch", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
-                "acc_box", "maxit")
+                "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut")
 
     def _render(self) -> None:
         s = self._spec()
@@ -460,6 +489,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.sym_detected.setText("\n".join(symmetry.detected(s, self._qc)))
         self._render_basis(s)
         self._render_grids(s)
+        self._render_grid_knobs(s)
         self.sym_check.setChecked(bool((ac.scf or {}).get("impose_symmetry")))
         try:
             self.geom.setPlainText(geometry.report(data_structure(s)))
@@ -518,11 +548,14 @@ class SetupPanel(QtWidgets.QWidget):
                 box.addItem(f"{v:g}"); i = box.count() - 1
             box.setCurrentIndex(i)
         for key, box in self.gates.items():
-            v = scf.get(key)
-            i = 0 if v is None else 1 if v == "off" else box.findText(f"{v:g}")
+            v = scf.get(key, GATE_DEFAULTS[key])
+            i = 0 if v == "off" else box.findText(_sci(v))
             if i < 0:
-                box.addItem(f"{v:g}"); i = box.count() - 1
+                box.addItem(_sci(v)); i = box.count() - 1
             box.setCurrentIndex(i)
+            d = GATE_DEFAULTS[key]
+            box.setToolTip(box.toolTip().split("  [")[0] + f"  [default {d if d == 'off' else _sci(d)}"
+                           + ("; stated" if key in scf else "") + "]")
         self.mom_check.setChecked(bool(scf.get("mom")))
         self.mom_start.setValue(int(scf.get("mom_start") or 0))
         self._scf_form.setRowVisible(self.mom_start, bool(scf.get("mom")))
@@ -577,6 +610,22 @@ class SetupPanel(QtWidgets.QWidget):
         why = self._why_no_build(s)
         return None, f"not built ({why})" if why else "not built yet: Build (or Run) fills this from the library's record"
 
+    def _render_grid_knobs(self, s: RunSpec) -> None:
+        mol = s.structure.kind == "molecule"
+        dft = s.physics.theory == "DFT" or s.physics.core == "pseudopotential"
+        own = (s.accuracy.representation or {}).get("solid2") or {}
+        mr, ma = mesh_for(s.accuracy.epsilon_Ha_per_atom)
+        mr, ma = int(own.get("mesh_radial", mr)), int(own.get("mesh_angular", ma))
+        self.mesh_radial.setValue(mr)
+        i = self.mesh_angular.findText(str(ma))
+        if i < 0:
+            self.mesh_angular.addItem(str(ma)); i = self.mesh_angular.count() - 1
+        self.mesh_angular.setCurrentIndex(i)
+        self.mesh_reset.setEnabled("mesh_radial" in own or "mesh_angular" in own)
+        self._grids_form.setRowVisible(self.mesh_reset.parentWidget(), mol and dft)
+        self._grids_form.setRowVisible(self.density_ecut, not mol)
+        self.density_ecut.setValue(float(((own.get("deck") or {}).get("solid") or {}).get("densityEcut") or 0.0))
+
     def _render_grids(self, s: RunSpec) -> None:
         try:
             self.grids_planned.setText("\n".join(gridinfo.planned(s)))
@@ -596,6 +645,23 @@ class SetupPanel(QtWidgets.QWidget):
         self.grids_table.resizeColumnsToContents()
         self.grids_table.setFixedHeight(self.grids_table.horizontalHeader().height() + 4
                                         + sum(self.grids_table.rowHeight(r) for r in range(len(rows))))
+
+    def _mesh_edit(self, key: Optional[str], value) -> None:
+        """A molecular XC-mesh setting (representation.solid2), or None: both dropped, ε chooses again."""
+        s = self.draft.spec
+        if s is None or self._run is not None or self._rendering:
+            return
+        own = (s.accuracy.representation or {}).get("solid2") or {}
+        if key is None:
+            patch = {"mesh_radial": None, "mesh_angular": None}           # merge-patch: None deletes
+        else:
+            mr, ma = mesh_for(s.accuracy.epsilon_Ha_per_atom)       # setting one states both: the pair is the mesh
+            patch = {"mesh_radial": int(own.get("mesh_radial", mr)), "mesh_angular": int(own.get("mesh_angular", ma)), key: value}
+        self._edit({"accuracy": {"representation": {"solid2": patch}}}, "XC mesh")
+
+    def _deck_edit(self, patch: dict) -> None:
+        """A crystal's stated deck setting (representation.solid2.deck), merge-patched (None drops a key)."""
+        self._edit({"accuracy": {"representation": {"solid2": {"deck": patch}}}}, "deck " + ", ".join(patch))
 
     def refresh_records(self) -> None:
         """Re-read the Basis and Grids tabs' records (a run of the shown spec started, streamed its setup, or finished)."""
