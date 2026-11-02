@@ -35,8 +35,8 @@ from pyvistaqt import QtInteractor
 from qviz import scene, compare, geometry
 from qviz.scene import field_to_imagedata
 from qviz.workspace import Workspace, RunStatus
-from qviz.backends import default_registry
-from qviz import molecules
+from qviz.backends import default_registry, solid2_deck
+from qviz import molecules, states
 from qviz.setup_panel import SetupPanel
 from qviz.backends.solid2 import _import_qchem_py
 from qviz.scfview import SCFView, export_column
@@ -183,7 +183,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.run_list.currentRowChanged.connect(self._on_row_changed)
         self.run_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.run_list.customContextMenuRequested.connect(self._run_menu)
-        self._runs_dock = self._dock("Runs", self.run_list, QtCore.Qt.LeftDockWidgetArea)
+        runs_box = QtWidgets.QWidget(); rl = QtWidgets.QVBoxLayout(runs_box); rl.setContentsMargins(0, 0, 0, 0)
+        self.disk_label = QtWidgets.QLabel(); self.disk_label.setWordWrap(True)
+        self.disk_label.setStyleSheet("color: palette(mid); padding: 2px 4px")
+        self.disk_label.setToolTip(f"Saved SCF states live in {states.state_dir()}: right-click a run to delete its state "
+                                   "or remove the run")
+        rl.addWidget(self.run_list, 1); rl.addWidget(self.disk_label)
+        self._runs_dock = self._dock("Runs", runs_box, QtCore.Qt.LeftDockWidgetArea)
 
         # Setup: one view of the shared draft (or a run's spec, read-only)
         self.draft = SpecDraft()
@@ -394,11 +400,49 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         run = self.ws.runs[row]
         menu = QtWidgets.QMenu(self)
+        idle = run.status not in (RunStatus.PENDING, RunStatus.RUNNING)
         act = menu.addAction("Recompute" + (" (brings back its 3D fields)" if run.restored else ""))
-        act.setEnabled(run.status not in (RunStatus.PENDING, RunStatus.RUNNING))
-        if menu.exec(self.run_list.viewport().mapToGlobal(pos)) is act:
+        act.setEnabled(idle)
+        saved = states.of(run)
+        cont = menu.addAction("Continue from this run…" if saved else
+                              "Continue from this run (no saved state: " + ("a molecule cannot save one yet)"
+                                                                            if run.spec.structure.kind == "molecule" else "none on disk)"))
+        cont.setToolTip("Its spec into the Setup draft, starting from its saved state: change the accelerator or gates, then ▶ Run")
+        cont.setEnabled(idle and saved is not None)
+        menu.addSeparator()
+        drop = menu.addAction(f"Delete saved state ({states.human(states.size(saved))})" if saved else "Delete saved state")
+        drop.setEnabled(idle and saved is not None)
+        gone = menu.addAction("Remove run" + (" and its saved state" if saved else ""))
+        gone.setEnabled(idle)
+        got = menu.exec(self.run_list.viewport().mapToGlobal(pos))
+        if got is act:
             self.ws.select(run)
             self._compute(run)
+        elif got is cont:
+            self.setup.continue_from(run)
+            self._setup_dock.raise_()
+            self.statusBar().showMessage(f"the draft continues from {run.summary}: pick the accelerator / gates, then ▶ Run")
+        elif got is drop:
+            self._release(run, "deleted")
+        elif got is gone:
+            if QtWidgets.QMessageBox.question(self, "Remove run", f"Remove {run.summary} from the workspace"
+                                              + (" and delete its saved state?" if saved else "?")) \
+                    is not QtWidgets.QMessageBox.Yes:
+                return
+            self._release(run, "removed with the run")
+            if self.setup.viewing_run is run:
+                self.setup.show_run(None)
+            self.ws.remove(run)
+
+    def _release(self, run, how: str) -> None:
+        """Delete `run`'s saved state unless another run points at the same file (the same deck)."""
+        try:
+            p = states.release(run, self.ws.runs)
+        except OSError as e:
+            self.statusBar().showMessage(f"could not delete the saved state: {e}"); return
+        self.statusBar().showMessage(f"saved state {how}: {p}" if p else
+                                     "the saved state is kept: another run in this workspace points at the same file")
+        self._on_ws_change(self.ws)
 
     def _autosave(self) -> None:
         """Quitting saves the workspace: to its own file when it has one, else to AUTOSAVE; the next start reopens it."""
@@ -410,6 +454,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self._settings.setValue("workspace/last", path)
         except Exception as e:                   # noqa: BLE001 -- never block quitting
             print(f"qchem viz: auto-save to {path} failed: {e}", file=sys.stderr)
+
+    def _show_disk(self, ws) -> None:
+        """The footer under the Runs list: what the saved states take, and what the disk has left -- a standing reminder."""
+        files, used = states.usage(ws.runs)
+        try:
+            free = states.human(states.free_bytes()) + " free"
+        except OSError:
+            free = "free space unknown"
+        self.disk_label.setText(f"saved states: {files} file{'s' * (files != 1)}, {states.human(used)}  ·  disk {free}")
 
     def _export_xyz(self):
         """The structure the Setup panel shows (the draft, or the viewed run's) to an .xyz file."""
@@ -428,10 +481,14 @@ class MainWindow(QtWidgets.QMainWindow):
         sel_row = -1
         for i, r in enumerate(ws.runs):
             e = f"{r.energy:.5f}" if r.energy is not None else "—"
-            self.run_list.addItem(f"{_STATUS_ICON[r.status]}  {r.summary}   E={e}")
+            n = states.size(states.of(r))
+            acc = (r.spec.accuracy.scf or {}).get("accelerator")
+            cont = f"   ↻ continued{' on ' + acc if acc else ''}" if solid2_deck.continues_from(r.spec) else ""
+            self.run_list.addItem(f"{_STATUS_ICON[r.status]}  {r.summary}   E={e}{cont}" + (f"   ⛁ {states.human(n)}" if n else ""))
             if r is ws.selected: sel_row = i
         if sel_row >= 0: self.run_list.setCurrentRow(sel_row)
         self._syncing = False
+        self._show_disk(ws)
         sel = ws.selected
         if sel is not None and sel.is_ready:
             self.statusBar().showMessage(f"{sel.summary}:  E = {sel.energy:.6f} Ha")

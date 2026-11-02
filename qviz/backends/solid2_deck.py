@@ -148,6 +148,8 @@ def to_deck(spec: RunSpec) -> dict:
         solid["multiplicity"] = int(round(abs(sum(m)))) + 1 if m else (ph.spin.multiplicity or 1)
         if m:
             solid["siteSpins"] = [_sign(x) for x in m]
+    if (ac.scf or {}).get("accelerator"):
+        solid["accelerator"] = ac.scf["accelerator"]      # SolidCalcOptions::accelerator by name: Auto | DIIS | GDM | Ladder | Null
     if ph.hubbard:
         solid["hubbard"] = [{"site": tags[t], "l": h.l, "U_eV": h.U_eV, **_PROJECTOR[h.projector]}
                             for h in ph.hubbard for t in h.sites]
@@ -177,6 +179,35 @@ def to_deck(spec: RunSpec) -> dict:
     return _merge(deck, code_block(spec, "solid2").get("deck") or {})
 
 
+def continues_from(spec: RunSpec) -> Optional[str]:
+    """The saved state `spec` starts from (its deck's state.restartFrom), None for a fresh start."""
+    return ((code_block(spec, "solid2").get("deck") or {}).get("state") or {}).get("restartFrom")
+
+
+def continued(spec: RunSpec, state_file: Optional[str]) -> RunSpec:
+    """`spec` starting from `state_file` (None: from scratch again).  The path rides the per-code deck block, so the run is
+    still a deck `rundeck` reproduces; the library judges the file's fingerprint against the built basis and REFUSES a
+    state that means nothing here (another structure, basis, k-mesh, electron count, spin group, functional) -- it continues
+    an exact resume, or a warm start across +U / grids / multiplicity / kT, under whatever accelerator and gates `spec`
+    states (no accelerator history is carried: a continuation is a fresh stage)."""
+    d = spec.to_dict()
+    ac = d.setdefault("accuracy", {})
+    rep = dict(ac.get("representation") or {})
+    own = copy.deepcopy(rep.get("solid2") or {})
+    deck = own.setdefault("deck", {})
+    state = deck.setdefault("state", {})
+    if state_file:
+        state["restartFrom"] = state_file
+    else:
+        state.pop("restartFrom", None)
+        if not state: deck.pop("state")
+        if not deck: own.pop("deck")
+    if own: rep["solid2"] = own
+    else: rep.pop("solid2", None)
+    ac["representation"] = rep or None
+    return RunSpec.from_dict(d).validate()
+
+
 def resolved(spec: RunSpec) -> list[tuple[str, str]]:
     """The settings a person reads beside the run (the Codes panel rows)."""
     d = to_deck(spec)
@@ -184,4 +215,6 @@ def resolved(spec: RunSpec) -> list[tuple[str, str]]:
     return [("structure", st if isinstance(st, str) else "inline (lattice + sites)"),
             ("k-mesh", "×".join(map(str, d["kmesh"]))),
             ("basis", d["basis"]["data"]),
-            ("ε", "not mapped: the deck's own defaults (the anchors' recipe)")]
+            ("ε", "not mapped: the deck's own defaults (the anchors' recipe)"),
+            ("accelerator", d.get("solid", {}).get("accelerator", "Auto (the facade's policy)")),
+            ("starts from", continues_from(spec) or "scratch (the deck's seed)")]

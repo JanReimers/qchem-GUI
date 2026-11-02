@@ -3,6 +3,8 @@ refusal path; a run's spec shows read-only; the Spec tab is the same draft as JS
 
     .venv/bin/python -m unittest tests.test_setup_panel
 """
+import os as _os, tempfile as _tempfile
+_os.environ.setdefault("QCHEM_GUI_STATES", _tempfile.mkdtemp(prefix="qchem-gui-states-"))   # saved SCF states: never ~
 import os
 import unittest
 

@@ -19,11 +19,14 @@ It shows ONE spec at a time:
 from __future__ import annotations
 
 import json
+import os
+import pathlib
 from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import basisinfo, geometry, gridinfo, molecules, symmetry
+from . import basisinfo, geometry, gridinfo, molecules, states, symmetry
+from .backends import solid2_deck
 from .backends.base import BackendRegistry, data_structure
 from .draft import Edit, SpecDraft
 from .spec import RunSpec, SpecError
@@ -31,7 +34,7 @@ from .spec import RunSpec, SpecError
 #: the method box's names -> (theory, functional)
 METHODS = {"HF": ("HF", None), "LDA": ("DFT", "LDA"), "Xalpha": ("DFT", "Xalpha")}
 BASES = ("dzvp", "orb1", "dzvp2", "tzvp", "valence_lowq_vb", "sipp_sr")
-ACCELERATORS = ("DIIS", "GDM", "Ladder")
+ACCELERATORS = ("Auto", "DIIS", "GDM", "Ladder", "Null")   # Auto: the facade's policy (a molecule's is DIIS)
 MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mixing; Kerker/Pulay mix in G space (crystals)
 EPSILONS = ("1e-3", "1e-4", "1e-5", "1e-6", "1e-7")
 _NOT_PRESET = "— draft —"
@@ -187,6 +190,13 @@ class SetupPanel(QtWidgets.QWidget):
 
     def _build_scf(self):
         f = self._page("SCF")
+        start = QtWidgets.QWidget(); sl = QtWidgets.QHBoxLayout(start); sl.setContentsMargins(0, 0, 0, 0)
+        self.start_label = QtWidgets.QLabel(); self.start_label.setWordWrap(True)
+        self.fresh_btn = QtWidgets.QPushButton("Start from scratch")
+        self.fresh_btn.setToolTip("Drop the saved state: the run seeds its density as a new run does")
+        self.fresh_btn.clicked.connect(lambda: self._continue_with(None, "Setup: start from scratch"))
+        sl.addWidget(self.start_label, 1); sl.addWidget(self.fresh_btn)
+        f.addRow("Starts from", start)
         self.acc_box = QtWidgets.QComboBox(); self.acc_box.addItems(ACCELERATORS)
         self.acc_box.activated.connect(lambda _i: self._edit({"accuracy": {"scf": {"accelerator": self.acc_box.currentText()}}}, "accelerator"))
         f.addRow("Accelerator", self.acc_box)
@@ -296,6 +306,22 @@ class SetupPanel(QtWidgets.QWidget):
         if self._run is not None:
             self.draft.set(self._run.spec, "user", f"copied from run {self._run.summary}")
             self.show_run(None)
+
+    def continue_from(self, run) -> None:
+        """Into the draft: `run`'s spec, starting from its saved state -- pick another accelerator (or gates) and ▶ Run."""
+        self.show_run(None)
+        self._continue_with(states.of(run), f"continue from run {run.summary}", base=run.spec)
+        self.tabs.setCurrentIndex(self.tabs.indexOf(self._scf_form.parentWidget()))
+
+    def _continue_with(self, state_file: Optional[str], why: str, base: Optional[RunSpec] = None) -> None:
+        spec = base or self.draft.spec
+        if spec is None or self._run is not None:
+            return
+        try:
+            self.draft.set(solid2_deck.continued(spec, state_file), "user", why)
+        except SpecError as e:
+            self.reason.setText(f"not applied: {e}")
+            self.refused.emit(str(e))
 
     # -- edits: every one goes through the draft --------------------------------
     def _edit(self, patch: dict, what: str) -> None:
@@ -435,8 +461,14 @@ class SetupPanel(QtWidgets.QWidget):
             self.eps_box.addItem(eps)
         self.eps_box.setCurrentText(eps)
         self.kmesh.setText("×".join(map(str, ac.kmesh)) if ac.kmesh else ("—" if mol else "not stated"))
+        start = solid2_deck.continues_from(s)
+        self.start_label.setText(f"the saved state {pathlib.Path(start).name}"
+                                 + ("" if os.path.exists(start) else "  <b>(the file is gone: the run will refuse)</b>")
+                                 if start else "scratch (the code's own seed)")
+        self.start_label.setToolTip(start or "")
+        self.fresh_btn.setVisible(bool(start) and self._run is None)
         scf = ac.scf or {}
-        self.acc_box.setCurrentText(str(scf.get("accelerator", "DIIS")))
+        self.acc_box.setCurrentText(str(scf.get("accelerator", "Auto")))
         self.mix_box.setCurrentText(str(scf.get("mixer", "Auto")))
         self.alpha.setValue(float(scf.get("mixing_alpha", 1.0)))
         self.alpha_max.setValue(float(scf.get("mixing_alpha_max", 1.0)))
@@ -447,7 +479,7 @@ class SetupPanel(QtWidgets.QWidget):
         acc = self.acc_box.currentText()
         self._scf_form.setRowVisible(self.ladder_info, acc == "Ladder" and mol)
         for w in (self.diis_depth, self.diis_sv, self.diis_engage):   # the molecular facade's AcceleratorOptions only
-            self._scf_form.setRowVisible(w, acc in ("DIIS", "Ladder") and mol)
+            self._scf_form.setRowVisible(w, acc in ("Auto", "DIIS", "Ladder") and mol)
         self.diis_depth.setValue(int(scf.get("diis_depth") or 0))
         for box, key in ((self.diis_sv, "diis_sv_tol"), (self.diis_engage, "diis_engage_fd")):
             v = scf.get(key)

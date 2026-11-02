@@ -19,6 +19,10 @@ build tree configured with -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DQCHEM_PYBIND=O
 When the extension is absent the back end still REGISTERS; its capabilities say why it is not
 installed, so the back-end strip greys it out instead of the app failing to start.
 
+SAVED STATES: every crystal deck carries state.save (a file qviz.states names for the deck), so a finished run -- converged
+or not -- leaves a state a later run can CONTINUE from (solid2_deck.continued: the deck's state.restartFrom, under whatever
+accelerator and gates that spec states).  A molecule has no saved state yet (the molecular facade has none).
+
 Scope today: single points.  A crystal's post-SCF actions (compute_U) need `rundeck` (deck::Build stops at the
 SCF); a crystal's fields and bands are not sampled through the bridge yet.
 """
@@ -33,6 +37,7 @@ from typing import Optional
 
 import numpy as np
 
+from .. import states
 from ..capability import Capabilities, Capability
 from . import gaussian_basis
 from ..data import ScalarField, SCFCell, SCFRow, VectorField
@@ -205,6 +210,8 @@ class Solid2Backend:
                        "a linear mixing step α is in (0, 1]"),
             Capability("accuracy.scf.diis_*", lambda s: s.structure.kind == "molecule" or not set(scf(s)) & set(DIIS_KNOBS),
                        "a crystal's deck has no DIIS knobs yet (the library's SolidAcceleratorOptions has no deck keys)"),
+            Capability("continue from a saved state", molecule(lambda s: solid2_deck.continues_from(s) is None),
+                       "the molecular facade has no saved state to continue from yet"),
             Capability("the basis covers every element", molecule(lambda s: _uncovered(s) is None),
                        lambda s: _uncovered(s) or ""),
         ])
@@ -213,6 +220,8 @@ class Solid2Backend:
     def translate(self, spec: RunSpec) -> Job:
         if spec.structure.kind == "crystal":
             deck = solid2_deck.to_deck(spec)
+            if (deck.get("basis") or {}).get("family") != "planeWave":     # a plane-wave state cannot be saved (OpenWork §3)
+                deck.setdefault("state", {})["save"] = states.path_for(spec.label, json.dumps(deck, sort_keys=True))
             text = json.dumps(deck, indent=2)
             return Job(NAME, spec, native={"deck": text}, resolved=dict(solid2_deck.resolved(spec)),
                        files={"deck": text.encode()})
@@ -235,7 +244,7 @@ class Solid2Backend:
             "polarized": bool(ph.spin.polarized),
             "multiplicity": int(ph.spin.multiplicity or 0),
             "max_iter": int(scf.get("max_iter", 100)),
-            "accelerator": str(scf.get("accelerator", "DIIS")),
+            "accelerator": "" if scf.get("accelerator", "Auto") == "Auto" else str(scf["accelerator"]),   # "": the facade's DIIS
             "mesh_radial": mesh[0], "mesh_angular": mesh[1],
             "relax_start": float(scf.get("mixing_alpha", 0.0)), "relax_max": float(scf.get("mixing_alpha_max", 0.0)),
             **{arg: type(zero)(scf.get(key, zero)) for key, (arg, zero) in DIIS_KNOBS.items()},
@@ -248,7 +257,7 @@ class Solid2Backend:
             "spin": ("polarized" if native["polarized"] or native["multiplicity"] > 1 else "unpolarized")
                     + (f", 2S+1={native['multiplicity']}" if native["multiplicity"] else ""),
             "point-group blocking": native["symmetry"],
-            "accelerator": native["accelerator"],
+            "accelerator": native["accelerator"] or "DIIS (Auto: the molecular facade's default)",
             "XC mesh": (f"{mesh[0]} radial x Lebedev {mesh[1]} per atom"
                         + (" stated" if own else " from ε, provisional")) if dft else "none (HF)",
             "SCF gates": "planned: the facade's defaults (ε not yet mapped); the run states what it used",
@@ -320,6 +329,7 @@ class Solid2Backend:
     def _run_deck(self, job: Job, step, steps: list[SCFRow]) -> Result:
         """A crystal: deck::Build (a refusal raises with the library's text), then the deck's schedule, streamed."""
         built, self._built = self._built, None
+        states.state_dir().mkdir(parents=True, exist_ok=True)      # the facade writes the state aside and renames it in
         self._qc.clear_report()
         if built is not None and built[0] == job.native["deck"]:
             run, self._prior = built[1], built[2]                  # the Build of THIS deck: converge it, do not rebuild
@@ -330,8 +340,9 @@ class Solid2Backend:
         finally:
             prior, self._prior = self._prior, {}
         record = prior | json.loads(self._qc.report())
+        saved = (json.loads(job.native["deck"]).get("state") or {}).get("save")
         return Result(converged=converged, energy_Ha=run.total_energy(), failure=run.failure(),
                       structure=data_structure(job.spec), scf=steps,
                       resolved=_as_run(job.resolved, record),
                       provenance={"code": NAME, "iterations": run.iterations(), "deck": json.loads(run.resolved())},
-                      record=record)
+                      record=record, state_file=saved if saved and os.path.exists(saved) else None)

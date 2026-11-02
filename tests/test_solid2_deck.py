@@ -6,6 +6,8 @@ lands on rundeck's energy to the last digit, and a refusal / an unconverged SCF 
 
     QCHEM_BUILD=~/Code/qchem-lane-g/build/Release .venv/bin/python -m unittest tests.test_solid2_deck
 """
+import os as _os, tempfile as _tempfile
+_os.environ.setdefault("QCHEM_GUI_STATES", _tempfile.mkdtemp(prefix="qchem-gui-states-"))   # saved SCF states: never ~
 import json
 import locale
 import os
@@ -152,6 +154,81 @@ def si_inline(**scf) -> RunSpec:
 def solid2():
     from qviz.backends.solid2 import Solid2Backend
     return Solid2Backend()
+
+
+class Continuation(unittest.TestCase):
+    """The SCF knobs a continuation changes reach the deck, and the start rides the deck's own state block."""
+    def test_the_stated_accelerator_reaches_the_deck(self):
+        self.assertEqual(D.to_deck(si_inline(accelerator="GDM"))["solid"]["accelerator"], "GDM")
+        self.assertNotIn("accelerator", D.to_deck(si_inline()).get("solid", {}), "unstated: the facade's Auto policy")
+
+    def test_continued_round_trips_and_keeps_the_recipe(self):
+        s = D.continued(si_inline(accelerator="GDM"), "/x/Si.h5")
+        self.assertEqual(D.continues_from(s), "/x/Si.h5")
+        deck = D.to_deck(s)
+        self.assertEqual(deck["state"], {"restartFrom": "/x/Si.h5"})
+        self.assertEqual(deck["solid"]["densityEcut"], 20.0, "the stated recipe stays")
+        fresh = D.continued(s, None)
+        self.assertIsNone(D.continues_from(fresh))
+        self.assertEqual(fresh, si_inline(accelerator="GDM"), "start-from-scratch is the spec it came from")
+
+    def test_every_crystal_deck_saves_to_its_own_file(self):
+        from qviz import states
+        a, b = (json.loads(solid2().translate(s).native["deck"]) for s in (si_inline(), si_inline(accelerator="GDM")))
+        self.assertTrue(a["state"]["save"].startswith(str(states.state_dir())))
+        self.assertNotEqual(a["state"]["save"], b["state"]["save"], "another deck, another file")
+        self.assertEqual(a["state"]["save"], json.loads(solid2().translate(si_inline()).native["deck"])["state"]["save"],
+                         "the same deck again overwrites its own file")
+
+
+@unittest.skipUnless(solid2()._qc is not None and RUNDECK.exists(), "qchem_py / rundeck not built (QCHEM_BUILD)")
+class SavedStates(unittest.TestCase):
+    def test_a_run_saves_its_state_and_a_continuation_under_gdm_resumes_from_it(self):
+        be = solid2()
+        first = be.run(be.translate(si_inline()))          # the facade's Auto (stated DIIS on Si Γ: 100 iterations, no convergence)
+        self.assertTrue(first.converged, first.failure)
+        self.assertTrue(first.state_file and os.path.exists(first.state_file))
+        rows = []
+        then = be.run(be.translate(D.continued(si_inline(accelerator="GDM"), first.state_file)), rows.append)
+        self.assertTrue(then.converged, then.failure)
+        self.assertLessEqual(len(rows), 4, "a continuation starts at the answer, not from scratch")
+        self.assertAlmostEqual(rows[0].energy, first.energy_Ha, delta=1e-6, msg="its first iterate is the saved state")
+        # the first run stopped at [F,D] ~5e-6 (its gate); the resume, on the saved D, reads [F,D] ~1e-14 in one iteration -- the
+        # energies agree to the FIRST run's convergence (measured 1.9e-7 Ha), not tighter
+        self.assertAlmostEqual(then.energy_Ha, first.energy_Ha, delta=1e-6)
+        self.assertNotEqual(then.state_file, first.state_file, "the continuation banks its own state")
+
+    def test_a_state_of_another_crystal_is_refused_in_the_library_s_words(self):
+        be = solid2()
+        si = be.run(be.translate(si_inline()))
+        strained = crystal("Si strained", fcc(10.5), SI[1],
+                           accuracy={"representation": {"basis": "sipp_sr", "solid2": {"deck": {"solid": {"densityEcut": 20.0}}}}})
+        with self.assertRaisesRegex(RuntimeError, "refused"):
+            be.run(be.translate(D.continued(strained, si.state_file)))
+
+    def test_a_molecule_cannot_continue_yet(self):
+        from qviz.spec import Accuracy, molecule
+        w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107],
+                     accuracy=Accuracy(representation={"solid2": {"deck": {"state": {"restartFrom": "/x.h5"}}}}))
+        v = solid2().capabilities().can_run(w)
+        self.assertFalse(v)
+        self.assertTrue(any("no saved state" in r for r in v.reasons), v.reasons)
+
+
+class States(unittest.TestCase):
+    def test_usage_counts_a_shared_file_once_and_release_keeps_it_while_shared(self):
+        from types import SimpleNamespace as NS
+        from qviz import states
+        d = pathlib.Path(tempfile.mkdtemp())
+        f = d / "a.h5"; f.write_bytes(b"x" * 1000)
+        r1, r2 = (NS(result=NS(state_file=str(f))) for _ in range(2))
+        self.assertEqual(states.usage([r1, r2]), (1, 1000))
+        self.assertIsNone(states.release(r1, [r1, r2]), "r2 still points at it")
+        self.assertTrue(f.exists())
+        self.assertEqual(states.release(r1, [r1]), str(f))
+        self.assertFalse(f.exists())
+        self.assertIsNone(r1.result.state_file)
+        self.assertEqual(states.usage([r1, r2]), (0, 0))
 
 
 @unittest.skipUnless(solid2()._qc is not None and RUNDECK.exists(), "qchem_py / rundeck not built (QCHEM_BUILD)")

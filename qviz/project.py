@@ -160,6 +160,7 @@ def _result_dict(r) -> dict:
     """The parts of a Result that outlive its calculation (no fields, no orbital sampler: those need the live code)."""
     return {"converged": r.converged, "energy_Ha": r.energy_Ha, "failure": r.failure, "polarized": r.polarized,
             "levels": r.levels, "resolved": r.resolved, "provenance": r.provenance, "record": r.record,
+            "state_file": r.state_file,
             "scf": [{"iteration": s.iteration, "energy": s.energy,
                      "cells": [{"title": c.title, "value": None if math.isnan(c.value) else c.value, "scale": c.scale,
                                 "text": c.text, "tolerance": c.tolerance, "unit": c.unit} for c in s.cells]}
@@ -173,4 +174,4 @@ def _result_from(d: dict, spec):
                                 c["tolerance"], c["unit"]) for c in s["cells"])) for s in d["scf"]]
     return Result(converged=d["converged"], energy_Ha=d["energy_Ha"], structure=data_structure(spec), scf=scf,
                   levels=d["levels"], polarized=d["polarized"], resolved=d["resolved"], provenance=d["provenance"],
-                  failure=d["failure"], record=d["record"])
+                  failure=d["failure"], record=d["record"], state_file=d.get("state_file"))

@@ -4,6 +4,8 @@ and SOLID² (when the qchem extension is built) reproduces the water anchor.
 
     QCHEM_BUILD=~/Code/qchem-lane-g/build/Release .venv/bin/python -m unittest discover -s tests
 """
+import os as _os, tempfile as _tempfile
+_os.environ.setdefault("QCHEM_GUI_STATES", _tempfile.mkdtemp(prefix="qchem-gui-states-"))   # saved SCF states: never ~
 import json
 import math
 import os

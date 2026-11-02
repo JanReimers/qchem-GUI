@@ -57,6 +57,7 @@ class Result:
     provenance: dict = field(default_factory=dict)
     failure: Optional[str] = None         # why the SCF did not converge, in the code's own words (SOLID²: its SCFFailure)
     record: dict = field(default_factory=dict)   # the code's own run record (SOLID²: report::GlobalReport -- grids, basis, scf)
+    state_file: Optional[str] = None      # the saved SCF state a later run can CONTINUE from (qviz.states); None: none saved
 
     @property
     def num_occupied(self) -> int:
