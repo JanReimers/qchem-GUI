@@ -64,6 +64,32 @@ class WorkspaceOnFake(unittest.TestCase):
         self.assertEqual([r.spec for r in back.runs], [r.spec for r in ws.runs])
         self.assertEqual([r.backend_name for r in back.runs], ["Fake", "Fake"])
 
+    def test_a_finished_run_comes_back_with_its_result_and_no_compute(self):
+        ws = self.ws()
+        done = ws.add_run(water())
+        done.result.record = {"water@t": {"grids": {"xcQuadrature": {"points": 100}}}}
+        quit_mid_run = ws.add_run(water(theory="DFT", functional="LDA"), compute=False)   # still pending at quit
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "w.qproj.h5")
+            project.save_workspace(path, ws)
+            self.assertEqual(ws.path, path)
+            back = project.load_workspace(path, ws.registry, compute=False)
+        a, b = back.runs
+        self.assertIs(a.status, RunStatus.READY)
+        self.assertTrue(a.restored, "no compute: the result came from the file")
+        self.assertEqual(a.energy, done.energy)
+        self.assertEqual([(c.title, c.text, c.tolerance) for c in a.scf[-1].cells],
+                         [(c.title, c.text, c.tolerance) for c in done.scf[-1].cells], "printed text and gates survive")
+        self.assertEqual(a.result.record, done.result.record)
+        self.assertEqual(a.report("orbitals")["num_occupied"], done.report("orbitals")["num_occupied"])
+        self.assertFalse(a.offers("density"), "fields need the live calculation")
+        self.assertIs(b.status, RunStatus.FAILED)
+        self.assertIn("quit", b.error)
+        self.assertEqual(back.path, path)
+        a.compute()
+        self.assertFalse(a.restored)
+        self.assertTrue(a.offers("density"), "a recompute brings the fields back")
+
     def test_a_v1_workspace_is_refused_and_the_converter_makes_a_v2_one(self):
         with tempfile.TemporaryDirectory() as d:
             v1, v2 = os.path.join(d, "v1.h5"), os.path.join(d, "v2.h5")

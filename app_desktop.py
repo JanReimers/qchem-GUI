@@ -57,6 +57,8 @@ if not _SOLID2.installed:
 #: bumped when the DEFAULT dock layout changes: a layout saved under another version is not restored
 _LAYOUT_VERSION = 2
 
+AUTOSAVE = pathlib.Path.home() / ".local" / "share" / "qchem-GUI" / "autosave.qproj.h5"   # an unnamed workspace, on quit
+
 _STATUS_ICON = {RunStatus.PENDING: "…", RunStatus.RUNNING: "⏳",
                 RunStatus.READY: "●", RunStatus.FAILED: "✗"}
 
@@ -144,11 +146,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pool.setMaxThreadCount(1)          # serialize computes (integral cache is a global singleton)
         self._build_ui()
         self._set_workspace(Workspace("Untitled", registry=REGISTRY))
+        # open-shell default (on-tenet), DRAFTED only: a run starts on the user's ▶ Run, never on its own
+        self.draft.set(molecules.preset_spec("Oxygen (O2, triplet)"), "user", "start-up preset")
+        last = str(self._settings.value("workspace/last", "") or "")
         if open_path:
-            self._open_workspace_path(open_path)  # CLI: load a .qproj.h5 instead of seeding
-        else:
-            # open-shell default (on-tenet), DRAFTED only: a run starts on the user's ▶ Run, never on its own
-            self.draft.set(molecules.preset_spec("Oxygen (O2, triplet)"), "user", "start-up preset")
+            self._open_workspace_path(open_path)  # CLI: load a .qproj.h5
+        elif last and pathlib.Path(last).exists():
+            self._open_workspace_path(last)       # the workspace quitting saved: restored, nothing recomputed
         self._default_state = self.saveState(_LAYOUT_VERSION)   # File > Reset Layout returns here
         self._restore_layout()                    # after docks exist
 
@@ -177,6 +181,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # Runs
         self.run_list = QtWidgets.QListWidget()
         self.run_list.currentRowChanged.connect(self._on_row_changed)
+        self.run_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.run_list.customContextMenuRequested.connect(self._run_menu)
         self._runs_dock = self._dock("Runs", self.run_list, QtCore.Qt.LeftDockWidgetArea)
 
         # Setup: one view of the shared draft (or a run's spec, read-only)
@@ -339,6 +345,10 @@ class MainWindow(QtWidgets.QMainWindow):
         spec ticked on two back ends queues two runs; each one's trace starts when it does (_on_compute_started)."""
         run = self.ws.add_run(spec, backend=backend, compute=False)   # shows immediately as pending
         self.ws.select(run)
+        self._compute(run)
+
+    def _compute(self, run):
+        """Compute `run` on the serial pool with its live trace (a new run, or a restored one being recomputed)."""
         bridge = _ScfBridge()
         bridge.started.connect(self._on_compute_started)
         bridge.step.connect(self._on_scf_step)
@@ -377,6 +387,29 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"xyz import failed: {e}"); return
         self.setup.set_structure(label, numbers, positions)   # into the draft; the user clicks ▶ Run
         self._setup_dock.raise_()
+
+    def _run_menu(self, pos):
+        row = self.run_list.indexAt(pos).row()
+        if not 0 <= row < len(self.ws.runs):
+            return
+        run = self.ws.runs[row]
+        menu = QtWidgets.QMenu(self)
+        act = menu.addAction("Recompute" + (" (brings back its 3D fields)" if run.restored else ""))
+        act.setEnabled(run.status not in (RunStatus.PENDING, RunStatus.RUNNING))
+        if menu.exec(self.run_list.viewport().mapToGlobal(pos)) is act:
+            self.ws.select(run)
+            self._compute(run)
+
+    def _autosave(self) -> None:
+        """Quitting saves the workspace: to its own file when it has one, else to AUTOSAVE; the next start reopens it."""
+        from qviz import project
+        path = self.ws.path or str(AUTOSAVE)
+        try:
+            pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+            project.save_workspace(path, self.ws)
+            self._settings.setValue("workspace/last", path)
+        except Exception as e:                   # noqa: BLE001 -- never block quitting
+            print(f"qchem viz: auto-save to {path} failed: {e}", file=sys.stderr)
 
     def _export_xyz(self):
         """The structure the Setup panel shows (the draft, or the viewed run's) to an .xyz file."""
@@ -505,6 +538,10 @@ class MainWindow(QtWidgets.QMainWindow):
         Compare-vs partner and split OFF this is the Δρ overlay; otherwise the plain field."""
         run = self.ws.selected
         if run is None or not run.is_ready:
+            return None, None, None, None
+        if run.restored:                         # reopened from a file: its fields need the live calculation
+            self.statusBar().showMessage(f"{run.summary}: restored from the workspace file -- right-click it → "
+                                         "Recompute to see its 3D fields")
             return None, None, None, None
         other = self._partner()
         if other is not None and not self.split_on.isChecked():   # Δρ mode (single view)
@@ -734,6 +771,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self, "Save Workspace", "workspace.qproj.h5", "qviz workspace (*.h5)")
         if path:
             project.save_workspace(path, self.ws)
+            self._settings.setValue("workspace/last", path)
+            self._title()
             self.statusBar().showMessage(f"saved {len(self.ws.runs)} run(s) → {path}")
 
     def _open_workspace(self):
@@ -750,10 +789,18 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"open failed: {e}"); return
         self._set_workspace(ws)
         self._cam_run = None
-        self._on_ws_change(ws)                        # show the pending runs immediately
-        for run in ws.runs:                           # compute off-thread, serialized
+        self._on_ws_change(ws)                        # restored runs show at once
+        todo = [r for r in ws.runs if r.status is RunStatus.PENDING]   # saved without a result: recompute
+        for run in todo:                              # off-thread, serialized
             self._pool.start(_ComputeTask(run))
-        self.statusBar().showMessage(f"opening {len(ws.runs)} run(s) from {path} …")
+        self._settings.setValue("workspace/last", path)
+        self._title()
+        self.statusBar().showMessage(f"opened {len(ws.runs)} run(s) from {path}"
+                                     + (f"; recomputing {len(todo)} saved without results" if todo else
+                                        " (restored: right-click a run → Recompute for its 3D fields)" if ws.runs else ""))
+
+    def _title(self) -> None:
+        self.setWindowTitle("qchem viz" + (f" — {pathlib.Path(self.ws.path).name}" if self.ws.path else ""))
 
     # -- PaperMill v1: publication export ---------------------------------
     def _export_image(self):
@@ -803,6 +850,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:                        # noqa: BLE001 -- best effort on the way out
             pass
         self._save_layout()                      # persist dock arrangement on exit
+        self._autosave()
         if self._bridge_agent is not None:
             self._bridge_agent.close()           # removes the bridge file: Claude Code's calls then say the GUI is closed
         super().closeEvent(e)

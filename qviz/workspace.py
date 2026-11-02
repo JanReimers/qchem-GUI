@@ -52,6 +52,7 @@ class Run:
         self._cache: dict = {}
         self._listeners: list[Callable[["Run"], None]] = []
         self._stop = False                # set by stop() from the GUI thread; read at the next SCF iteration
+        self._restored = False            # reopened from a file: result without its calculation
 
     @property
     def backend_name(self) -> str:
@@ -74,6 +75,16 @@ class Run:
             cb(self)
 
     # -- lifecycle --------------------------------------------------------
+    @property
+    def restored(self) -> bool:
+        """Reopened from a workspace file with its result but without its calculation: no 3D fields until recomputed."""
+        return self._restored
+
+    def restore(self, result, status: "RunStatus", error: Optional[str]) -> None:
+        """Take a saved result (workspace reopen): no compute; fields come back with compute()."""
+        self.result, self.status, self.error, self._restored = result, status, error, True
+        self._notify()
+
     def stop(self) -> None:
         """Ask a running (or queued) run to stop: it does at its next SCF iteration (a queued one, before it starts).
         Safe from any thread."""
@@ -84,6 +95,7 @@ class Run:
         SCF live.  Any failure (a refused capability, a throw in the code) becomes the FAILED state."""
         self.status = RunStatus.RUNNING
         self.error = None
+        self._restored = False
         self._notify()
         live = [False]
 
@@ -185,6 +197,7 @@ class Workspace:
         self.registry = registry or BackendRegistry()
         self.runs: list[Run] = []
         self.selected: Optional[Run] = None
+        self.path: Optional[str] = None           # the file it was opened from / last saved to (None: never saved)
         self._listeners: list[Callable[["Workspace"], None]] = []
 
     def on_change(self, cb: Callable[["Workspace"], None]) -> None:
