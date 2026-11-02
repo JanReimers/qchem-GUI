@@ -98,10 +98,13 @@ def conditioning(record: Optional[dict]) -> list[str]:
     out = []
     for build in (True, False):
         for run in _runs(record, build):
-            for b in (run.get("basis") or {}).get("perIrrep") or []:
+            basis = run.get("basis") or {}
+            for b in basis.get("perIrrep") or []:
                 if "lambdaMin" in b:
                     out.append(f"{b['irrep'].strip()}: {b['nFunctions']} functions, S min eigenvalue {b['lambdaMin']:.3e}, "
-                               f"condition number {b['cond']:.3g}")
+                               f"condition number {b['cond']:.3g}" + ("  ⚠ near-linear dependence" if b["lambdaMin"] < 1e-6 else ""))
+            if out and "nFunctions" in basis:
+                out.insert(0, f"{basis['nFunctions']} functions" + (f" ({basis['name']})" if basis.get("name") else ""))
             removed = (run.get("basis") or {}).get("removed")
             if removed:
                 out.append(f"[basis trim] removed {len(removed)} near-dependent combination(s)")

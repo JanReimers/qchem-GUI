@@ -107,6 +107,29 @@ def _import_qchem_py():
                   "-DCMAKE_POSITION_INDEPENDENT_CODE=ON) and set QCHEM_BUILD to that build dir")
 
 
+_OFF = 1e29                                       # the library's gate sentinel: at or above it, the gate is off
+_GATES = (("minFD", "[F,D]"), ("minDrho", "Δρ"), ("minDE", "ΔE"), ("minDFD", "Δ[F,D]"))
+
+
+def _gates_run(record: dict) -> Optional[str]:
+    """The SCF gates the run USED, from its record's scf.standard (the SCF iterator writes it); None when absent."""
+    for key, run in (record or {}).items():
+        std = (run.get("scf") or {}).get("standard")
+        if std and not key.startswith("gridAudit"):
+            on = [f"{label} {std[k]:g}" for k, label in _GATES if k in std and std[k] < _OFF]
+            return "run: " + ", ".join(on) + f"; at most {std.get('nMaxIter')} iterations"
+    return None
+
+
+def _as_run(resolved: dict, record: dict) -> dict:
+    """A job's resolved settings with what the run's record states in place of what was planned."""
+    out = dict(resolved)
+    gates = _gates_run(record)
+    if gates:
+        out["SCF gates"] = gates
+    return out
+
+
 class Solid2Backend:
     name = NAME
 
@@ -196,7 +219,7 @@ class Solid2Backend:
             "accelerator": native["accelerator"],
             "XC mesh": (f"{mesh[0]} radial x Lebedev {mesh[1]} per atom"
                         + (" stated" if own else " from ε, provisional")) if dft else "none (HF)",
-            "SCF gates": "facade defaults ([F,D] 1e-5, Δρ/e 1e-4); ε not yet mapped (provisional)",
+            "SCF gates": "planned: the facade's defaults (ε not yet mapped); the run states what it used",
             "max_iter": native["max_iter"],
             "linear mixing α": (f"start {native['relax_start'] or 'default (1.0)'}, "
                                 f"max {native['relax_max'] or 'default (1.0)'}"),
@@ -250,8 +273,8 @@ class Solid2Backend:
                       structure=data_structure(job.spec),
                       scf=steps, levels=levels, polarized=polarized, fields=fields,
                       orbital=lambda i, npts, pad: scalar(calc.orbital(i, npts, pad), f"MO #{i}", True),
-                      resolved=job.resolved,
-                      provenance={"code": NAME, "iterations": calc.iterations()}, record=json.loads(self._qc.report()))   # the closures above own `calc`
+                      resolved=_as_run(job.resolved, record := json.loads(self._qc.report())),
+                      provenance={"code": NAME, "iterations": calc.iterations()}, record=record)   # the closures above own `calc`
 
     def _run_deck(self, job: Job, step, steps: list[SCFRow]) -> Result:
         """A crystal: deck::Build (a refusal raises with the library's text), then the deck's schedule, streamed."""
@@ -259,6 +282,7 @@ class Solid2Backend:
         run = self._qc.SolidRun(job.native["deck"])
         converged = run.converge(step)
         return Result(converged=converged, energy_Ha=run.total_energy(), failure=run.failure(),
-                      structure=data_structure(job.spec), scf=steps, resolved=job.resolved,
+                      structure=data_structure(job.spec), scf=steps,
+                      resolved=_as_run(job.resolved, record := json.loads(self._qc.report())),
                       provenance={"code": NAME, "iterations": run.iterations(), "deck": json.loads(run.resolved())},
-                      record=json.loads(self._qc.report()))
+                      record=record)

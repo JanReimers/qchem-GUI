@@ -191,6 +191,12 @@ class GridsTab(unittest.TestCase):
         lines, rows = gridinfo.built(res.record)
         self.assertRegex(lines[0], r"XC mesh: [\d,]+ points")
         self.assertEqual(rows, [], "a molecule has no density ladder")
+        cond = gridinfo.conditioning(res.record)
+        self.assertEqual(cond[0], "19 functions (dzvp)", "the run's basis section, read")
+        self.assertIn("condition number", cond[1])
+        self.assertRegex(res.resolved["SCF gates"], r"^run: \[F,D\] 1e-05, Δρ 0.0001; at most \d+ iterations$",
+                         "the gates the record says the SCF used; off (1e30) gates are not listed")
+        self.assertTrue(be.translate(w).resolved["SCF gates"].startswith("planned:"))
 
 if __name__ == "__main__":
     unittest.main()

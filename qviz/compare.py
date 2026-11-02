@@ -80,7 +80,8 @@ def code_table(runs: list[Run]) -> tuple[list[str], list[tuple[str, list[str]]]]
             (f"ΔE vs {heads[0] if heads else ''} (μHa)", [fmt(None if x is None else 1e6 * x, "+.1f") for x in d]),
             ("ΔE per atom (μHa)", [fmt(None if x is None else 1e6 * x / nat, "+.1f") for x in d]),
             ("SCF iterations", [str(len(r.result.scf)) if r.result else "—" for r in runs])]
-    resolved = [(r.job.resolved if r.job else r.backend.translate(r.spec).resolved) for r in runs]
+    resolved = [(r.result.resolved if r.result else r.job.resolved if r.job else r.backend.translate(r.spec).resolved)
+                for r in runs]                     # a finished run's own: what its record states it used
     keys = list(dict.fromkeys(k for res in resolved for k in res))
     rows += [(k, [str(res.get(k, "")) for res in resolved]) for k in keys]
     return heads, rows

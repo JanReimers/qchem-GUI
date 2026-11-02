@@ -408,9 +408,12 @@ class SetupPanel(QtWidgets.QWidget):
 
     # -- back ends ----------------------------------------------------------------
     def _render_basis(self, s: RunSpec) -> None:
-        lines = basisinfo.summary(s, self._qc)
-        trim = gridinfo.conditioning(self._record(s)[0]) if s.structure.kind == "crystal" else []
-        self.basis_summary.setText("\n".join(lines[1:] + ["overlap per k (the library's record):"] + trim if trim else lines))
+        rec = gridinfo.conditioning(self._record(s)[0])    # a run's (or a crystal build's) own: read, never recomputed
+        if rec:
+            per = "per k" if s.structure.kind == "crystal" else "per irrep"
+            self.basis_summary.setText("\n".join([f"overlap {per} (the library's record):"] + rec))
+        else:
+            self.basis_summary.setText("\n".join(basisinfo.summary(s, self._qc)))
         rows = basisinfo.element_rows(s)
         self.basis_table.setRowCount(len(rows))
         for r, row in enumerate(rows):
