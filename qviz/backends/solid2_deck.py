@@ -112,6 +112,10 @@ def why_not(spec: RunSpec) -> Optional[str]:
     return None
 
 
+#: the spec's convergence gates (accuracy.scf) -> the deck's SCFParams Gates
+DECK_GATES = (("gate_fd", "minFD"), ("gate_drho", "minDeltaRhoPerElectron"), ("gate_de", "minDeltaE"), ("gate_dfd", "minDeltaFD"))
+
+
 def _merge(base: dict, over: dict) -> dict:
     out = copy.deepcopy(base)
     for k, v in over.items():
@@ -163,6 +167,10 @@ def to_deck(spec: RunSpec) -> dict:
     for ours, deck_key in (("mixing_alpha", "startingRelaxRo"), ("mixing_alpha_min", "minRelaxRo"), ("mixing_alpha_max", "maxRelaxRo")):
         if (ac.scf or {}).get(ours):
             scf[deck_key] = float(ac.scf[ours])           # linear D-mixing's start / adaptive ceiling (SCFParams)
+    for ours, deck_key in DECK_GATES:
+        v = (ac.scf or {}).get(ours)
+        if v is not None:
+            scf[deck_key] = v if v == "off" else float(v)   # a Gate: a number, or "off"
     if (ac.scf or {}).get("mixer"):
         scf["mixer"] = ac.scf["mixer"]                    # SCFParams::Mixing by name: Auto | Linear | Kerker | Pulay
     if (ac.scf or {}).get("mom"):

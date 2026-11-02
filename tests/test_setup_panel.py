@@ -186,6 +186,22 @@ class ScfKnobs(unittest.TestCase):
         self.assertEqual(deck["scf"]["minRelaxRo"], 0.05)
         self.assertTrue(self.be.capabilities().can_run(si))
 
+    def test_the_gates_reach_the_facade_and_the_deck(self):
+        from qviz.backends import solid2_deck
+        from tests.test_solid2_deck import SI, crystal
+        p = self.panel
+        p.gates["gate_de"].setCurrentText("1e-8"); p.gates["gate_de"].activated.emit(p.gates["gate_de"].currentIndex())
+        p.gates["gate_fd"].setCurrentIndex(1); p.gates["gate_fd"].activated.emit(1)
+        scf = self.draft.spec.accuracy.scf
+        self.assertEqual((scf["gate_de"], scf["gate_fd"]), (1e-8, "off"))
+        n = self.be.translate(self.draft.spec).native
+        self.assertEqual((n["gate_fd"], n["gate_drho"], n["gate_de"], n["gate_dfd"]), (0.0, -1.0, 1e-8, -1.0))
+        p.gates["gate_fd"].setCurrentIndex(0); p.gates["gate_fd"].activated.emit(0)
+        self.assertNotIn("gate_fd", self.draft.spec.accuracy.scf, "default removes the key")
+        si = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}, "scf": {"gate_drho": 1e-6, "gate_dfd": "off"}})
+        deck = solid2_deck.to_deck(si)["scf"]
+        self.assertEqual((deck["minDeltaRhoPerElectron"], deck["minDeltaFD"]), (1e-6, "off"))
+
     def test_the_ladder_switch_over_and_alpha_min_reach_the_molecular_facade(self):
         p = self.panel
         p.acc_box.setCurrentText("Ladder"); p.acc_box.activated.emit(0)

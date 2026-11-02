@@ -44,6 +44,14 @@ ENGAGE_FDS = ("default", "10", "1", "0.1", "0.01", "0.001")
 LADDER_INFO = ("Ladder: DIIS from the first iteration, handing off to GDM once |ΔE/E| falls below the switch-over "
                "(default 1e-6), or earlier if DIIS stalls (no progress for 5 iterations).  A molecule and a crystal read the "
                "same signal.  The DIIS rows set its DIIS rung.")
+#: the convergence gates a run can state (accuracy.scf): key, label, what it measures.  Absent = the code's default.
+GATE_KNOBS = (("gate_fd", "[F,D] below", "the worst irrep's orbital gradient [F,D] (the facade's default 1e-5)"),
+              ("gate_drho", "Δρ per electron below", "the density change per electron, on the run's own quadrature (default 1e-4)"),
+              ("gate_de", "|ΔE/E| below", "the relative total-energy change (default off): the physical gate when [F,D] and "
+                                         "Δρ limit-cycle above a fit floor while the energy has settled"),
+              ("gate_dfd", "|Δ[F,D]| below", "the change in [F,D] between iterations (default off: a stagnation measure -- "
+                                            "it passes by accident when [F,D] stalls high)"))
+GATE_CHOICES = ("default", "off", "1e-3", "1e-4", "1e-5", "1e-6", "1e-7", "1e-8", "1e-9", "1e-10")
 SWITCH_ATS = ("default (1e-6)", "1e-4", "1e-5", "1e-6", "1e-7", "1e-8", "off (stall only)")                                     # the back end Build runs on (the library's own pre-SCF steps)
 
 
@@ -250,6 +258,14 @@ class SetupPanel(QtWidgets.QWidget):
         self.mom_start.setToolTip("Plain aufbau for this many iterations, then capture the reference once and hold it")
         self.mom_start.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"mom_start": self.mom_start.value() or None}}}, "MOM start"))
         f.addRow("MOM reference at iteration", self.mom_start)
+        self.gates: dict[str, QtWidgets.QComboBox] = {}
+        for key, label, tip in GATE_KNOBS:
+            box = QtWidgets.QComboBox(); box.addItems(GATE_CHOICES)
+            box.setToolTip(f"Converged once every gate that is on is met.  This one: {tip}")
+            box.activated.connect(lambda i, k=key, b=box: self._edit({"accuracy": {"scf": {k:
+                None if i == 0 else "off" if i == 1 else float(b.currentText())}}}, f"gate {k}"))
+            f.addRow(label, box)
+            self.gates[key] = box
         self.maxit = QtWidgets.QSpinBox(); self.maxit.setRange(1, 10000); self.maxit.setValue(100)
         self.maxit.setToolTip("A safety net, never the recipe: a run that hits it FAILS")
         self.maxit.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"max_iter": self.maxit.value()}}}, "max_iter"))
@@ -382,7 +398,7 @@ class SetupPanel(QtWidgets.QWidget):
         s = self._spec()
         ro = self._run is not None
         self._rendering = True
-        editors = [getattr(self, n) for n in self._EDITORS]
+        editors = [getattr(self, n) for n in self._EDITORS] + list(self.gates.values())
         try:
             for w in editors:
                 w.blockSignals(True)
@@ -499,6 +515,12 @@ class SetupPanel(QtWidgets.QWidget):
             v = scf.get(key)
             i = box.findText(f"{v:g}") if v else 0
             if v and i < 0:
+                box.addItem(f"{v:g}"); i = box.count() - 1
+            box.setCurrentIndex(i)
+        for key, box in self.gates.items():
+            v = scf.get(key)
+            i = 0 if v is None else 1 if v == "off" else box.findText(f"{v:g}")
+            if i < 0:
                 box.addItem(f"{v:g}"); i = box.count() - 1
             box.setCurrentIndex(i)
         self.mom_check.setChecked(bool(scf.get("mom")))

@@ -8,6 +8,10 @@ ran.  A column with a number gets a tab, created the first time a number arrives
 `Update method`, SOLID²'s `XC ρ`) lives in the table only.  A convergence measure (scale "log") is drawn as |value| on
 a log axis; everything else (energies, moments, times) on a linear one.  Only the selected tab is visible, and the
 selection survives a new run when the new run has a column of that title.
+
+A column the code GATES on (SCFCell.tolerance: SOLID²'s [F,D], Δρ, ΔE/E when set) shows its gate under the header, and a
+value that meets it (|value| < gate, the iterator's own test) turns green: the log reads off which gate is still holding
+the run.
 """
 from __future__ import annotations
 
@@ -32,6 +36,14 @@ def column_xy(rows: list[SCFRow], title: str, log: bool) -> tuple[list[int], lis
     return [i for i, _ in pts], [v for _, v in pts]
 
 
+PASS_GREEN = "#3fb950"
+
+
+def meets(c: SCFCell) -> bool:
+    """Does this cell's value pass its column's gate?  The iterator's own test, |value| < gate (an ungated column never does)."""
+    return c.tolerance is not None and c.tolerance > 0 and not math.isnan(c.value) and abs(c.value) < c.tolerance
+
+
 class SCFView(QtCore.QObject):
     """The plot tabs (`tabs`) and the iteration table (`table`).  add_row() is the live feed; set_rows() shows a finished trace."""
 
@@ -44,6 +56,7 @@ class SCFView(QtCore.QObject):
         self.table.verticalHeader().setVisible(False)
         self.rows: list[SCFRow] = []
         self._cells: dict[str, SCFCell] = {}      # first cell seen per title: its scale and unit
+        self._titles: list[str] = []               # the table's columns after "#", by title (a header may carry its gate too)
         self._curves: dict[str, pg.PlotDataItem] = {}
         self._wanted: str | None = None           # the tab the user last picked: kept across runs
         self._auto = False                         # this run's tab was chosen for the user (a convergence measure)
@@ -52,7 +65,7 @@ class SCFView(QtCore.QObject):
 
     # -- feed ----------------------------------------------------------------
     def clear(self) -> None:
-        self.rows.clear(); self._cells.clear(); self._curves.clear(); self._auto = False
+        self.rows.clear(); self._cells.clear(); self._curves.clear(); self._titles.clear(); self._auto = False
         self.tabs.blockSignals(True); self.tabs.clear(); self.tabs.blockSignals(False)
         self.table.setRowCount(0); self.table.setColumnCount(1); self.table.setHorizontalHeaderLabels(["#"])
 
@@ -66,7 +79,7 @@ class SCFView(QtCore.QObject):
         for c in row.cells:
             if c.title not in self._cells:
                 self._cells[c.title] = c
-                self._add_column(c.title)
+                self._add_column(c)
             if c.title not in self._curves and not math.isnan(c.value):
                 self._add_tab(self._cells[c.title])
         for title, curve in self._curves.items():
@@ -78,10 +91,15 @@ class SCFView(QtCore.QObject):
         return self.tabs.tabText(self.tabs.currentIndex()) if self.tabs.count() else None
 
     # -- internals -----------------------------------------------------------
-    def _add_column(self, title: str) -> None:
+    def _add_column(self, c: SCFCell) -> None:
         n = self.table.columnCount()
         self.table.insertColumn(n)
-        self.table.setHorizontalHeaderItem(n, QtWidgets.QTableWidgetItem(title))
+        self._titles.append(c.title)
+        gated = c.tolerance is not None and c.tolerance > 0
+        item = QtWidgets.QTableWidgetItem(f"{c.title}\n(< {c.tolerance:g})" if gated else c.title)
+        if gated:
+            item.setToolTip(f"the run converges on this column once |{c.title}| < {c.tolerance:g}: green rows meet it")
+        self.table.setHorizontalHeaderItem(n, item)
 
     def _add_tab(self, c: SCFCell) -> None:
         log = c.scale == "log"
@@ -110,10 +128,13 @@ class SCFView(QtCore.QObject):
         n = self.table.rowCount()
         self.table.insertRow(n)
         self.table.setItem(n, 0, QtWidgets.QTableWidgetItem(str(row.iteration)))
-        shown = {c.title: c.shown() for c in row.cells}
-        for k in range(1, self.table.columnCount()):
-            item = QtWidgets.QTableWidgetItem(shown.get(self.table.horizontalHeaderItem(k).text(), ""))
+        cells = {c.title: c for c in row.cells}
+        for k, title in enumerate(self._titles, start=1):
+            c = cells.get(title)
+            item = QtWidgets.QTableWidgetItem(c.shown() if c else "")
             item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            if c is not None and meets(c):
+                item.setForeground(QtGui.QColor(PASS_GREEN))
             self.table.setItem(n, k, item)
         self.table.resizeColumnsToContents()
         self.table.scrollToBottom()

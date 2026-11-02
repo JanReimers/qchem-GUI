@@ -287,6 +287,22 @@ class TheBridgeRunsThem(unittest.TestCase):
         r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
+    def test_the_gates_a_run_states_are_the_gates_it_ran_and_the_row_carries(self):
+        from qviz.spec import Accuracy, molecule
+        be = solid2()
+        w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
+                     accuracy=Accuracy(scf={"gate_de": 1e-8, "gate_drho": "off"}))
+        rows = []
+        res = be.run(be.translate(w), rows.append)
+        self.assertTrue(res.converged, res.failure)
+        std = next(r["scf"]["standard"] for k, r in res.record.items() if (r.get("scf") or {}).get("standard"))
+        self.assertEqual((std["minDE"], std["minDrho"], std["minFD"]), (1e-8, "off", 1e-5))
+        tol = {c.title: c.tolerance for c in rows[-1].cells}
+        self.assertEqual((tol["ΔE/E"], tol["Δρ"], tol["[F,D]"]), (1e-8, None, 1e-5))
+        deck = json.loads(be.translate(si_inline(gate_de=1e-7, gate_dfd="off")).native["deck"])
+        r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
     def test_a_molecular_ladder_hands_over_to_gdm(self):
         from qviz.spec import Accuracy, molecule
         be = solid2()

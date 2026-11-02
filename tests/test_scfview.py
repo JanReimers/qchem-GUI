@@ -30,6 +30,19 @@ def cp2k_rows():
 
 
 class TheView(unittest.TestCase):
+    def test_a_gated_column_shows_its_gate_and_turns_green_once_met(self):
+        from qviz.scfview import PASS_GREEN
+        v = SCFView()
+        for i, fd in enumerate((3e-3, 2e-5, 4e-6), start=1):
+            v.add_row(SCFRow(i, -1.0, (SCFCell("[F,D]", fd, "log", f"{fd:.2e}", 1e-5),
+                                       SCFCell("ΔE/E", 1e-9, "log", "1.00e-09", None))))
+        heads = [v.table.horizontalHeaderItem(k).text() for k in range(v.table.columnCount())]
+        self.assertEqual(heads, ["#", "[F,D]\n(< 1e-05)", "ΔE/E"], "an ungated (off) column shows no gate")
+        green = [v.table.item(r, 1).foreground().color().name() == PASS_GREEN for r in range(3)]
+        self.assertEqual(green, [False, False, True], "white above the gate, green below")
+        self.assertNotEqual(v.table.item(2, 2).foreground().color().name(), PASS_GREEN, "no gate, never green")
+        self.assertEqual(v.table.item(2, 1).text(), "4.00e-06", "the gate in the header does not break the row lookup")
+
     def test_a_tab_per_numeric_column_under_the_code_s_title(self):
         v = SCFView()
         v.set_rows(cp2k_rows())

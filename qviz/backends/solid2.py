@@ -248,6 +248,8 @@ class Solid2Backend:
             "mom": bool(scf.get("mom", False)), "mom_start": int(scf.get("mom_start", 0)),
             "relax_min": float(scf.get("mixing_alpha_min") or 0.0),
             "ladder_switch_at": -1.0 if scf.get("ladder_switch_at") is None else float(scf["ladder_switch_at"]),
+            **{key: -1.0 if scf.get(key) is None else 0.0 if scf[key] == "off" else float(scf[key])   # < 0: default, 0: off
+               for key, _ in solid2_deck.DECK_GATES},
         }
         resolved = {
             "basis": f"{basis} ({'stated' if rep.get('basis') else 'from ε, provisional'})",
@@ -259,7 +261,9 @@ class Solid2Backend:
             "accelerator": native["accelerator"] or "DIIS (Auto: the molecular facade's default)",
             "XC mesh": (f"{mesh[0]} radial x Lebedev {mesh[1]} per atom"
                         + (" stated" if own else " from ε, provisional")) if dft else "none (HF)",
-            "SCF gates": "planned: the facade's defaults (ε not yet mapped); the run states what it used",
+            "SCF gates": "planned: " + (", ".join(f"{k[5:]} {scf[k]}" for k, _ in solid2_deck.DECK_GATES if k in scf)
+                                        + "; the rest the facade's defaults" if any(k in scf for k, _ in solid2_deck.DECK_GATES)
+                                        else "the facade's defaults (ε not yet mapped)") + "; the run states what it used",
             "max_iter": native["max_iter"],
             "linear mixing α": (f"start {native['relax_start'] or 'default (1.0)'}, "
                                 f"min {native['relax_min'] or 'default (no floor)'}, "
@@ -303,7 +307,8 @@ class Solid2Backend:
                                    mesh_angular=n["mesh_angular"], relax_start=n.get("relax_start", 0.0),
                                    relax_max=n.get("relax_max", 0.0), diis_depth=n["diis_depth"], diis_sv_tol=n["diis_sv_tol"],
                                    diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"],
-                                   relax_min=n["relax_min"], ladder_switch_at=n["ladder_switch_at"], on_iteration=step)
+                                   relax_min=n["relax_min"], ladder_switch_at=n["ladder_switch_at"],
+                                   **{k: n[k] for k, _ in solid2_deck.DECK_GATES}, on_iteration=step)
         # the lib's label is "<n><irrep>" (e.g. "5No Symmetry "); the panel numbers levels itself
         levels = [dict(L, n=i + 1, label=L["label"].lstrip("0123456789").strip())
                   for i, L in enumerate(calc.levels())]
