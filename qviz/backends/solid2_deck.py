@@ -160,7 +160,7 @@ def to_deck(spec: RunSpec) -> dict:
         scf["smearingkT"] = ph.occupations.kT_Ha
     if (ac.scf or {}).get("max_iter"):
         scf["NMaxIter"] = ac.scf["max_iter"]
-    for ours, deck_key in (("mixing_alpha", "startingRelaxRo"), ("mixing_alpha_max", "maxRelaxRo")):
+    for ours, deck_key in (("mixing_alpha", "startingRelaxRo"), ("mixing_alpha_min", "minRelaxRo"), ("mixing_alpha_max", "maxRelaxRo")):
         if (ac.scf or {}).get(ours):
             scf[deck_key] = float(ac.scf[ours])           # linear D-mixing's start / adaptive ceiling (SCFParams)
     if (ac.scf or {}).get("mixer"):
@@ -171,6 +171,16 @@ def to_deck(spec: RunSpec) -> dict:
             scf["momStartIter"] = int(ac.scf["mom_start"])
     if scf:
         deck["scf"] = scf
+    sc = ac.scf or {}
+    diis = {deck_key: type_(sc[ours]) for ours, deck_key, type_ in (("diis_depth", "nProj", int), ("diis_sv_tol", "svTol", float),
+                                                                    ("diis_engage_fd", "engageBelowFD", float)) if sc.get(ours)}
+    accel: dict = {}
+    if diis:
+        accel["diis"] = diis                              # SolidAcceleratorOptions.diis: DIIS's and the Ladder's DIIS rung
+    if sc.get("ladder_switch_at") is not None:
+        accel["ladder"] = {"switchAt": float(sc["ladder_switch_at"])}   # the Ladder's DIIS -> GDM hand-off (0: on stall only)
+    if accel:
+        deck["acceleratorOptions"] = accel
     if tk.kind == "compute_U":
         cu = tk.compute_U
         lr = cu.method == "linear-response"

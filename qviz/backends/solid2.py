@@ -115,7 +115,6 @@ def _import_qchem_py():
 #: the spec's DIIS knobs (accuracy.scf) -> the molecular facade's AcceleratorOptions (the Ladder's DIIS rung reads them too)
 DIIS_KNOBS = {"diis_depth": ("diis_depth", 0), "diis_sv_tol": ("diis_sv_tol", 0.0), "diis_engage_fd": ("diis_engage_fd", 0.0)}
 
-_OFF = 1e29   # TODO(lane A 3bf35f8e): gates become std::optional, recorded "off"; drop this sentinel on that merge
 _GATES = (("minFD", "[F,D]"), ("minDrho", "Δρ"), ("minDE", "ΔE"), ("minDFD", "Δ[F,D]"))
 
 
@@ -125,7 +124,7 @@ def _gates_run(record: dict) -> Optional[str]:
         std = (run.get("scf") or {}).get("standard")
         if std and not key.startswith("gridAudit"):
             on = [f"{label} {std[k]:g}" for k, label in _GATES
-                  if isinstance(std.get(k), (int, float)) and std[k] < _OFF]          # "off" / absent: not a gate
+                  if isinstance(std.get(k), (int, float))]                              # "off" / absent: not a gate
             return "run: " + ", ".join(on) + f"; at most {std.get('nMaxIter')} iterations"
     return None
 
@@ -208,8 +207,6 @@ class Solid2Backend:
             Capability("accuracy.scf.mixing_alpha", lambda s: all(0.0 < float(scf(s)[k]) <= 1.0 for k in
                                                                  ("mixing_alpha", "mixing_alpha_max") if k in scf(s)),
                        "a linear mixing step α is in (0, 1]"),
-            Capability("accuracy.scf.diis_*", lambda s: s.structure.kind == "molecule" or not set(scf(s)) & set(DIIS_KNOBS),
-                       "a crystal's deck has no DIIS knobs yet (the library's SolidAcceleratorOptions has no deck keys)"),
             Capability("continue from a saved state", molecule(lambda s: solid2_deck.continues_from(s) is None),
                        "the molecular facade has no saved state to continue from yet"),
             Capability("the basis covers every element", molecule(lambda s: _uncovered(s) is None),
@@ -249,6 +246,8 @@ class Solid2Backend:
             "relax_start": float(scf.get("mixing_alpha", 0.0)), "relax_max": float(scf.get("mixing_alpha_max", 0.0)),
             **{arg: type(zero)(scf.get(key, zero)) for key, (arg, zero) in DIIS_KNOBS.items()},
             "mom": bool(scf.get("mom", False)), "mom_start": int(scf.get("mom_start", 0)),
+            "relax_min": float(scf.get("mixing_alpha_min") or 0.0),
+            "ladder_switch_at": -1.0 if scf.get("ladder_switch_at") is None else float(scf["ladder_switch_at"]),
         }
         resolved = {
             "basis": f"{basis} ({'stated' if rep.get('basis') else 'from ε, provisional'})",
@@ -263,7 +262,10 @@ class Solid2Backend:
             "SCF gates": "planned: the facade's defaults (ε not yet mapped); the run states what it used",
             "max_iter": native["max_iter"],
             "linear mixing α": (f"start {native['relax_start'] or 'default (1.0)'}, "
+                                f"min {native['relax_min'] or 'default (no floor)'}, "
                                 f"max {native['relax_max'] or 'default (1.0)'}"),
+            "Ladder → GDM": ("default (|ΔE/E| < 1e-6)" if native["ladder_switch_at"] < 0 else "on stall only"
+                             if native["ladder_switch_at"] == 0 else f"|ΔE/E| < {native['ladder_switch_at']:g}"),
             "DIIS": (f"depth {native['diis_depth'] or 'default (4)'}, SV floor {native['diis_sv_tol'] or 'default (5e-9)'}, "
                      f"engages below [F,D] {native['diis_engage_fd'] or 'default (Z-scaled)'}"),
             "MOM": (f"on, reference captured at iteration {native['mom_start'] or 'default (10)'}" if native["mom"] else "off"),
@@ -300,7 +302,8 @@ class Solid2Backend:
                                    accelerator=n["accelerator"], mesh_radial=n["mesh_radial"],
                                    mesh_angular=n["mesh_angular"], relax_start=n.get("relax_start", 0.0),
                                    relax_max=n.get("relax_max", 0.0), diis_depth=n["diis_depth"], diis_sv_tol=n["diis_sv_tol"],
-                                   diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"], on_iteration=step)
+                                   diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"],
+                                   relax_min=n["relax_min"], ladder_switch_at=n["ladder_switch_at"], on_iteration=step)
         # the lib's label is "<n><irrep>" (e.g. "5No Symmetry "); the panel numbers levels itself
         levels = [dict(L, n=i + 1, label=L["label"].lstrip("0123456789").strip())
                   for i, L in enumerate(calc.levels())]

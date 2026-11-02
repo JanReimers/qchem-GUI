@@ -174,14 +174,31 @@ class ScfKnobs(unittest.TestCase):
         p.mom_check.setChecked(False)
         self.assertNotIn("mom", self.draft.spec.accuracy.scf, "unticking removes the key (the lib's default)")
 
-    def test_a_crystal_takes_mom_through_its_deck_and_refuses_diis_knobs(self):
+    def test_a_crystal_takes_mom_diis_and_the_ladder_through_its_deck(self):
         from qviz.backends import solid2_deck
         from tests.test_solid2_deck import SI, crystal
-        si = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}, "scf": {"mom": True, "mom_start": 4}})
-        self.assertEqual({k: v for k, v in solid2_deck.to_deck(si)["scf"].items() if "MOM" in k or "mom" in k},
-                         {"useMOM": True, "momStartIter": 4})
-        bad = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}, "scf": {"diis_depth": 6}})
-        self.assertIn("no DIIS knobs", "; ".join(self.be.capabilities().can_run(bad).reasons))
+        si = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}, "scf": {
+            "mom": True, "mom_start": 4, "diis_depth": 6, "diis_sv_tol": 1e-7, "accelerator": "Ladder", "ladder_switch_at": 1e-5,
+            "mixer": "Linear", "mixing_alpha_min": 0.05}})
+        deck = solid2_deck.to_deck(si)
+        self.assertEqual({k: v for k, v in deck["scf"].items() if "MOM" in k or "mom" in k}, {"useMOM": True, "momStartIter": 4})
+        self.assertEqual(deck["acceleratorOptions"], {"diis": {"nProj": 6, "svTol": 1e-7}, "ladder": {"switchAt": 1e-5}})
+        self.assertEqual(deck["scf"]["minRelaxRo"], 0.05)
+        self.assertTrue(self.be.capabilities().can_run(si))
+
+    def test_the_ladder_switch_over_and_alpha_min_reach_the_molecular_facade(self):
+        p = self.panel
+        p.acc_box.setCurrentText("Ladder"); p.acc_box.activated.emit(0)
+        self.assertFalse(p.ladder_switch.isHidden(), "the Ladder's hand-off is a knob")
+        p.ladder_switch.setCurrentText("1e-5"); p.ladder_switch.activated.emit(p.ladder_switch.currentIndex())
+        self.assertEqual(self.be.translate(self.draft.spec).native["ladder_switch_at"], 1e-5)
+        p.ladder_switch.setCurrentIndex(p.ladder_switch.count() - 1); p.ladder_switch.activated.emit(p.ladder_switch.currentIndex())
+        self.assertEqual(self.be.translate(self.draft.spec).native["ladder_switch_at"], 0.0, "off = on stall only")
+        p.ladder_switch.setCurrentIndex(0); p.ladder_switch.activated.emit(0)
+        self.assertEqual(self.be.translate(self.draft.spec).native["ladder_switch_at"], -1.0, "default = the lib's")
+        p.mix_box.setCurrentText("Linear"); p.mix_box.activated.emit(0)
+        p.alpha_min.setValue(0.1); p.alpha_min.editingFinished.emit()
+        self.assertEqual(self.be.translate(self.draft.spec).native["relax_min"], 0.1)
 
     def test_the_offline_agent_explains_itself_in_plain_lines(self):
         from qviz.agent.client import OfflinePlanner, _offline_help

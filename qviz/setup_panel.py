@@ -40,11 +40,11 @@ EPSILONS = ("1e-3", "1e-4", "1e-5", "1e-6", "1e-7")
 _NOT_PRESET = "— draft —"
 _SOLID2 = "SOLID²"
 SV_TOLS = ("default (5e-9)", "1e-10", "1e-9", "1e-8", "1e-7", "1e-6", "1e-5")
-ENGAGE_FDS = ("default (Z-scaled)", "10", "1", "0.1", "0.01", "0.001")
-LADDER_INFO = ("Ladder, as the library runs it for a molecule today: DIIS from the first iteration, then GDM only if DIIS "
-               "stalls (out of history and no progress for 5 iterations while |ΔE/E| > 1e-8).  A converging DIIS never hands "
-               "over, so on most molecules this is plain DIIS.  The ΔE/E switch-over (to GDM at ΔE/E < 1e-6) is off and "
-               "cannot be set yet: a library fix, logged.  The DIIS rows below set its DIIS rung.")                                     # the back end Build runs on (the library's own pre-SCF steps)
+ENGAGE_FDS = ("default", "10", "1", "0.1", "0.01", "0.001")
+LADDER_INFO = ("Ladder: DIIS from the first iteration, handing off to GDM once |ΔE/E| falls below the switch-over "
+               "(default 1e-6), or earlier if DIIS stalls (no progress for 5 iterations).  A molecule and a crystal read the "
+               "same signal.  The DIIS rows set its DIIS rung.")
+SWITCH_ATS = ("default (1e-6)", "1e-4", "1e-5", "1e-6", "1e-7", "1e-8", "off (stall only)")                                     # the back end Build runs on (the library's own pre-SCF steps)
 
 
 def _mono() -> QtGui.QFont:
@@ -203,6 +203,11 @@ class SetupPanel(QtWidgets.QWidget):
         self.ladder_info = QtWidgets.QLabel(LADDER_INFO); self.ladder_info.setWordWrap(True)
         self.ladder_info.setStyleSheet("color: palette(mid)")
         f.addRow("", self.ladder_info)
+        self.ladder_switch = QtWidgets.QComboBox(); self.ladder_switch.addItems(SWITCH_ATS)
+        self.ladder_switch.setToolTip("The Ladder hands DIIS over to GDM once |ΔE/E| falls below this; off = only when DIIS stalls")
+        self.ladder_switch.activated.connect(lambda i: self._edit({"accuracy": {"scf": {"ladder_switch_at":
+            None if i == 0 else 0.0 if i == len(SWITCH_ATS) - 1 else float(SWITCH_ATS[i])}}}, "Ladder switch-over"))
+        f.addRow("Ladder → GDM below |ΔE/E|", self.ladder_switch)
         self.diis_depth = QtWidgets.QSpinBox(); self.diis_depth.setRange(0, 30); self.diis_depth.setSpecialValueText("default (4)")
         self.diis_depth.setToolTip("How many past Fock/error pairs DIIS extrapolates over")
         self.diis_depth.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"diis_depth": self.diis_depth.value() or None}}}, "DIIS depth"))
@@ -223,13 +228,17 @@ class SetupPanel(QtWidgets.QWidget):
         self.mix_box.activated.connect(lambda _i: self._edit({"accuracy": {"scf": {"mixer": self.mix_box.currentText()}}}, "mixer"))
         f.addRow("ρ mixer", self.mix_box)
         self._scf_form = f
-        self.alpha, self.alpha_max = QtWidgets.QDoubleSpinBox(), QtWidgets.QDoubleSpinBox()
+        self.alpha, self.alpha_min, self.alpha_max = QtWidgets.QDoubleSpinBox(), QtWidgets.QDoubleSpinBox(), QtWidgets.QDoubleSpinBox()
         for box, key, tip in ((self.alpha, "mixing_alpha", "where linear mixing's step α starts"),
+                              (self.alpha_min, "mixing_alpha_min", "the floor the adaptive α may shrink to; raise it if α "
+                                                                   "collapses and the SCF crawls"),
                               (self.alpha_max, "mixing_alpha_max", "the ceiling the adaptive α may grow to; lower it to "
                                                                    "tamp down an oscillating SCF")):
             box.setRange(0.01, 1.0); box.setSingleStep(0.05); box.setDecimals(2); box.setValue(1.0); box.setToolTip(tip)
-            box.editingFinished.connect(lambda b=box, k=key: self._edit({"accuracy": {"scf": {k: round(b.value(), 4)}}}, k))
+            box.editingFinished.connect(lambda b=box, k=key: self._edit({"accuracy": {"scf": {k: round(b.value(), 4) or None}}}, k))
         f.addRow("α start", self.alpha)
+        self.alpha_min.setRange(0.0, 1.0); self.alpha_min.setSpecialValueText("default (no floor)")
+        f.addRow("α min", self.alpha_min)
         f.addRow("α max", self.alpha_max)
         self.mom_check = QtWidgets.QCheckBox("Maximum Overlap Method")
         self.mom_check.setToolTip("Occupy the orbitals that overlap most with a fixed reference occupied set, instead of the "
@@ -366,7 +375,7 @@ class SetupPanel(QtWidgets.QWidget):
             self._render()
 
     _rendering = False
-    _EDITORS = ("mix_box", "alpha", "alpha_max", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
+    _EDITORS = ("mix_box", "alpha", "alpha_min", "alpha_max", "ladder_switch", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
                 "acc_box", "maxit")
 
     def _render(self) -> None:
@@ -472,14 +481,19 @@ class SetupPanel(QtWidgets.QWidget):
         self.mix_box.setCurrentText(str(scf.get("mixer", "Auto")))
         self.alpha.setValue(float(scf.get("mixing_alpha", 1.0)))
         self.alpha_max.setValue(float(scf.get("mixing_alpha_max", 1.0)))
+        self.alpha_min.setValue(float(scf.get("mixing_alpha_min") or 0.0))
         linear = self.mix_box.currentText() == "Linear" or (self.mix_box.currentText() == "Auto" and mol)
-        for box in (self.alpha, self.alpha_max):     # linear mixing's α means nothing to Kerker / Pulay
+        for box in (self.alpha, self.alpha_min, self.alpha_max):     # linear mixing's α means nothing to Kerker / Pulay
             self._scf_form.setRowVisible(box, linear)
         self.maxit.setValue(int(scf.get("max_iter", 100)))
         acc = self.acc_box.currentText()
-        self._scf_form.setRowVisible(self.ladder_info, acc == "Ladder" and mol)
-        for w in (self.diis_depth, self.diis_sv, self.diis_engage):   # the molecular facade's AcceleratorOptions only
-            self._scf_form.setRowVisible(w, acc in ("Auto", "DIIS", "Ladder") and mol)
+        for w in (self.ladder_info, self.ladder_switch):
+            self._scf_form.setRowVisible(w, acc == "Ladder")
+        sw = scf.get("ladder_switch_at")
+        self.ladder_switch.setCurrentIndex(0 if sw is None else len(SWITCH_ATS) - 1 if sw == 0
+                                           else max(0, self.ladder_switch.findText(f"{sw:g}")))
+        for w in (self.diis_depth, self.diis_sv, self.diis_engage):   # a DIIS rung runs (a molecule's Auto is DIIS)
+            self._scf_form.setRowVisible(w, acc in ("DIIS", "Ladder") or (acc == "Auto" and mol))
         self.diis_depth.setValue(int(scf.get("diis_depth") or 0))
         for box, key in ((self.diis_sv, "diis_sv_tol"), (self.diis_engage, "diis_engage_fd")):
             v = scf.get(key)

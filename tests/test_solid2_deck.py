@@ -281,6 +281,25 @@ class TheBridgeRunsThem(unittest.TestCase):
         r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
+    def test_the_accelerator_knobs_reach_a_deck_the_library_takes(self):
+        deck = json.loads(solid2().translate(si_inline(accelerator="Ladder", diis_depth=6, diis_engage_fd=0.1,
+                                                       ladder_switch_at=1e-5, mixer="Linear", mixing_alpha_min=0.05)).native["deck"])
+        r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
+    def test_a_molecular_ladder_hands_over_to_gdm(self):
+        from qviz.spec import Accuracy, molecule
+        be = solid2()
+        for switch, hands in ((None, True), (0.0, False)):
+            with self.subTest(switch_at=switch):
+                w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
+                             accuracy=Accuracy(scf={"accelerator": "Ladder", **({} if switch is None else {"ladder_switch_at": switch})}))
+                rows = []
+                res = be.run(be.translate(w), rows.append)
+                self.assertTrue(res.converged, res.failure)
+                accel = [c.text for r in rows for c in r.cells if c.title == "accel"]
+                self.assertEqual(any("GDM" in a for a in accel), hands, accel)
+
     def test_a_molecule_takes_no_g_space_mixer(self):
         from qviz.spec import Accuracy, molecule
         w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
