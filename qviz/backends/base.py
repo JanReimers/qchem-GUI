@@ -32,6 +32,7 @@ class Job:
     resolved: dict                        # the ε-derived / stated native settings table, shown and recorded
     files: dict[str, bytes] = field(default_factory=dict)   # an external code's input deck(s)
     command: tuple[str, ...] = ()         # an external code's argv WITHOUT the mpirun launcher (the runner adds it)
+    live: dict = field(default_factory=dict)   # the code's run record SO FAR, while it runs (SOLID²: taken at iteration 1)
 
 
 @dataclass(frozen=True)

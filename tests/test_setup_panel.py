@@ -187,7 +187,9 @@ class GridsTab(unittest.TestCase):
         w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
                      accuracy=Accuracy(representation={"basis": "dzvp"}))
         be = Solid2Backend()
-        res = be.run(be.translate(w))
+        job = be.translate(w)
+        res = be.run(job)
+        self.assertIn("basis", job.live["running@live"], "the record so far, taken at iteration 1 on the run's own thread")
         lines, rows = gridinfo.built(res.record)
         self.assertRegex(lines[0], r"XC mesh: [\d,]+ points")
         self.assertEqual(rows, [], "a molecule has no density ladder")
@@ -197,6 +199,15 @@ class GridsTab(unittest.TestCase):
         self.assertRegex(res.resolved["SCF gates"], r"^run: \[F,D\] 1e-05, Δρ 0.0001; at most \d+ iterations$",
                          "the gates the record says the SCF used; off (1e30) gates are not listed")
         self.assertTrue(be.translate(w).resolved["SCF gates"].startswith("planned:"))
+
+    def test_a_mesh_that_reports_itself_is_read_as_filed(self):
+        from qviz import gridinfo
+        rec = {"water@t": {"grids": {"xcQuadrature": {"kind": "Becke", "natom": 3, "radial": "MHL", "nRadial": 50,
+                                                      "angular": "Lebedev", "L": 23, "nDirs": 194, "points": 29100,
+                                                      "dropped": 0}},
+                           "folds": {"XC mesh": {"ops": 0, "raw": 29100, "reps": 29100, "factor": 1.0}}}}
+        lines, _ = gridinfo.built(rec)
+        self.assertEqual(lines, ["XC mesh: Becke, 3 atoms × 50 radial × 194 directions (Lebedev L=23) = 29,100 points"])
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,19 +65,27 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
     if not record:
         return [], []
     lines, rows = [], []
+    g = _grids(record)
+    q = (g or {}).get("xcQuadrature") or {}
+    if "points" in q:                                 # the mesh's own report (each mesh files itself, lane B b2dabdd0)
+        if "nDirs" in q:
+            lines.append(f"XC mesh: {q.get('kind', 'Becke')}, {q.get('natom', '?')} atoms × {q.get('nRadial', q.get('radial'))} radial"
+                         f" × {q['nDirs']} directions (Lebedev L={q.get('L', '?')}) = {q['points']:,} points"
+                         + (f", {q['dropped']:,} dropped" if q.get("dropped") else ""))
+        else:
+            n = q.get("N")
+            lines.append(f"XC mesh: {q.get('kind', '')} " + (f"{n[0]}×{n[1]}×{n[2]} " if n else "") + f"= {q['points']:,} points")
     for build in (True, False):
         for run in _runs(record, build):
             mesh = (run.get("folds") or {}).get("XC mesh")
-            if mesh:
+            if mesh and "points" not in q:
                 lines.append(f"XC mesh: {mesh['raw']:,} points"
                              + (f", {mesh['reps']:,} after the {mesh['ops']}-operation fold" if mesh.get("ops") else ""))
-    g = _grids(record)
     if g:
         if "densityEcut" in g:
             lines.append(f"density Ecut floor: {g['densityEcut']:g} Ha (cutoff factor {g.get('cutoffFactor', 0):g})")
-        q = (g.get("xcQuadrature") or {}).get("kind")
-        if q:
-            lines.append(f"XC quadrature: {q}")
+        if q.get("kind") and "points" not in q:
+            lines.append(f"XC quadrature: {q['kind']}")
         for key, what in (("densityFit", "density fit"), ("vxcFitGrid", "Vxc fit")):
             f = g.get(key)
             if f and "N" in f:

@@ -85,9 +85,14 @@ class Run:
         self.status = RunStatus.RUNNING
         self.error = None
         self._notify()
+        live = [False]
+
         def step(row: SCFRow) -> None:
             if self._stop:
                 raise RunStopped()
+            if not live[0] and self.job is not None and self.job.live:
+                live[0] = True
+                self._notify()                       # the run's record so far is readable (the Setup ▸ Grids tab)
             if on_step:
                 on_step(row)
         try:

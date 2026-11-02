@@ -426,8 +426,12 @@ class SetupPanel(QtWidgets.QWidget):
     def _record(self, s: RunSpec) -> tuple[Optional[dict], str]:
         """The run record to read grids from, and where it came from: the viewed run's, else this spec's preview."""
         if self._run is not None:
-            rec = self._run.result.record if self._run.result is not None else None
-            return rec, ("from this run's record" if rec else "this run left no record (not finished, or not SOLID²)")
+            if self._run.result is not None and self._run.result.record:
+                return self._run.result.record, "from this run's record"
+            job = self._run.job
+            if job is not None and job.live:
+                return job.live, "from this run's record so far (it is running)"
+            return None, "this run has no record yet (not started, or not SOLID²)"
         got = self._previews.get(s.to_json())
         if isinstance(got, Exception):
             return None, f"the build refused: {got}"

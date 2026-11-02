@@ -239,6 +239,10 @@ class Solid2Backend:
             s = SCFRow(it, E, tuple(SCFCell(title, math.nan if title in _TABLE_ONLY else value, scale, text, tol)
                                     for title, value, text, tol, scale in cells))
             steps.append(s)
+            if not job.live:                          # setup has filed its sections (grids, basis) by iteration 1
+                snap = self._qc.current_report()
+                if snap:
+                    job.live["running@live"] = json.loads(snap)
             if on_step:
                 on_step(s)
 
