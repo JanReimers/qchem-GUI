@@ -7,12 +7,10 @@ The record is the library speaking for itself: every provider files what it buil
 (the GPW density ladder, the density / Vxc fit rasters, the grid audits) and the "folds" section (the molecular XC
 mesh's point count).  This module only picks rows out of it; it never re-derives a grid.
 
-A crystal's grids exist once deck::Build has run, before any SCF -- `preview` builds one for the Setup tab.  A
-molecule's XC mesh is built inside its SCF, so its point count arrives with the run.
+The record comes from a run, or from SOLID²'s Build (every pre-SCF step, no SCF: Solid2Backend.build).
 """
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from .backends import solid2_deck
@@ -129,13 +127,3 @@ def conditioning(record: Optional[dict]) -> list[str]:
             if out:
                 return out
     return out
-
-
-def preview(spec: RunSpec, qc) -> dict:
-    """A crystal's run record after deck::Build alone (no SCF): its grids and basis, as the run will build them.  Raises
-    with the library's text on a refusal."""
-    if spec.structure.kind != "crystal":
-        raise ValueError("a molecule's XC mesh is built inside its SCF; its record arrives with the run")
-    qc.clear_report()
-    qc.SolidRun(json.dumps(solid2_deck.to_deck(spec)))
-    return json.loads(qc.report())

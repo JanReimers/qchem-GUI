@@ -2,8 +2,10 @@
 qviz.setup_panel -- the Setup panel: everything that DEFINES a run, in tabs (Structure, Hamiltonian, Basis, SCF, Grids,
 Spec, Codes), with the back-end strip and ▶ Run underneath (doc/RunSpecPlan.md §5.1).
 
-The Grids tab shows the grids ε resolves to: PLANNED from the spec, BUILT from the library's own run record (a run's, or
-for a crystal a deck::Build-only preview on the app's serial library thread).
+Build (beside ▶ Run) does every pre-SCF step on SOLID² -- basis, grids, pseudopotentials -- on the app's serial library
+thread, and the Basis and Grids tabs then read the build run's record.  Run without Build is fine: SOLID² converges a
+kept Build of the same deck, and builds afresh otherwise (after an edit).  The Grids tab shows the grids ε resolves to:
+PLANNED from the spec, BUILT from the library's own run record (a run's, or this spec's Build).
 
 It shows ONE spec at a time:
   * the shared DRAFT (editable).  Every widget edit is a user-authored patch to the SpecDraft, on the same undo stack
@@ -33,6 +35,7 @@ ACCELERATORS = ("DIIS", "GDM", "Ladder")
 MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mixing; Kerker/Pulay mix in G space (crystals)
 EPSILONS = ("1e-3", "1e-4", "1e-5", "1e-6", "1e-7")
 _NOT_PRESET = "— draft —"
+_SOLID2 = "SOLID²"                                     # the back end Build runs on (the library's own pre-SCF steps)
 
 
 def _mono() -> QtGui.QFont:
@@ -42,7 +45,7 @@ def _mono() -> QtGui.QFont:
 class SetupPanel(QtWidgets.QWidget):
     run_requested = QtCore.Signal(object, list)        # (spec, back-end names): the user's ▶ Run click
     refused = QtCore.Signal(str)                       # an edit the spec refused, and why
-    _previewed = QtCore.Signal(str, object)            # (spec JSON, record | the exception): a grid preview finished
+    _built = QtCore.Signal(str, object)                # (spec JSON, record | the exception): a Build finished
 
     def __init__(self, draft: SpecDraft, registry: BackendRegistry, qc=None,
                  legs: Optional[Callable[[object], tuple[list[str], list[tuple[str, list[str]]]]]] = None,
@@ -50,12 +53,12 @@ class SetupPanel(QtWidgets.QWidget):
         """`qc`: the qchem_py module for the detected symmetry (None: the readout says so).  `legs(run)`: the Codes table
         for a run and its sibling runs of the same spec (compare.code_table), supplied by the app that owns the workspace.
         `serial(fn)`: runs `fn` on the app's ONE library thread (the library's caches and run record are process globals,
-        so a grid preview must not overlap a run); None runs it here, synchronously."""
+        so a Build must not overlap a run); None runs it here, synchronously."""
         super().__init__(parent)
         self.draft, self.registry, self._qc, self._legs = draft, registry, qc, legs
         self._serial = serial or (lambda fn: fn())
-        self._previews: dict[str, object] = {}         # spec JSON -> its preview's record, or the exception it raised
-        self._previewed.connect(self._on_previewed)
+        self._builds: dict[str, object] = {}           # spec JSON -> its Build's record, "pending", or the exception it raised
+        self._built.connect(self._on_built)
         self._run = None                               # the run shown read-only; None = the draft
         outer = QtWidgets.QVBoxLayout(self); outer.setContentsMargins(4, 4, 4, 4)
 
@@ -84,13 +87,17 @@ class SetupPanel(QtWidgets.QWidget):
         foot.addRow(self.undo_btn, self.reason)
         self.add_btn = QtWidgets.QPushButton()
         self.add_btn.setStyleSheet("font-weight: bold; padding: 4px 12px")
-        foot.addRow(self.add_btn)
+        self.build_btn = QtWidgets.QPushButton("Build")
+        self.build_btn.setStyleSheet("padding: 4px 12px")
+        buttons = QtWidgets.QHBoxLayout(); buttons.addWidget(self.build_btn); buttons.addWidget(self.add_btn, 1)
+        foot.addRow(buttons)
         self._foot = QtWidgets.QWidget(); self._foot.setLayout(foot)
         outer.addWidget(self._foot)
 
         self.copy_btn.clicked.connect(self._copy_to_draft)
         self.draft_btn.clicked.connect(lambda: self.show_run(None))
         self.undo_btn.clicked.connect(self.draft.undo)
+        self.build_btn.clicked.connect(self._build)
         self.add_btn.clicked.connect(lambda: self.draft.spec and self.run_requested.emit(self.draft.spec, self.ticked()))
         draft.on_change(self._on_draft)
         self._render()
@@ -199,11 +206,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.grids_planned.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         f.addRow("Planned", self.grids_planned)
         self.grids_source = QtWidgets.QLabel(); self.grids_source.setWordWrap(True)
-        self.preview_btn = QtWidgets.QPushButton("Build grids (no SCF)")
-        self.preview_btn.setToolTip("Runs the library's deck::Build for this crystal -- basis, grids, audits -- and stops "
-                                    "before the SCF; seconds for a small cell")
-        self.preview_btn.clicked.connect(self._preview_grids)
-        f.addRow(self.preview_btn, self.grids_source)
+        f.addRow("Source", self.grids_source)
         self.grids_built = QtWidgets.QLabel(); self.grids_built.setWordWrap(True)
         self.grids_built.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         f.addRow("Built", self.grids_built)
@@ -424,7 +427,7 @@ class SetupPanel(QtWidgets.QWidget):
                                         + sum(self.basis_table.rowHeight(r) for r in range(len(rows))))
 
     def _record(self, s: RunSpec) -> tuple[Optional[dict], str]:
-        """The run record to read grids from, and where it came from: the viewed run's, else this spec's preview."""
+        """The run record to read from, and where it came from: the viewed run's, else this spec's Build."""
         if self._run is not None:
             if self._run.result is not None and self._run.result.record:
                 return self._run.result.record, "from this run's record"
@@ -432,16 +435,15 @@ class SetupPanel(QtWidgets.QWidget):
             if job is not None and job.live:
                 return job.live, "from this run's record so far (it is running)"
             return None, "this run has no record yet (not started, or not SOLID²)"
-        got = self._previews.get(s.to_json())
+        got = self._builds.get(s.to_json())
         if isinstance(got, Exception):
-            return None, f"the build refused: {got}"
+            return None, f"the Build refused: {got}"
         if got == "pending":
             return None, "building…"
         if got is not None:
-            return got, "from a build of this spec (no SCF)"
-        if s.structure.kind == "crystal":
-            return None, "not built yet"
-        return None, "a molecule's XC mesh is built inside its SCF: its point count arrives with the run"
+            return got, "from this spec's Build (no SCF)"
+        why = self._why_no_build(s)
+        return None, f"not built ({why})" if why else "not built yet: Build (or Run) fills this from the library's record"
 
     def _render_grids(self, s: RunSpec) -> None:
         try:
@@ -451,8 +453,6 @@ class SetupPanel(QtWidgets.QWidget):
         rec, source = self._record(s)
         self.grids_source.setText(source)
         crystal = s.structure.kind == "crystal"
-        self.preview_btn.setVisible(crystal and self._run is None)
-        self.preview_btn.setEnabled(self._qc is not None and self._previews.get(s.to_json()) != "pending")
         lines, rows = gridinfo.built(rec)
         trim = gridinfo.conditioning(rec) if crystal else []
         self.grids_built.setText("\n".join(lines + (["basis overlap per k:"] + trim if trim else [])) or "—")
@@ -465,28 +465,34 @@ class SetupPanel(QtWidgets.QWidget):
         self.grids_table.setFixedHeight(self.grids_table.horizontalHeader().height() + 4
                                         + sum(self.grids_table.rowHeight(r) for r in range(len(rows))))
 
-    def _preview_grids(self) -> None:
-        s = self._spec()
-        if s is None or self._qc is None:
+    def _solid2(self):
+        return self.registry.get(_SOLID2) if _SOLID2 in self.registry.names() else None
+
+    def _why_no_build(self, s: RunSpec) -> Optional[str]:
+        be = self._solid2()
+        return "SOLID² is not registered" if be is None else be.why_no_build(s)
+
+    def _build(self) -> None:
+        """Every pre-SCF step on SOLID², on the serial library thread; the tabs then read the build run's record."""
+        s, be = self.draft.spec, self._solid2()
+        if s is None or be is None or self._why_no_build(s):
             return
         key = s.to_json()
-        self._previews[key] = "pending"
-        self._render_grids(s)
+        self._builds[key] = "pending"
+        self._render(); self._update_add_label()
 
         def job():
             try:
-                got = gridinfo.preview(s, self._qc)
-            except Exception as e:                    # noqa: BLE001 -- the library's refusal, shown in the tab
+                got = be.build(be.translate(s))
+            except Exception as e:                    # noqa: BLE001 -- the library's refusal, shown in the tabs
                 got = e
-            self._previewed.emit(key, got)
+            self._built.emit(key, got)
         self._serial(job)
 
-    def _on_previewed(self, key: str, got) -> None:
-        self._previews[key] = got
-        s = self._spec()
-        if s is not None:
-            self._render_basis(s)                     # the same record carries the crystal's per-k overlap
-            self._render_grids(s)
+    def _on_built(self, key: str, got) -> None:
+        self._builds[key] = got
+        self._render()                                # Basis + Grids read the build run's record
+        self._update_add_label()
 
     def ticked(self) -> list[str]:
         return [n for n, cb in self.be_checks.items() if cb.isEnabled() and cb.isChecked()]
@@ -512,6 +518,11 @@ class SetupPanel(QtWidgets.QWidget):
         self.add_btn.setText("▶ Run" + (f" on {' + '.join(on)}" if on else " (no back end ticked)"))
         self.add_btn.setToolTip(f"Start {what}" + (f" on {' + '.join(on)}" if on else ""))
         self.add_btn.setEnabled(bool(on) and s is not None)
+        why = self._why_no_build(s) if s is not None else "the draft is empty"
+        pending = s is not None and self._builds.get(s.to_json()) == "pending"
+        self.build_btn.setEnabled(why is None and not pending)
+        self.build_btn.setToolTip(why or "Every pre-SCF step on SOLID² (basis, grids, pseudopotentials), no SCF: the Basis "
+                                         "and Grids tabs then show what the library built.  Run reuses it while the spec is unchanged")
 
     # -- the Codes tab: resolved settings side by side, and each code's native input --------------------
     def _jobs(self) -> dict:

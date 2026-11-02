@@ -136,6 +136,30 @@ class Solid2Backend:
 
     def __init__(self):
         self._qc, self._why_absent = _import_qchem_py()
+        self._built = None          # (deck text, built SolidRun, its build record): the ONE Build kept for a Run of that deck
+        self._prior: dict = {}      # the reused build's record, for the live snapshot of the run it feeds
+
+    # -- build: every pre-SCF step, no SCF -----------------------------------
+    def why_no_build(self, spec: RunSpec) -> Optional[str]:
+        """Why `build` cannot run for `spec` (None: it can)."""
+        if self._qc is None:
+            return self._why_absent
+        if spec.structure.kind == "molecule":
+            return "a molecule has no build-only step in the library yet (OpenWork §3: lane B is adding it)"
+        return solid2_deck.why_not(spec)
+
+    def build(self, job: Job) -> dict:
+        """deck::Build alone -- basis, grids, pseudopotentials, audits -- and the build run's record.  The built calculation
+        is KEPT: a Run of the same deck converges it instead of building again (an edited spec's deck differs: rebuilt).
+        Raises with the library's text on a refusal.  Call on the app's serial library thread."""
+        if "deck" not in job.native:
+            raise RuntimeError(self.why_no_build(job.spec) or "no build-only step for this spec")
+        self._built = None                                       # one kept build at a time (a crystal's can be large)
+        self._qc.clear_report()
+        run = self._qc.SolidRun(job.native["deck"])
+        record = json.loads(self._qc.report())
+        self._built = (job.native["deck"], run, record)
+        return record
 
     # -- capabilities ------------------------------------------------------
     def capabilities(self) -> Capabilities:
@@ -242,7 +266,7 @@ class Solid2Backend:
             if not job.live:                          # setup has filed its sections (grids, basis) by iteration 1
                 snap = self._qc.current_report()
                 if snap:                              # + the runs already filed: a crystal's grids are its BUILD run's
-                    job.live.update(json.loads(self._qc.report()))
+                    job.live.update(self._prior | json.loads(self._qc.report()))
                     job.live["running@live"] = json.loads(snap)
             if on_step:
                 on_step(s)
@@ -284,11 +308,19 @@ class Solid2Backend:
 
     def _run_deck(self, job: Job, step, steps: list[SCFRow]) -> Result:
         """A crystal: deck::Build (a refusal raises with the library's text), then the deck's schedule, streamed."""
+        built, self._built = self._built, None
         self._qc.clear_report()
-        run = self._qc.SolidRun(job.native["deck"])
-        converged = run.converge(step)
+        if built is not None and built[0] == job.native["deck"]:
+            run, self._prior = built[1], built[2]                  # the Build of THIS deck: converge it, do not rebuild
+        else:
+            run, self._prior = self._qc.SolidRun(job.native["deck"]), {}
+        try:
+            converged = run.converge(step)
+        finally:
+            prior, self._prior = self._prior, {}
+        record = prior | json.loads(self._qc.report())
         return Result(converged=converged, energy_Ha=run.total_energy(), failure=run.failure(),
                       structure=data_structure(job.spec), scf=steps,
-                      resolved=_as_run(job.resolved, record := json.loads(self._qc.report())),
+                      resolved=_as_run(job.resolved, record),
                       provenance={"code": NAME, "iterations": run.iterations(), "deck": json.loads(run.resolved())},
                       record=record)

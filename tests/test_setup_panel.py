@@ -149,6 +149,11 @@ class BasisDetails(unittest.TestCase):
         self.assertIn("condition number", lines[1])
 
 
+def gridinfo_built(rec):
+    from qviz import gridinfo
+    return gridinfo.built(rec)[0]
+
+
 class GridsTab(unittest.TestCase):
     def setUp(self):
         from qviz.backends.solid2 import _import_qchem_py
@@ -162,21 +167,43 @@ class GridsTab(unittest.TestCase):
         hf = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107])
         self.assertIn("no XC mesh", gridinfo.planned(hf)[0])
 
-    def test_a_crystal_build_fills_the_ladder_from_the_library_s_record(self):
+    def test_build_fills_the_tabs_and_run_converges_that_build(self):
         if self.qc is None:
             self.skipTest(self.why)
+        from qviz.backends.solid2 import Solid2Backend
         from tests.test_solid2_deck import SI, crystal
         si = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}})
-        panel = SetupPanel(SpecDraft(si), BackendRegistry([FakeBackend()]), qc=self.qc)
-        self.assertEqual(panel.grids_source.text(), "not built yet")
-        panel._preview_grids()                         # no `serial`: runs here, synchronously
+        be = Solid2Backend()
+        panel = SetupPanel(SpecDraft(si), BackendRegistry([FakeBackend(), be]), qc=self.qc)
+        self.assertTrue(panel.build_btn.isEnabled())
+        self.assertIn("not built yet", panel.grids_source.text())
+        panel.build_btn.click()                        # no `serial`: runs here, synchronously
         APP.processEvents()
-        self.assertEqual(panel.grids_source.text(), "from a build of this spec (no SCF)")
+        self.assertEqual(panel.grids_source.text(), "from this spec's Build (no SCF)")
         rows = [[panel.grids_table.item(r, c).text() for c in range(5)] for r in range(panel.grids_table.rowCount())]
         self.assertTrue(rows and rows[0][4] == "reference", rows)
         self.assertIn("density Ecut floor", panel.grids_built.text())
-        self.assertIn("audit", panel.grids_built.text())
         self.assertIn("condition number", panel.basis_summary.text(), "a crystal's per-k overlap, from the same record")
+
+        made = []
+        real = self.qc.SolidRun
+        self.qc.SolidRun = lambda deck: made.append(deck) or real(deck)
+        try:
+            job = be.translate(si)
+            res = be.run(job)                          # the kept Build of this deck: converged, not rebuilt
+            self.assertEqual(made, [])
+            self.assertTrue(any(k.split("@")[0].endswith(" build") for k in res.record), "the build run stays in the record")
+            self.assertIn("density Ecut floor", "\n".join(gridinfo_built(job.live)))
+            be.run(be.translate(si))                   # the Build was consumed: a second Run builds afresh
+            self.assertEqual(len(made), 1)
+        finally:
+            self.qc.SolidRun = real
+
+    def test_a_molecule_cannot_build_yet(self):
+        from qviz.backends.solid2 import Solid2Backend
+        panel = SetupPanel(SpecDraft(molecules.preset_spec("Water (H2O)")), BackendRegistry([FakeBackend(), Solid2Backend()]))
+        self.assertFalse(panel.build_btn.isEnabled())
+        self.assertIn("build-only step", panel.build_btn.toolTip())
 
     def test_a_molecule_run_carries_its_record(self):
         if self.qc is None:
