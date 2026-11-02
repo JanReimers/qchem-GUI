@@ -6,6 +6,9 @@ The GUI listens on 127.0.0.1 only, on a free port, and writes {port, token} to B
 a caller must present the token, so another local user cannot drive the draft.  One JSON object per line each way:
     {"token": ..., "op": "list"}                         -> {"tools": [{name, description, input_schema}], "instructions": ...}
     {"token": ..., "op": "call", "name": ..., "args": {}} -> {"result": {...}}
+    {"token": ..., "op": "hello", "client": ...}          -> {"ok": true}       (an MCP client attached: the dock says so)
+Besides the Toolset's tools the bridge offers ONE of its own, tell_user: Claude Code's prose stays in Claude Code, so the
+agent is asked to post its reply there too, and the Agent dock shows it beside the edits it made.
 The tools run HERE, on the GUI thread (QTcpServer delivers its signals on the thread that owns it): the draft and the
 workspace are GUI-thread state, exactly as for the in-app agent.
 
@@ -22,10 +25,12 @@ from typing import Callable, Optional
 
 from PySide6 import QtCore, QtNetwork
 
-from .session import SYSTEM
+from .session import INSTRUCTIONS, SYSTEM, TELL_USER
 from .tools import Toolset
 
 BRIDGE_FILE = pathlib.Path.home() / ".config" / "qchem-GUI" / "agent-bridge.json"
+
+
 
 
 def withhold_licensed(result: dict) -> dict:
@@ -39,9 +44,12 @@ def withhold_licensed(result: dict) -> dict:
 class AgentBridge(QtCore.QObject):
     """The localhost door into a Toolset.  `on_call(name, args, result)` reports each call (the Agent dock logs it)."""
     def __init__(self, tools: Toolset, on_call: Optional[Callable[[str, dict, dict], None]] = None,
-                 path: pathlib.Path = BRIDGE_FILE, parent=None):
+                 path: pathlib.Path = BRIDGE_FILE, on_say: Optional[Callable[[str], None]] = None,
+                 on_hello: Optional[Callable[[str], None]] = None, parent=None):
+        """`on_call(name, args, result)` each tool call, `on_say(text)` each tell_user, `on_hello(text)` a client attaching."""
         super().__init__(parent)
         self.tools, self._on_call, self.path = tools, on_call, path
+        self._on_say, self._on_hello = on_say, on_hello
         self.token = secrets.token_hex(16)
         self._server = QtNetwork.QTcpServer(self)
         if not self._server.listen(QtNetwork.QHostAddress.LocalHost, 0):
@@ -87,7 +95,16 @@ class AgentBridge(QtCore.QObject):
             return {"error": "bad token: the GUI was restarted, or this is not its bridge"}
         if req.get("op") == "list":
             return {"tools": [{"name": t.name, "description": t.description, "input_schema": t.input_schema}
-                              for t in self.tools.schemas], "instructions": SYSTEM}
+                              for t in self.tools.schemas] + [TELL_USER], "instructions": SYSTEM + INSTRUCTIONS}
+        if req.get("op") == "hello":
+            if self._on_hello:
+                self._on_hello(f"{req.get('client') or 'an MCP client'} is connected and can edit this draft")
+            return {"ok": True}
+        if req.get("op") == "call" and req.get("name") == TELL_USER["name"]:
+            text = str((req.get("args") or {}).get("text", "")).strip()
+            if self._on_say and text:
+                self._on_say(text)
+            return {"result": {"shown": bool(text), "summary": "shown in the Agent dock"}}
         if req.get("op") == "call":
             name, args = req.get("name", ""), req.get("args") or {}
             try:

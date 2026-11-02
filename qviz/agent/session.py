@@ -26,6 +26,17 @@ build_structure atoms from your own knowledge, and you then say plainly that the
 disables a back end, say so (can_run).  Read the draft and the resolved settings with your tools before changing them, and
 keep replies short: the user sees each edit as a diff."""
 
+#: for an agent driving the GUI from OUTSIDE (Claude Code through scripts/qchem_mcp.py -> qviz.agent.bridge): its prose
+#: stays in its own window, so it is given one extra tool to post its reply into the Agent dock
+TELL_USER = {"name": "tell_user",
+             "description": "Show a message to the user in the GUI's Agent dock, next to the edits you made.  Use it for your "
+                            "answer at the end of each request (a short summary: what you changed, what to check, what the "
+                            "user should click), and whenever you need the user to look at something in the GUI.",
+             "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"],
+                              "additionalProperties": False}}
+INSTRUCTIONS = ("  You are driving the GUI from outside it: the user may be looking at the GUI rather than at you, so end "
+                "each request by posting your reply with tell_user.")
+
 MAX_STEPS = 12
 #: runs one model call: runner(call, done) runs call() (anywhere) and then done(its ModelTurn, or the exception it raised)
 #: on the thread that owns the session

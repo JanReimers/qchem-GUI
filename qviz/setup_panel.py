@@ -475,9 +475,15 @@ class SetupPanel(QtWidgets.QWidget):
         self.basis_table.setFixedHeight(self.basis_table.horizontalHeader().height() + 4
                                         + sum(self.basis_table.rowHeight(r) for r in range(len(rows))))
 
-    def _record(self, s: RunSpec) -> tuple[Optional[dict], str]:
+    def draft_record(self) -> tuple[Optional[dict], str]:
+        """The draft's record and where it came from (its Build, else its newest run), whatever the panel is showing --
+        what the agent's get_grids / get_basis read for the draft."""
+        s = self.draft.spec
+        return self._record(s, viewed=False) if s is not None else (None, "the draft is empty")
+
+    def _record(self, s: RunSpec, viewed: bool = True) -> tuple[Optional[dict], str]:
         """The run record to read from, and where it came from: the viewed run's, else this spec's Build."""
-        if self._run is not None:
+        if viewed and self._run is not None:
             if self._run.result is not None and self._run.result.record:
                 return self._run.result.record, "from this run's record"
             job = self._run.job

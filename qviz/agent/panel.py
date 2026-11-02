@@ -97,6 +97,11 @@ class AgentPanel(QtWidgets.QWidget):
     def note_bridge(self, text: str) -> None:
         self.chat.append(f'<span style="color:#8b949e"><i>{html.escape(text)}</i></span>')
 
+    def note_said(self, text: str) -> None:
+        """Claude Code's reply, posted through the bridge's tell_user."""
+        body = html.escape(text).replace("\n", "<br>")
+        self.chat.append(f'<span style="color:#8250df"><b>Claude Code</b></span> {body}')
+
     def note_external(self, name: str, args: dict, result: dict) -> None:
         """A tool call Claude Code made through the bridge: logged here like the in-app agent's."""
         brief = ", ".join(f"{k}={json.dumps(v)[:60]}" for k, v in args.items())

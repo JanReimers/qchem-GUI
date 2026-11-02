@@ -32,9 +32,16 @@ class McpOverStdio(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.file = pathlib.Path(self.tmp.name) / "agent-bridge.json"
         self.draft = SpecDraft(molecules.preset_spec("Water (H2O)"))
-        self.calls = []
-        self.bridge = AgentBridge(Toolset(self.draft, BackendRegistry([FakeBackend()])),
-                                  on_call=lambda n, a, r: self.calls.append(n), path=self.file)
+        self.calls, self.said, self.hello = [], [], []
+        rec = {"water build@t": {"grids": {"xcQuadrature": {"kind": "Becke", "natom": 3, "nRadial": 50, "nDirs": 194, "L": 23,
+                                                            "points": 29100}},
+                                 "basis": {"name": "dzvp", "nFunctions": 19, "perIrrep": [
+                                     {"irrep": "A1", "nFunctions": 19, "lambdaMin": 0.0186, "lambdaMax": 4.7, "cond": 254.6}],
+                                     "usage": [1, 2, 3]}}}
+        self.bridge = AgentBridge(Toolset(self.draft, BackendRegistry([FakeBackend()]),
+                                          draft_record=lambda: (rec, "from this spec's Build (no SCF)")),
+                                  on_call=lambda n, a, r: self.calls.append(n), path=self.file,
+                                  on_say=self.said.append, on_hello=self.hello.append)
         self.proc = subprocess.Popen([sys.executable, str(ROOT / "scripts" / "qchem_mcp.py")], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, text=True, env={**os.environ, "QCHEM_BRIDGE_FILE": str(self.file)})
         self.out = queue.Queue()
@@ -72,6 +79,22 @@ class McpOverStdio(unittest.TestCase):
         self.assertEqual(self.calls, ["propose_spec_patch"], "the Agent dock is told")
         bad = self.rpc("tools/call", {"name": "no_such_tool", "arguments": {}})["result"]
         self.assertTrue(bad["isError"])
+        self.assertTrue(self.hello and "connected" in self.hello[0], "initialize tells the Agent dock")
+
+    def test_the_reply_reaches_the_dock_and_the_records_reach_the_agent(self):
+        self.rpc("initialize", {"protocolVersion": "2025-06-18", "clientInfo": {"name": "claude-code"}})
+        self.assertEqual(self.hello, ["Claude Code is connected and can edit this draft"])
+        self.assertIn("tell_user", [t["name"] for t in self.rpc("tools/list")["result"]["tools"]])
+        r = self.rpc("tools/call", {"name": "tell_user", "arguments": {"text": "Methanol is set up; click Run."}})["result"]
+        self.assertFalse(r["isError"])
+        self.assertEqual(self.said, ["Methanol is set up; click Run."])
+        grids = json.loads(self.rpc("tools/call", {"name": "get_grids", "arguments": {}})["result"]["content"][0]["text"])
+        self.assertIn("29,100 points", grids["summary"])
+        self.assertEqual(grids["source"], "from this spec's Build (no SCF)")
+        basis = json.loads(self.rpc("tools/call", {"name": "get_basis", "arguments": {}})["result"]["content"][0]["text"])
+        self.assertIn("condition number 255", basis["summary"])
+        self.assertNotIn("usage", basis["record"][0], "the bulky per-function populations stay home")
+        self.assertEqual(basis["elements"][0]["element"], "O")
 
     def test_a_closed_gui_is_said_plainly_and_the_tools_still_list(self):
         self.bridge.close()

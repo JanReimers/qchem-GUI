@@ -214,14 +214,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._output_dock = self._dock("Output", self.output, QtCore.Qt.LeftDockWidgetArea)
 
         # Agent -- edits the shared draft; its run requests are cards only the user's click starts
-        tools = Toolset(self.draft, REGISTRY, None, start_run=lambda card: [self._add_spec(card.spec, b) for b in card.backends])
+        tools = Toolset(self.draft, REGISTRY, None, start_run=lambda card: [self._add_spec(card.spec, b) for b in card.backends],
+                        draft_record=self.setup.draft_record)
         # Claude when ANTHROPIC_API_KEY is set (RunSpec Q4), else the offline planner, which says how to connect
         client = AnthropicClient() if AnthropicClient.why_absent() is None else OfflinePlanner()
         self.agent = AgentPanel(AgentSession(client, tools, ConsentGate(Q4_RULED)), self.draft)
         self._agent_dock = self._dock("Agent", self.agent, QtCore.Qt.LeftDockWidgetArea)
         # Claude Code (on the user's subscription) drives the same tools through scripts/qchem_mcp.py -> this localhost bridge
         try:
-            self._bridge_agent = AgentBridge(tools, on_call=self.agent.note_external, parent=self)
+            self._bridge_agent = AgentBridge(tools, on_call=self.agent.note_external, on_say=self.agent.note_said,
+                                             on_hello=self.agent.note_bridge, parent=self)
             self.agent.note_bridge(f"Claude Code can drive this draft: the qchem-gui MCP server reaches this window "
                                    f"(127.0.0.1:{self._bridge_agent.port})")
         except RuntimeError as e:

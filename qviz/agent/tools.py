@@ -17,7 +17,7 @@ import itertools
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .. import compare, molecules
+from .. import basisinfo, compare, gridinfo, molecules
 from ..backends import solid2_deck
 from ..backends.base import BackendRegistry
 from ..spec import Z_OF, RunSpec, SpecError, molecule
@@ -65,10 +65,15 @@ def _schema(props: dict, required=()) -> dict:
 
 class Toolset:
     def __init__(self, draft: SpecDraft, registry: BackendRegistry, workspace: Optional[Workspace] = None,
-                 start_run: Optional[Callable[[RunRequest], None]] = None):
-        """`start_run` is what a card's accept() calls (the GUI: add the draft's spec on each named back end)."""
+                 start_run: Optional[Callable[[RunRequest], None]] = None,
+                 draft_record: Optional[Callable[[], tuple]] = None):
+        """`start_run` is what a card's accept() calls (the GUI: add the draft's spec on each named back end).
+        `draft_record()`: the draft's library run record and where it came from (the Setup panel's: its Build, else its
+        newest run); None = the draft has none."""
         self.draft, self.registry, self.workspace = draft, registry, workspace
         self._start_run = start_run
+        self._draft_record = draft_record or (lambda: (None, "no record source"))
+        self._said: list[Callable[[str], None]] = []
         self.cards: list[RunRequest] = []
         self._card_ids = itertools.count(1)
         self._card_listeners: list[Callable[[RunRequest], None]] = []
@@ -88,6 +93,15 @@ class Toolset:
                   _schema({"run_id": {"type": "integer"}}, ["run_id"]), self.get_result)
         self._add("compare_results", f"{R} The cross-code table for a run and its legs (same spec on other back ends).",
                   _schema({"run_id": {"type": "integer"}}, ["run_id"]), self.compare_results)
+        self._add("get_grids", f"{R} The grids for the draft (or run_id): what epsilon PLANS, and what the library BUILT "
+                  "as its own run record states it -- the XC/PP meshes (atoms x radial x directions, points), a crystal's "
+                  "density-grid ladder, fit grids, and the grid audits (alias exponent x vs its demand, OK/UNDER).  The draft "
+                  "has a record after the user's Build or a run of the same spec.",
+                  _schema({"run_id": {"type": "integer"}}), self.get_grids)
+        self._add("get_basis", f"{R} The basis for the draft (or run_id): shells per element, and the overlap S's "
+                  "conditioning per irrep (or per k) from the library's record -- smallest eigenvalue, condition number, "
+                  "functions trimmed as near-dependent.",
+                  _schema({"run_id": {"type": "integer"}}), self.get_basis)
         self._add("search_docs", f"{R} The curated notes of banked experience.", _schema({"query": {"type": "string"}}, ["query"]),
                   self.search_docs)
         self._add("propose_spec_patch", f"{W} Apply a JSON merge patch (RFC 7386) to the draft, with the reason.",
@@ -199,6 +213,36 @@ class Toolset:
         else:
             out["summary"] = f"run #{run_id} on {r.backend_name} is {out['status']}"
         return out
+
+    def _record_of(self, run_id: Optional[int]) -> tuple[Optional[dict], str, RunSpec, bool]:
+        """(record, where it came from, the spec it belongs to, licensed) for a run, or for the draft when run_id is None."""
+        if run_id is None:
+            rec, source = self._draft_record()
+            return rec, source, self._need_draft(), False
+        r = self._run(run_id)
+        rec = (r.result.record if r.result is not None and r.result.record else
+               r.job.live if r.job is not None and r.job.live else None)
+        source = f"run #{run_id}'s record" + ("" if rec else " (none: not started, or not SOLID²)")
+        return rec, source, r.spec, r.backend_name in LICENSED_BACKENDS
+
+    def get_grids(self, run_id: Optional[int] = None) -> dict:
+        rec, source, spec, licensed = self._record_of(run_id)
+        lines, ladder = gridinfo.built(rec)
+        raw = [run["grids"] for key, run in (rec or {}).items() if run.get("grids") and not key.startswith("gridAudit")]
+        return {"is_result": True, "licensed": licensed, "source": source, "planned": gridinfo.planned(spec), "built": lines,
+                "ladder": [dict(zip(gridinfo.LADDER_COLUMNS, row)) for row in ladder], "record": raw,
+                "summary": "; ".join(lines) or f"no grids built yet ({source})"}
+
+    def get_basis(self, run_id: Optional[int] = None) -> dict:
+        rec, source, spec, licensed = self._record_of(run_id)
+        cond = gridinfo.conditioning(rec)
+        raw = [{k: v for k, v in run["basis"].items() if k != "usage"}         # usage: per-function populations, bulky
+               for run in (rec or {}).values() if run.get("basis")]
+        return {"is_result": True, "licensed": licensed, "source": source, "basis": basisinfo.basis_name(spec),
+                "elements": [{"element": e, "atoms": n, "shells": sh, "functions_per_atom": f}
+                             for e, n, sh, f in basisinfo.element_rows(spec)],
+                "conditioning": cond, "record": raw,
+                "summary": "; ".join(cond) or f"no basis record yet ({source})"}
 
     def compare_results(self, run_id: int) -> dict:
         legs = compare.legs(self.workspace, self._run(run_id))

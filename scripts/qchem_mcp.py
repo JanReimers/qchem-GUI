@@ -57,8 +57,10 @@ def static_tools() -> tuple[list[dict], str]:
     from qviz.agent.tools import Toolset
     from qviz.backends.base import BackendRegistry
     from qviz.draft import SpecDraft
+    from qviz.agent.session import INSTRUCTIONS, TELL_USER
     t = Toolset(SpecDraft(), BackendRegistry([]))
-    return [{"name": s.name, "description": s.description, "input_schema": s.input_schema} for s in t.schemas], SYSTEM
+    return ([{"name": s.name, "description": s.description, "input_schema": s.input_schema} for s in t.schemas] + [TELL_USER],
+            SYSTEM + INSTRUCTIONS)
 
 
 def tools_and_instructions() -> tuple[list[dict], str]:
@@ -82,6 +84,11 @@ def handle(msg: dict) -> dict | None:
         return None                                              # notifications/initialized, cancelled, ...
     if method == "initialize":
         _tools, instructions = tools_and_instructions()
+        client = msg.get("params", {}).get("clientInfo", {}).get("name") or "an MCP client"
+        try:
+            bridge({"op": "hello", "client": "Claude Code" if "claude" in client.lower() else client}, timeout=5.0)
+        except ConnectionError:
+            pass
         result = {"protocolVersion": msg.get("params", {}).get("protocolVersion", "2025-06-18"),
                   "capabilities": {"tools": {}}, "serverInfo": SERVER,
                   "instructions": INSTRUCTIONS_HEAD + instructions}
