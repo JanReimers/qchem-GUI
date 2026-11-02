@@ -107,7 +107,7 @@ def _import_qchem_py():
                   "-DCMAKE_POSITION_INDEPENDENT_CODE=ON) and set QCHEM_BUILD to that build dir")
 
 
-_OFF = 1e29                                       # the library's gate sentinel: at or above it, the gate is off
+_OFF = 1e29   # TODO(lane A 3bf35f8e): gates become std::optional, recorded "off"; drop this sentinel on that merge
 _GATES = (("minFD", "[F,D]"), ("minDrho", "Δρ"), ("minDE", "ΔE"), ("minDFD", "Δ[F,D]"))
 
 
@@ -116,7 +116,8 @@ def _gates_run(record: dict) -> Optional[str]:
     for key, run in (record or {}).items():
         std = (run.get("scf") or {}).get("standard")
         if std and not key.startswith("gridAudit"):
-            on = [f"{label} {std[k]:g}" for k, label in _GATES if k in std and std[k] < _OFF]
+            on = [f"{label} {std[k]:g}" for k, label in _GATES
+                  if isinstance(std.get(k), (int, float)) and std[k] < _OFF]          # "off" / absent: not a gate
             return "run: " + ", ".join(on) + f"; at most {std.get('nMaxIter')} iterations"
     return None
 
