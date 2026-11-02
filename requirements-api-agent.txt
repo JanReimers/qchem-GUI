@@ -1,0 +1,4 @@
+# Optional: only the in-app Claude agent over the Anthropic API (qviz.agent.client.AnthropicClient), which is used
+# only when ANTHROPIC_API_KEY is set and is billed separately from a Claude subscription.  Not needed for the GUI,
+# the offline planner, or Claude Code driving the GUI through scripts/qchem_mcp.py.
+anthropic==2.3.0

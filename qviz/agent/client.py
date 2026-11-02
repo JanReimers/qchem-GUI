@@ -155,7 +155,7 @@ class AnthropicClient:
         try:
             import anthropic  # noqa: F401
         except ImportError:
-            return "the anthropic package is not installed (pip install -r requirements.txt)"
+            return "the anthropic package is not installed (pip install -r requirements-api-agent.txt)"
         return None
 
     def respond(self, system, messages, tools) -> ModelTurn:
