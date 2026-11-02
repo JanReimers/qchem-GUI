@@ -19,7 +19,7 @@ The back-end strip is option 2.2: every back end that CAN run the spec as stated
 with their reasons on hover.
 """
 from __future__ import annotations
-import os, sys, pathlib
+import os, signal, sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 # VTK's interactor needs X11/GLX; a native Wayland surface can't host it -> force xcb.
@@ -241,6 +241,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         m = self.menuBar().addMenu("&File")
         m.addAction("Import molecule (xyz)…", self._import_xyz)
+        m.addAction("Export structure (xyz)…", self._export_xyz)
         m.addSeparator()
         m.addAction("Open Workspace…", self._open_workspace)
         m.addAction("Save Workspace…", self._save_workspace)
@@ -250,6 +251,9 @@ class MainWindow(QtWidgets.QMainWindow):
         m.addSeparator()
         m.addAction("Save Layout", self._save_layout)
         m.addAction("Reset Layout", self._reset_layout)
+        m.addSeparator()
+        quit_act = m.addAction("Quit", self.close)
+        quit_act.setShortcut(QtGui.QKeySequence.Quit)        # Ctrl+Q (Linux / Windows convention); same as closing the window
 
     def _build_controls(self) -> QtWidgets.QWidget:
         """The 3D view's controls.  A control shows only when it does something (_sync_controls)."""
@@ -373,6 +377,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"xyz import failed: {e}"); return
         self.setup.set_structure(label, numbers, positions)   # into the draft; the user clicks ▶ Run
         self._setup_dock.raise_()
+
+    def _export_xyz(self):
+        """The structure the Setup panel shows (the draft, or the viewed run's) to an .xyz file."""
+        spec = self.setup._spec()
+        if spec is None:
+            self.statusBar().showMessage("nothing to export: the draft is empty"); return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export structure (xyz)", f"{spec.label}.xyz", "XYZ (*.xyz)")
+        if path:
+            pathlib.Path(path).write_text(molecules.to_xyz(spec))
+            self.statusBar().showMessage(f"{spec.label} ({len(spec.structure.sites)} atoms) → {path}"
+                                         + ("  (extended xyz: the cell is in the comment line)" if spec.structure.kind == "crystal" else ""))
 
     def _on_ws_change(self, ws: Workspace):
         self._syncing = True
@@ -778,6 +793,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage("layout reset to the default")
 
     def closeEvent(self, e):
+        # A running SCF is asked to stop (it does at its next iteration) and the 3D view releases its VTK window: either
+        # left alone kept the process alive after the window closed.  main() then exits without waiting on workers.
+        for r in self.ws.runs:
+            if r.status in (RunStatus.PENDING, RunStatus.RUNNING):
+                r.stop()
+        try:
+            self.plotter.close()
+        except Exception:                        # noqa: BLE001 -- best effort on the way out
+            pass
         self._save_layout()                      # persist dock arrangement on exit
         if self._bridge_agent is not None:
             self._bridge_agent.close()           # removes the bridge file: Claude Code's calls then say the GUI is closed
@@ -789,7 +813,11 @@ def main():
     # optional workspace file on the command line: python app_desktop.py my.qproj.h5
     open_path = next((a for a in sys.argv[1:] if a.endswith((".h5", ".qproj.h5"))), None)
     w = MainWindow(open_path=open_path); w.show()
-    sys.exit(app.exec())
+    signal.signal(signal.SIGINT, signal.SIG_DFL)  # Ctrl-C in the launching terminal ends the app (Qt never hands it to Python)
+    code = app.exec()
+    w._pool.waitForDone(3000)                     # a stopped SCF notices at its next iteration; give it a moment
+    sys.stdout.flush(); sys.stderr.flush()
+    os._exit(code)                                # never hang on a still-running library call or a VTK finaliser
 
 
 if __name__ == "__main__":

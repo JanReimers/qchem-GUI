@@ -189,6 +189,23 @@ class ScfKnobs(unittest.TestCase):
         self.assertIn("\n  molecule water", text)
 
 
+class XyzExport(unittest.TestCase):
+    def test_a_molecule_round_trips_and_a_crystal_carries_its_cell(self):
+        import tempfile, pathlib
+        from qviz.molecules import from_xyz, to_xyz
+        w = molecules.preset_spec("Water (H2O)")
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "water.xyz"
+            p.write_text(to_xyz(w))
+            Z, pos, _ = from_xyz(str(p))
+        self.assertEqual(Z, [s.Z for s in w.structure.sites])
+        for a, b in zip(pos, [c for s in w.structure.sites for c in s.xyz]):
+            self.assertAlmostEqual(a, b, places=6)
+        from tests.test_solid2_deck import SI, crystal
+        text = to_xyz(crystal("Si", *SI))
+        self.assertIn('Lattice="', text.splitlines()[1])
+        self.assertEqual(text.splitlines()[0], "2")
+
 def gridinfo_built(rec):
     from qviz import gridinfo
     return gridinfo.built(rec)[0]

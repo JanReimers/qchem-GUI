@@ -38,9 +38,10 @@ _NOT_PRESET = "— draft —"
 _SOLID2 = "SOLID²"
 SV_TOLS = ("default (5e-9)", "1e-10", "1e-9", "1e-8", "1e-7", "1e-6", "1e-5")
 ENGAGE_FDS = ("default (Z-scaled)", "10", "1", "0.1", "0.01", "0.001")
-LADDER_INFO = ("Ladder: plain mixing while [F,D] is above DIIS's engage threshold, then DIIS, then GDM once DIIS stalls "
-               "(out of history and no progress for 5 iterations while |ΔE/E| > 1e-8).  The DIIS rows below set its DIIS rung; "
-               "the DIIS → GDM switch settings are not adjustable yet (a library change).")                                     # the back end Build runs on (the library's own pre-SCF steps)
+LADDER_INFO = ("Ladder, as the library runs it for a molecule today: DIIS from the first iteration, then GDM only if DIIS "
+               "stalls (out of history and no progress for 5 iterations while |ΔE/E| > 1e-8).  A converging DIIS never hands "
+               "over, so on most molecules this is plain DIIS.  The ΔE/E switch-over (to GDM at ΔE/E < 1e-6) is off and "
+               "cannot be set yet: a library fix, logged.  The DIIS rows below set its DIIS rung.")                                     # the back end Build runs on (the library's own pre-SCF steps)
 
 
 def _mono() -> QtGui.QFont:

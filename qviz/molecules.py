@@ -32,6 +32,22 @@ def from_xyz(path: str):
     return numbers, positions, pathlib.Path(path).stem
 
 
+def to_xyz(spec) -> str:
+    """A spec's structure as .xyz text (Å), the reader's inverse.  A crystal is written as EXTENDED xyz: its cell vectors in
+    the comment line (Lattice="..." pbc="T T T", the ASE / OVITO convention) and its sites Cartesian."""
+    st = spec.structure
+    if st.kind == "molecule":
+        rows = [(s.element, s.xyz) for s in st.sites]
+        comment = spec.label
+    else:
+        L = st.lattice_bohr
+        rows = [(s.element, tuple(sum(s.frac[i] * L[i][k] for i in range(3)) for k in range(3))) for s in st.sites]
+        comment = (f'Lattice="{" ".join(f"{x / _A:.8f}" for row in L for x in row)}" '
+                   f'Properties=species:S:1:pos:R:3 pbc="T T T" label="{spec.label}"')
+    return f"{len(rows)}\n{comment}\n" + "".join(
+        f"{el:<2s} {x / _A:14.8f} {y / _A:14.8f} {z / _A:14.8f}\n" for el, (x, y, z) in rows)
+
+
 def _flat(coords):
     return [c for xyz in coords for c in xyz]
 
