@@ -40,7 +40,7 @@ MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mi
 EPSILONS = ("1e-3", "1e-4", "1e-5", "1e-6", "1e-7")
 _NOT_PRESET = "— draft —"
 _SOLID2 = "SOLID²"
-SV_TOLS = ("default (5e-9)", "1e-10", "1e-9", "1e-8", "1e-7", "1e-6", "1e-5")
+SV_TOLS = ("default", "1e-10", "1e-9", "1e-8", "1e-7", "1e-6", "1e-5")
 ENGAGE_FDS = ("default", "10", "1", "0.1", "0.01", "0.001")
 LADDER_INFO = ("Ladder: DIIS from the first iteration, handing off to GDM once |ΔE/E| falls below the switch-over "
                "(default 1e-6), or earlier if DIIS stalls (no progress for 5 iterations).  A molecule and a crystal read the "
@@ -63,6 +63,30 @@ def _sci(v: float) -> str:
     """A gate as its menu spells it: 1e-4, not 0.0001 (a non-power of ten keeps its digits: 5e-9, 2.5e-6)."""
     t = f"{v:.0e}"
     return (t if float(t) == v else f"{v:.6g}" if "e" in f"{v:.6g}" else f"{v:.1e}").replace("e-0", "e-")
+
+
+SPIN_NAMES = {1: "singlet", 2: "doublet", 3: "triplet", 4: "quartet", 5: "quintet", 6: "sextet", 7: "septet"}
+
+
+def auto_multiplicity(s: RunSpec) -> str:
+    """What 'auto' multiplicity resolves to for this molecule: the minimal 2S+1 its electron count allows."""
+    m = 1 + s.num_electrons % 2
+    return f"auto: {m}, {SPIN_NAMES[m]}, {'polarized' if s.physics.spin.polarized else 'unpolarized'}"
+
+
+def accelerator_defaults(s: RunSpec, mol: bool) -> dict:
+    """The DIIS knobs the library runs when the panel leaves them unstated -- spelled out, so 'default' says a value.
+    A molecule: MoleculeSetup's AcceleratorOptions and its engage gate (HF all-electron: Z^2*0.08/32 on the total nuclear
+    charge; DFT or a pseudopotential: 100, DIIS from the first iteration).  A crystal: the SCFAccelerator factory's DIISParams.
+    Pinned against the library by tests (the molecular run's accelerators record; the deck's resolved acceleratorOptions)."""
+    if not mol:
+        return {"depth": 8, "sv": 1e-9, "engage": "0.1"}
+    p = s.physics
+    if p.theory != "HF" or p.core == "pseudopotential":
+        engage = "from the start"
+    else:
+        engage = f"{s.num_electrons ** 2 * 0.08 / 32:.3g}, Z-scaled"
+    return {"depth": 4, "sv": 5e-9, "engage": engage}
 
 
 def _mono() -> QtGui.QFont:
@@ -500,6 +524,8 @@ class SetupPanel(QtWidgets.QWidget):
             self.method_box.setCurrentText(name)
         self.pp_check.setChecked(p.core == "pseudopotential")
         self.pol_check.setChecked(p.spin.polarized)
+        if mol:
+            self.mult_spin.setSpecialValueText(auto_multiplicity(s))
         self.mult_spin.setValue(p.spin.multiplicity or 0)
         o = p.occupations
         self.smearing.setText("integer (no smearing)" if o.smearing == "none" else f"{o.smearing}, kT = {o.kT_Ha} Ha")
@@ -540,6 +566,10 @@ class SetupPanel(QtWidgets.QWidget):
                                            else max(0, self.ladder_switch.findText(f"{sw:g}")))
         for w in (self.diis_depth, self.diis_sv, self.diis_engage):   # a DIIS rung runs (a molecule's Auto is DIIS)
             self._scf_form.setRowVisible(w, acc in ("DIIS", "Ladder") or (acc == "Auto" and mol))
+        dflt = accelerator_defaults(s, mol)
+        self.diis_depth.setSpecialValueText(f"default ({dflt['depth']})")
+        self.diis_sv.setItemText(0, f"default ({_sci(dflt['sv'])})")
+        self.diis_engage.setItemText(0, f"default ({dflt['engage']})")
         self.diis_depth.setValue(int(scf.get("diis_depth") or 0))
         for box, key in ((self.diis_sv, "diis_sv_tol"), (self.diis_engage, "diis_engage_fd")):
             v = scf.get(key)

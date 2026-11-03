@@ -310,6 +310,19 @@ class TheBridgeRunsThem(unittest.TestCase):
         for key, deck_key in D.DECK_GATES:
             self.assertEqual(scf[deck_key], GATE_DEFAULTS[key], deck_key)
 
+    def test_the_panel_s_diis_defaults_are_what_the_library_runs(self):
+        from qviz import molecules
+        from qviz.setup_panel import accelerator_defaults
+        be = solid2()
+        diis = json.loads(be._qc.SolidRun(be.translate(si_inline()).native["deck"]).resolved())["acceleratorOptions"]["diis"]
+        d = accelerator_defaults(si_inline(), mol=False)
+        self.assertEqual((diis["nProj"], diis["svTol"], diis["engageBelowFD"]), (d["depth"], d["sv"], float(d["engage"])))
+        spec = molecules.preset_spec("Methane (CH4)")                      # HF all-electron: the Z-scaled engage gate
+        rec = next(iter(be.run(be.translate(spec)).record.values()))["accelerators"][0]
+        d = accelerator_defaults(spec, mol=True)
+        self.assertEqual((rec["nProj"], rec["svTol"]), (d["depth"], d["sv"]))
+        self.assertEqual(f"{rec['engageBelowFD']:.3g}, Z-scaled", d["engage"])
+
     def test_levels_are_numbered_within_their_irrep(self):
         from qviz import molecules
         from qviz.spec import RunSpec

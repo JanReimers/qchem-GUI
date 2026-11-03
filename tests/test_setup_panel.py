@@ -207,6 +207,14 @@ class ScfKnobs(unittest.TestCase):
         self.assertEqual({k: b.currentText() for k, b in p.gates.items()},
                          {"gate_fd": "1e-5", "gate_drho": "1e-4", "gate_de": "off", "gate_dfd": "off"})
 
+    def test_auto_and_default_say_what_they_resolve_to(self):
+        p = self.panel                                                     # the fixture's draft: water, HF, all-electron
+        self.assertEqual(p.mult_spin.text(), "auto: 1, singlet, unpolarized")
+        self.assertEqual((p.diis_depth.text(), p.diis_sv.itemText(0), p.diis_engage.itemText(0)),
+                         ("default (4)", "default (5e-9)", "default (0.25, Z-scaled)"))
+        self.draft.patch({"physics": {"theory": "DFT", "functional": "LDA"}}, "test")
+        self.assertEqual(p.diis_engage.itemText(0), "default (from the start)")
+
     def test_the_xc_mesh_knobs_show_eps_s_mesh_and_state_both_when_one_is_set(self):
         from qviz.backends.solid2 import mesh_for
         p = self.panel
