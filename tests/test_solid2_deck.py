@@ -316,8 +316,8 @@ class TheBridgeRunsThem(unittest.TestCase):
         d = molecules.preset_spec("Methane (CH4)").to_dict()
         d["accuracy"]["scf"] = {"impose_symmetry": True}
         res = solid2().run(solid2().translate(RunSpec.from_dict(d)))
-        occ = [f"{L['n']}{L['label'].lower()}" for L in res.levels if L["occ"] > 0.5]
-        self.assertEqual(sorted(occ), ["1a1", "1b1", "1b2", "2a1", "3a1"], "C2v blocking: t2 splits into 3a1 + 1b1 + 1b2")
+        occ = [f"{L['n']}{L['label']}" for L in res.levels if L["occ"] > 0.5]
+        self.assertEqual(sorted(occ), ["1A1", "1B1", "1B2", "2A1", "3A1"], "C2v blocking: t2 splits into 3A1 + 1B1 + 1B2")
 
     def test_a_molecular_ladder_hands_over_to_gdm(self):
         from qviz.spec import Accuracy, molecule

@@ -516,7 +516,7 @@ class MainWindow(QtWidgets.QMainWindow):
         lines = [f"{run.summary}   E = {rep.get('energy', 0):.6f} Ha", "",
                  f"{'e (Ha)':>10} {'occ':>4}  MO"]
         for i, L in enumerate(levels[:n_show]):
-            tag = f"{L['n']}{L['label'].lower()}" if L['label'] != "No Symmetry" else str(L['n'])
+            tag = f"{L['n']}{L['label']}" if L['label'] != "No Symmetry" else str(L['n'])
             mark = "  ← HOMO" if i == n_occ - 1 else ("  ← LUMO" if i == n_occ else "")
             lines.append(f"{L['e']:10.4f} {L['occ']:4.1f}  {tag}{mark}")
         if len(levels) > n_show:
@@ -557,7 +557,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if arrows:
                 t = pg.TextItem(arrows, color=col, anchor=(0.5, 0.5))
                 t.setFont(QtGui.QFont("sans", 22)); t.setPos(xc, e); p.addItem(t)
-            tag = f"{L['n']}{L['label'].lower()}" if L['label'] != "No Symmetry" else str(L['n'])
+            tag = f"{L['n']}{L['label']}" if L['label'] != "No Symmetry" else str(L['n'])
             lab = pg.TextItem(tag, color="#bbb", anchor=la); lab.setPos(lx, e); p.addItem(lab)
         p.getAxis("bottom").setTicks([[(i, lab) for lab, i in xmap.items()]])
         p.setTitle(f"MO diagram — {run.summary}")
