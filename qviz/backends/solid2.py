@@ -115,7 +115,8 @@ def _import_qchem_py():
 #: the spec's DIIS knobs (accuracy.scf) -> the molecular facade's AcceleratorOptions (the Ladder's DIIS rung reads them too)
 DIIS_KNOBS = {"diis_depth": ("diis_depth", 0), "diis_sv_tol": ("diis_sv_tol", 0.0), "diis_engage_fd": ("diis_engage_fd", 0.0)}
 
-_GATES = (("minFD", "[F,D]"), ("minDrho", "Δρ"), ("minDE", "ΔE"), ("minDFD", "Δ[F,D]"))
+#: minDrho gates the density-change column whatever the Hamiltonian titles it (Δρ with a real-space quadrature, else ‖ΔD‖)
+_GATES = (("minFD", "[F,D]"), ("minDrho", "density change"), ("minDE", "ΔE"), ("minDFD", "Δ[F,D]"))
 
 
 def _gates_run(record: dict) -> Optional[str]:

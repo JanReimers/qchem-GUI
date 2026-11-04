@@ -5,8 +5,8 @@ hands it back).
 
 The record is the library speaking for itself: the Hamiltonian's build files under the run's "hamiltonian" section (the
 XC and PP meshes, and under each term that needs one its fit basis, mesh or raster), the solid's density ladder and grid
-audits under "grids", the seed's and the mixer's own fit grids under "seedDensity" and "densityMixer", the mesh an SCF with
-no XC mesh measures Δρ on under "residualMesh", and the molecular XC mesh's point count under "folds".  This module only picks rows out of it; it never re-derives a grid.
+audits under "grids", the seed's and the mixer's own fit grids under "seedDensity" and "densityMixer", and the molecular
+XC mesh's point count under "folds".  This module only picks rows out of it; it never re-derives a grid.
 
 The record comes from a run, or from SOLID²'s Build (every pre-SCF step, no SCF: Solid2Backend.build).
 """
@@ -63,7 +63,7 @@ def _section(record: Optional[dict], name: str) -> dict:
 
 
 #: the record's sections about grids, by key: a molecule files no "grids" at all
-GRID_SECTIONS = ("hamiltonian", "grids", "seedDensity", "densityMixer", "residualMesh")
+GRID_SECTIONS = ("hamiltonian", "grids", "seedDensity", "densityMixer")
 
 
 def fit_bases(record: Optional[dict]) -> list[dict]:
@@ -91,8 +91,7 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
     hartree, vxc = h.get("Hartree") or {}, h.get("Vxc_DFT") or {}
     q = h.get("xcQuadrature") or {}
     for what, m in (("XC mesh", q), ("PP mesh", h.get("ppQuadrature")), ("Hartree fit mesh", hartree.get("auxiliaryFit")),
-                    ("Vxc fit mesh", vxc.get("auxiliaryFit")),
-                    ("Δρ convergence mesh", _section(record, "residualMesh"))):   # each mesh's own report
+                    ("Vxc fit mesh", vxc.get("auxiliaryFit"))):   # each mesh's own report
         if m and "points" in m:
             lines.append(_mesh_line(what, m))
     for build in (True, False):

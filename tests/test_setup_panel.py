@@ -379,15 +379,9 @@ class GridsTab(unittest.TestCase):
         cond = gridinfo.conditioning(res.record)
         self.assertEqual(cond[0], "19 functions (dzvp)", "the run's basis section, read")
         self.assertIn("condition number", cond[1])
-        self.assertRegex(res.resolved["SCF gates"], r"^run: \[F,D\] 1e-05, Δρ 0.0001; at most \d+ iterations$",
+        self.assertRegex(res.resolved["SCF gates"], r"^run: \[F,D\] 1e-05, density change 0.0001; at most \d+ iterations$",
                          "the gates the record says the SCF used; off (1e30) gates are not listed")
         self.assertTrue(be.translate(w).resolved["SCF gates"].startswith("planned:"))
-
-    def test_the_mesh_hf_measures_its_density_change_on_is_shown(self):
-        from qviz import gridinfo
-        rec = {"water@t": {"residualMesh": {"kind": "Becke", "natom": 3, "nRadial": 50, "nDirs": 194, "L": 23, "points": 29100}}}
-        self.assertEqual(gridinfo.built(rec)[0],
-                         ["Δρ convergence mesh: Becke, 3 atoms × 50 radial × 194 directions (Lebedev L=23) = 29,100 points"])
 
     def test_a_fit_grid_is_named_for_whose_it_is(self):
         from qviz import gridinfo

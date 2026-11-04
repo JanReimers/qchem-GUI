@@ -47,7 +47,8 @@ LADDER_INFO = ("Ladder: DIIS from the first iteration, handing off to GDM once |
                "same signal.  The DIIS rows set its DIIS rung.")
 #: the convergence gates a run can state (accuracy.scf): key, label, what it measures.  Absent = the code's default.
 GATE_KNOBS = (("gate_fd", "[F,D] below", "the worst irrep's orbital gradient [F,D] (the facade's default 1e-5)"),
-              ("gate_drho", "Δρ per electron below", "the density change per electron, on the run's own quadrature (default 1e-4)"),
+              ("gate_drho", "Density change below", "the density change per electron: Δρ on the run's own quadrature, or ‖ΔD‖ on a "
+                                                    "run with none, such as HF -- the two are not comparable (default 1e-4)"),
               ("gate_de", "|ΔE/E| below", "the relative total-energy change (default off): the physical gate when [F,D] and "
                                          "Δρ limit-cycle above a fit floor while the energy has settled"),
               ("gate_dfd", "|Δ[F,D]| below", "the change in [F,D] between iterations (default off: a stagnation measure -- "
