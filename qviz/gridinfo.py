@@ -60,6 +60,11 @@ def _grids(record: dict) -> Optional[dict]:
     return None
 
 
+def fit_bases(record: Optional[dict]) -> list[dict]:
+    """The fit bases the Hamiltonian built, as the record files them ([]: none filed)."""
+    return ((_grids(record) or {}).get("hamiltonian") or {}).get("fits") or []
+
+
 #: the meshes a run files under grids, as the Grids tab names them
 _MESHES = (("xcQuadrature", "XC mesh"), ("ppQuadrature", "PP mesh"), ("auxiliaryFit", "Hartree fit mesh"))
 

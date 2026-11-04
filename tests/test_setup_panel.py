@@ -301,7 +301,7 @@ class GridsTab(unittest.TestCase):
         self.assertIn("Hartree: analytic", gridinfo.planned(hf)[1])
         self.assertIn("analytic", basisinfo.fits(hf, None)[0])
         self.assertIn("not in the library's record yet", basisinfo.fits(lda, {"run": {"basis": {"name": "dzvp"}}})[0])
-        rec = {"run": {"basis": {"fits": [{"role": "Hartree ρ fit", "name": "A1_coul", "nFunctions": 70}]}}}
+        rec = {"run": {"grids": {"hamiltonian": {"fits": [{"role": "Hartree ρ fit", "name": "A1_coul", "nFunctions": 70}]}}}}
         self.assertEqual(basisinfo.fits(lda, rec), ["Hartree ρ fit: A1_coul, 70 functions"])
 
     def test_build_fills_the_tabs_and_run_converges_that_build(self):
