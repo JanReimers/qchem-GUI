@@ -112,6 +112,9 @@ def why_not(spec: RunSpec) -> Optional[str]:
     return None
 
 
+#: the library's accuracy target when a deck states none (pinned by test against the deck's resolved "accuracy")
+LIB_EPS = 1e-5
+
 #: the spec's convergence gates (accuracy.scf) -> the deck's SCFParams Gates
 DECK_GATES = (("gate_fd", "minFD"), ("gate_drho", "minDeltaRhoPerElectron"), ("gate_de", "minDeltaE"), ("gate_dfd", "minDeltaFD"))
 
@@ -144,6 +147,8 @@ def to_deck(spec: RunSpec) -> dict:
     tags = {s.tag: i for i, s in enumerate(spec.structure.sites) if s.tag}
     deck: dict = {"structure": structure_entry(spec), "kmesh": list(ac.kmesh),
                   "basis": {"data": shared_representation(spec)["basis"].upper()}}
+    if ac.epsilon_Ha_per_atom != LIB_EPS:                 # the run's ONE accuracy target (V-FACADE-ACCURACY), stated off its default
+        deck["accuracy"] = ac.epsilon_Ha_per_atom
     solid: dict = {}
     if _PP_SET[ph.functional] != "gth-lda-valence":
         solid["pp"] = _PP_SET[ph.functional]

@@ -303,6 +303,18 @@ class TheBridgeRunsThem(unittest.TestCase):
         r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
+    def test_epsilon_reaches_the_crystal_as_the_run_s_accuracy(self):
+        d = si_inline().to_dict()
+        d["accuracy"]["epsilon_Ha_per_atom"] = 3e-6
+        spec = RunSpec.from_dict(d)
+        be = solid2()
+        deck = be.translate(spec).native["deck"]
+        self.assertEqual(json.loads(deck)["accuracy"] if isinstance(deck, str) else deck["accuracy"], 3e-6)
+        self.assertEqual(json.loads(be._qc.SolidRun(deck).resolved())["accuracy"], 3e-6)
+        plain = be.translate(si_inline()).native["deck"]                    # at the default the deck states nothing ...
+        self.assertNotIn("accuracy", json.loads(plain) if isinstance(plain, str) else plain)
+        self.assertEqual(json.loads(be._qc.SolidRun(plain).resolved())["accuracy"], D.LIB_EPS)   # ... and runs the same ε
+
     def test_the_panel_s_gate_defaults_are_the_deck_s(self):
         from qviz.setup_panel import GATE_DEFAULTS
         be = solid2()
