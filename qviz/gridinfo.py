@@ -25,12 +25,14 @@ def planned(spec: RunSpec) -> list[str]:
     st, ph, ac = spec.structure, spec.physics, spec.accuracy
     if st.kind == "molecule":
         if not (ph.theory == "DFT" or ph.core == "pseudopotential"):
-            return ["no XC mesh: Hartree-Fock exchange is analytic"]
+            return ["no XC mesh: Hartree-Fock exchange is analytic",
+                    "Hartree: analytic four-centre integrals, no mesh"]
         own = code_block(spec, "solid2")
         mr, ma = mesh_for(ac.epsilon_Ha_per_atom)
         mr, ma = int(own.get("mesh_radial", mr)), int(own.get("mesh_angular", ma))
         why = "stated" if own else f"from ε = {ac.epsilon_Ha_per_atom:g} Ha/atom (provisional rule)"
-        return [f"XC mesh: {mr} radial × Lebedev {ma} per atom, Becke-partitioned ({why})"]
+        return [f"XC mesh: {mr} radial × Lebedev {ma} per atom, Becke-partitioned ({why})",
+                "Hartree fit mesh: the Coulomb fit basis's own mesh, built with the XC mesh's parameters"]
     deck = solid2_deck.to_deck(spec)
     k = deck.get("kmesh", [1, 1, 1])
     ecut = (deck.get("solid") or {}).get("densityEcut")
@@ -59,7 +61,7 @@ def _grids(record: dict) -> Optional[dict]:
 
 
 #: the meshes a run files under grids, as the Grids tab names them
-_MESHES = (("xcQuadrature", "XC mesh"), ("ppQuadrature", "PP mesh"), ("auxiliaryFit", "auxiliary-fit mesh"))
+_MESHES = (("xcQuadrature", "XC mesh"), ("ppQuadrature", "PP mesh"), ("auxiliaryFit", "Hartree fit mesh"))
 
 
 def _mesh_line(what: str, m: dict) -> str:

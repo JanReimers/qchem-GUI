@@ -204,7 +204,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Output: the selected run's results
         self.output = QtWidgets.QTabWidget(); self.output.setDocumentMode(True)
-        self.scf_view = SCFView(self)                 # one plot tab per column of the code's own table + the table
+        # one plot tab per column of the code's own table + the table; the graph the user last clicked is kept across sessions
+        self.scf_view = SCFView(self, wanted=str(self._settings.value("output/graph", "") or "") or None)
+        self.scf_view.tabs.tabBarClicked.connect(
+            lambda i: i >= 0 and self._settings.setValue("output/graph", self.scf_view.tabs.tabText(i)))
         self.output.addTab(self.scf_view.table, "Iteration log")
         self.output.addTab(self.scf_view.tabs, "SCF graphs")
         self.orb_view = QtWidgets.QPlainTextEdit(); self.orb_view.setReadOnly(True)
@@ -224,6 +227,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stop_btn.clicked.connect(self._stop_live_run)
         self.output.setCornerWidget(self.stop_btn, QtCore.Qt.TopRightCorner)
         self._output_dock = self._dock("Output", self.output, QtCore.Qt.LeftDockWidgetArea)
+        # the Output tab the user last CLICKED (kept across sessions); until there is one, a run brings SCF graphs forward
+        picked = str(self._settings.value("output/tab", "") or "")
+        for i in range(self.output.count()):
+            if self.output.tabText(i) == picked:
+                self.output.setCurrentIndex(i)
+        self.output.tabBarClicked.connect(lambda i: i >= 0 and self._settings.setValue("output/tab", self.output.tabText(i)))
 
         # Agent -- edits the shared draft; its run requests are cards only the user's click starts
         tools = Toolset(self.draft, REGISTRY, None, start_run=lambda card: [self._add_spec(card.spec, b) for b in card.backends],
@@ -368,8 +377,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scf_view.clear()                         # fresh convergence trace for this run
         self._live_run = self._scf_shown = run
         self.stop_btn.setEnabled(True)
-        self._output_dock.raise_()                    # bring the SCF graphs forward for the live trace
-        self.output.setCurrentWidget(self.scf_view.tabs)
+        self._output_dock.raise_()                    # the live trace: the Output panel forward
+        if not self._settings.value("output/tab", ""):   # a first run: show the graphs; after that, the user's own tab
+            self.output.setCurrentWidget(self.scf_view.tabs)
         self._log(f"▶ computing {run.summary}", clear=True)
         try:
             for k, v in run.backend.translate(run.spec).resolved.items():   # the resolved settings, before the run
@@ -847,6 +857,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_workspace(ws)
         self._cam_run = None
         self._on_ws_change(ws)                        # restored runs show at once
+        if ws.selected is not None:                   # Setup agrees with the Runs list: the selected run, its spec the draft
+            self.draft.set(ws.selected.spec, "user", f"opened workspace: the selected run {ws.selected.summary}")
+            self.setup.show_run(ws.selected)
         todo = [r for r in ws.runs if r.status is RunStatus.PENDING]   # saved without a result: recompute
         for run in todo:                              # off-thread, serialized
             self._pool.start(_ComputeTask(run))

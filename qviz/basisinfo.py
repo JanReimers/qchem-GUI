@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 from collections import Counter
+from typing import Optional
 
 from .backends import gaussian_basis
 from .backends.solid2 import basis_for
@@ -47,6 +48,23 @@ def element_rows(spec: RunSpec) -> list[tuple[str, int, str, int]]:
 @functools.lru_cache(maxsize=32)
 def _info(qc, numbers: tuple, positions: tuple, basis: str) -> dict:
     return qc.basis_info(list(numbers), list(positions), basis)
+
+
+def fits(spec: RunSpec, record: Optional[dict]) -> list[str]:
+    """The Basis tab's other bases -- what the run fits ρ (Hartree) and Vxc in -- as the record's basis section files them
+    (basis.fits: [{role, name, nFunctions}]).  Hartree-Fock has none: its Coulomb and exchange are analytic."""
+    ph = spec.physics
+    if spec.structure.kind != "molecule":
+        return []
+    if not (ph.theory == "DFT" or ph.core == "pseudopotential"):
+        return ["fit bases: none -- Hartree-Fock's Coulomb and exchange are analytic four-centre integrals"]
+    root = next(iter(record.values()), {}) if record else {}
+    got = ((root.get("basis") or {}) if isinstance(root, dict) else {}).get("fits")
+    if not got:
+        return ["fit bases (Hartree ρ fit, Vxc fit): " + ("not in the library's record yet" if record else
+                                                         "Build (or Run) fills this from the library's record")]
+    return [f"{f.get('role', 'fit')}: {f.get('name', '?')}" + (f", {f['nFunctions']} functions" if "nFunctions" in f else "")
+            for f in got]
 
 
 def summary(spec: RunSpec, qc) -> list[str]:

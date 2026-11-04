@@ -43,6 +43,12 @@ class TheView(unittest.TestCase):
         self.assertNotEqual(v.table.item(2, 2).foreground().color().name(), PASS_GREEN, "no gate, never green")
         self.assertEqual(v.table.item(2, 1).text(), "4.00e-06", "the gate in the header does not break the row lookup")
 
+    def test_the_graph_the_app_remembers_is_selected_on_a_new_run(self):
+        v = SCFView(wanted="ΔE/E")                        # the app hands over the tab the user clicked last session
+        v.add_row(SCFRow(1, -1.0, (SCFCell("[F,D]", 1e-2, "log", "1.00e-02", None),
+                                   SCFCell("ΔE/E", 1e-3, "log", "1.00e-03", None))))
+        self.assertEqual(v.current_title, "ΔE/E")
+
     def test_a_tab_per_numeric_column_under_the_code_s_title(self):
         v = SCFView()
         v.set_rows(cp2k_rows())

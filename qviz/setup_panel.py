@@ -318,9 +318,11 @@ class SetupPanel(QtWidgets.QWidget):
         self.mesh_angular.activated.connect(lambda _i: self._mesh_edit("mesh_angular", int(self.mesh_angular.currentText())))
         self.mesh_reset = QtWidgets.QPushButton("Back to ε's mesh")
         self.mesh_reset.clicked.connect(lambda: self._mesh_edit(None, None))
+        self.mesh_auto = QtWidgets.QLabel()            # in the button's place while ε chooses the mesh
         mesh = QtWidgets.QWidget(); ml = QtWidgets.QHBoxLayout(mesh); ml.setContentsMargins(0, 0, 0, 0)
         ml.addWidget(QtWidgets.QLabel("radial")); ml.addWidget(self.mesh_radial)
-        ml.addWidget(QtWidgets.QLabel("Lebedev L")); ml.addWidget(self.mesh_angular); ml.addWidget(self.mesh_reset); ml.addStretch(1)
+        ml.addWidget(QtWidgets.QLabel("Lebedev L")); ml.addWidget(self.mesh_angular); ml.addWidget(self.mesh_reset)
+        ml.addWidget(self.mesh_auto); ml.addStretch(1)
         f.addRow("XC mesh per atom", mesh)
         self.density_ecut = QtWidgets.QDoubleSpinBox(); self.density_ecut.setRange(0.0, 2000.0); self.density_ecut.setDecimals(1)
         self.density_ecut.setSingleStep(10.0); self.density_ecut.setSuffix(" Ha")
@@ -592,12 +594,14 @@ class SetupPanel(QtWidgets.QWidget):
 
     # -- back ends ----------------------------------------------------------------
     def _render_basis(self, s: RunSpec) -> None:
-        rec = gridinfo.conditioning(self._record(s)[0])    # a run's (or a crystal build's) own: read, never recomputed
+        record = self._record(s)[0]
+        rec = gridinfo.conditioning(record)              # a run's (or a crystal build's) own: read, never recomputed
         if rec:
             per = "per k" if s.structure.kind == "crystal" else "per irrep"
-            self.basis_summary.setText("\n".join([f"overlap {per} (the library's record):"] + rec))
+            lines = [f"overlap {per} (the library's record):"] + rec
         else:
-            self.basis_summary.setText("\n".join(basisinfo.summary(s, self._qc)))
+            lines = basisinfo.summary(s, self._qc)
+        self.basis_summary.setText("\n".join(lines + basisinfo.fits(s, record)))
         rows = basisinfo.element_rows(s)
         self.basis_table.setRowCount(len(rows))
         for r, row in enumerate(rows):
@@ -651,7 +655,10 @@ class SetupPanel(QtWidgets.QWidget):
         if i < 0:
             self.mesh_angular.addItem(str(ma)); i = self.mesh_angular.count() - 1
         self.mesh_angular.setCurrentIndex(i)
-        self.mesh_reset.setEnabled("mesh_radial" in own or "mesh_angular" in own)
+        stated = "mesh_radial" in own or "mesh_angular" in own
+        self.mesh_reset.setVisible(stated)
+        self.mesh_auto.setVisible(not stated)
+        self.mesh_auto.setText(f"auto, from ε = {s.accuracy.epsilon_Ha_per_atom:g}")
         self._grids_form.setRowVisible(self.mesh_reset.parentWidget(), mol and dft)
         self._grids_form.setRowVisible(self.density_ecut, not mol)
         self.density_ecut.setValue(float(((own.get("deck") or {}).get("solid") or {}).get("densityEcut") or 0.0))

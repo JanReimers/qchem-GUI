@@ -47,7 +47,8 @@ def meets(c: SCFCell) -> bool:
 class SCFView(QtCore.QObject):
     """The plot tabs (`tabs`) and the iteration table (`table`).  add_row() is the live feed; set_rows() shows a finished trace."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, wanted: str | None = None):
+        """`wanted`: the graph tab to select whenever a run has a column of that title (the app keeps it across sessions)."""
         super().__init__(parent)
         self.tabs = QtWidgets.QTabWidget(); self.tabs.setDocumentMode(True)
         self.table = QtWidgets.QTableWidget(0, 1)
@@ -58,7 +59,7 @@ class SCFView(QtCore.QObject):
         self._cells: dict[str, SCFCell] = {}      # first cell seen per title: its scale and unit
         self._titles: list[str] = []               # the table's columns after "#", by title (a header may carry its gate too)
         self._curves: dict[str, pg.PlotDataItem] = {}
-        self._wanted: str | None = None           # the tab the user last picked: kept across runs
+        self._wanted: str | None = wanted         # the tab the user last picked: kept across runs
         self._auto = False                         # this run's tab was chosen for the user (a convergence measure)
         self.tabs.currentChanged.connect(self._picked)
         self.clear()

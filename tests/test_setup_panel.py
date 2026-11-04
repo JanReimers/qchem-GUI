@@ -221,13 +221,17 @@ class ScfKnobs(unittest.TestCase):
         self.draft.patch({"physics": {"theory": "DFT", "functional": "LDA"}}, "test")
         mr, ma = mesh_for(self.draft.spec.accuracy.epsilon_Ha_per_atom)
         self.assertEqual((p.mesh_radial.value(), p.mesh_angular.currentText()), (mr, str(ma)))
-        self.assertFalse(p.mesh_reset.isEnabled())
+        self.assertTrue(p.mesh_reset.isHidden(), "ε's own mesh: nothing to go back to")
+        self.assertFalse(p.mesh_auto.isHidden())
+        self.assertEqual(p.mesh_auto.text(), f"auto, from ε = {self.draft.spec.accuracy.epsilon_Ha_per_atom:g}")
         p.mesh_angular.setCurrentText("17"); p.mesh_angular.activated.emit(p.mesh_angular.currentIndex())
         own = self.draft.spec.accuracy.representation["solid2"]
         self.assertEqual((own["mesh_radial"], own["mesh_angular"]), (mr, 17))
         self.assertEqual((self.be.translate(self.draft.spec).native["mesh_radial"],
                           self.be.translate(self.draft.spec).native["mesh_angular"]), (mr, 17))
+        self.assertFalse(p.mesh_reset.isHidden()); self.assertTrue(p.mesh_auto.isHidden())
         p.mesh_reset.click()
+        self.assertFalse(p.mesh_auto.isHidden())
         self.assertNotIn("mesh_angular", (self.draft.spec.accuracy.representation or {}).get("solid2") or {})
 
     def test_the_ladder_switch_over_and_alpha_min_reach_the_molecular_facade(self):
@@ -286,6 +290,19 @@ class GridsTab(unittest.TestCase):
         self.assertRegex(gridinfo.planned(lda)[0], r"XC mesh: \d+ radial × Lebedev \d+ per atom")
         hf = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107])
         self.assertIn("no XC mesh", gridinfo.planned(hf)[0])
+
+    def test_hartree_says_how_it_is_done_in_grids_and_basis(self):
+        from qviz import basisinfo, gridinfo
+        from qviz.spec import molecule
+        xyz = [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107]
+        lda = molecule("water", [8, 1, 1], xyz, theory="DFT", functional="LDA")
+        hf = molecule("water", [8, 1, 1], xyz)
+        self.assertIn("Hartree fit mesh", gridinfo.planned(lda)[1])
+        self.assertIn("Hartree: analytic", gridinfo.planned(hf)[1])
+        self.assertIn("analytic", basisinfo.fits(hf, None)[0])
+        self.assertIn("not in the library's record yet", basisinfo.fits(lda, {"run": {"basis": {"name": "dzvp"}}})[0])
+        rec = {"run": {"basis": {"fits": [{"role": "Hartree ρ fit", "name": "A1_coul", "nFunctions": 70}]}}}
+        self.assertEqual(basisinfo.fits(lda, rec), ["Hartree ρ fit: A1_coul, 70 functions"])
 
     def test_build_fills_the_tabs_and_run_converges_that_build(self):
         if self.qc is None:
