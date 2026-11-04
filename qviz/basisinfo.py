@@ -55,14 +55,11 @@ def fits(spec: RunSpec, record: Optional[dict]) -> list[str]:
     """The Basis tab's other bases -- what the run fits ρ (Hartree) and Vxc in -- as the record files them
     (hamiltonian.<term>.fitbasis: [{role, name, nFunctions}]).  Hartree-Fock has none: its Coulomb and exchange are analytic."""
     ph = spec.physics
-    if spec.structure.kind != "molecule":
-        return []
-    if not (ph.theory == "DFT" or ph.core == "pseudopotential"):
+    if spec.structure.kind == "molecule" and not (ph.theory == "DFT" or ph.core == "pseudopotential"):
         return ["fit bases: none -- Hartree-Fock's Coulomb and exchange are analytic four-centre integrals"]
     got = gridinfo.fit_bases(record)
     if not got:
-        return ["fit bases (Hartree ρ fit, Vxc fit): " + ("not in the library's record yet" if record else
-                                                         "Build (or Run) fills this from the library's record")]
+        return ["fit bases (Hartree ρ fit, Vxc fit): Build (or Run) fills this from the library's record"]
     return [f"{f.get('role', 'fit')}: {f.get('name', '?')}" + (f", {f['nFunctions']} functions" if "nFunctions" in f else "")
             for f in got]
 

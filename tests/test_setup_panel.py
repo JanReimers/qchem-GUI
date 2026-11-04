@@ -300,7 +300,7 @@ class GridsTab(unittest.TestCase):
         self.assertIn("Hartree fit mesh", gridinfo.planned(lda)[1])
         self.assertIn("Hartree: analytic", gridinfo.planned(hf)[1])
         self.assertIn("analytic", basisinfo.fits(hf, None)[0])
-        self.assertIn("not in the library's record yet", basisinfo.fits(lda, {"run": {"basis": {"name": "dzvp"}}})[0])
+        self.assertIn("Build (or Run) fills this", basisinfo.fits(lda, None)[0])
         rec = {"run": {"hamiltonian": {"Vxc_DFT": {"fitbasis": [{"role": "Vxc fit", "name": "DeltaFit", "nFunctions": 900}]},
                                         "Hartree": {"fitbasis": [{"role": "Hartree ρ fit", "name": "A1_coul", "nFunctions": 70}]}}}}
         self.assertEqual(basisinfo.fits(lda, rec), ["Hartree ρ fit: A1_coul, 70 functions", "Vxc fit: DeltaFit, 900 functions"],
@@ -382,6 +382,12 @@ class GridsTab(unittest.TestCase):
         self.assertRegex(res.resolved["SCF gates"], r"^run: \[F,D\] 1e-05, Δρ 0.0001; at most \d+ iterations$",
                          "the gates the record says the SCF used; off (1e30) gates are not listed")
         self.assertTrue(be.translate(w).resolved["SCF gates"].startswith("planned:"))
+
+    def test_the_mesh_hf_measures_its_density_change_on_is_shown(self):
+        from qviz import gridinfo
+        rec = {"water@t": {"residualMesh": {"kind": "Becke", "natom": 3, "nRadial": 50, "nDirs": 194, "L": 23, "points": 29100}}}
+        self.assertEqual(gridinfo.built(rec)[0],
+                         ["Δρ convergence mesh: Becke, 3 atoms × 50 radial × 194 directions (Lebedev L=23) = 29,100 points"])
 
     def test_a_fit_grid_is_named_for_whose_it_is(self):
         from qviz import gridinfo
