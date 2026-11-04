@@ -53,8 +53,7 @@ def _info(qc, numbers: tuple, positions: tuple, basis: str) -> dict:
 
 def fits(spec: RunSpec, record: Optional[dict]) -> list[str]:
     """The Basis tab's other bases -- what the run fits ρ (Hartree) and Vxc in -- as the record files them
-    (grids.hamiltonian.fits: [{role, name, nFunctions}]; the Hamiltonian builds them).  Hartree-Fock has none: its Coulomb
-    and exchange are analytic."""
+    (hamiltonian.<term>.fitbasis: [{role, name, nFunctions}]).  Hartree-Fock has none: its Coulomb and exchange are analytic."""
     ph = spec.physics
     if spec.structure.kind != "molecule":
         return []

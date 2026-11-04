@@ -3,9 +3,10 @@ qviz.gridinfo -- the grids a spec's ε resolves to: what is PLANNED (read from t
 library call) and what was BUILT (read from the library's own run record, report::GlobalReport, as qchem_py.report()
 hands it back).
 
-The record is the library speaking for itself: every provider files what it built under the run's "grids" section
-(the GPW density ladder, the density / Vxc fit rasters, the grid audits) and the "folds" section (the molecular XC
-mesh's point count).  This module only picks rows out of it; it never re-derives a grid.
+The record is the library speaking for itself: the Hamiltonian's build files under the run's "hamiltonian" section (the
+XC and PP meshes, and under each term that needs one its fit basis, mesh or raster), the solid's density ladder and grid
+audits under "grids", the seed's and the mixer's own fit grids under "seedDensity" and "densityMixer", and the molecular
+XC mesh's point count under "folds".  This module only picks rows out of it; it never re-derives a grid.
 
 The record comes from a run, or from SOLID²'s Build (every pre-SCF step, no SCF: Solid2Backend.build).
 """
@@ -52,21 +53,23 @@ def _runs(record: dict, build: bool) -> list[dict]:
     return out
 
 
-def _grids(record: dict) -> Optional[dict]:
+def _section(record: Optional[dict], name: str) -> dict:
+    """A section of the record, from its build run when it has one, else from the SCF run ({}: not filed)."""
     for build in (True, False):
         for run in _runs(record, build):
-            if run.get("grids"):
-                return run["grids"]
-    return None
+            if run.get(name):
+                return run[name]
+    return {}
+
+
+#: the record's sections about grids, by key: a molecule files no "grids" at all
+GRID_SECTIONS = ("hamiltonian", "grids", "seedDensity", "densityMixer")
 
 
 def fit_bases(record: Optional[dict]) -> list[dict]:
-    """The fit bases the Hamiltonian built, as the record files them ([]: none filed)."""
-    return ((_grids(record) or {}).get("hamiltonian") or {}).get("fits") or []
-
-
-#: the meshes a run files under grids, as the Grids tab names them
-_MESHES = (("xcQuadrature", "XC mesh"), ("ppQuadrature", "PP mesh"), ("auxiliaryFit", "Hartree fit mesh"))
+    """The fit bases the Hamiltonian built, as its terms file them ([]: none filed)."""
+    h = _section(record, "hamiltonian")
+    return [f for term in ("Hartree", "Vxc_DFT") for f in (h.get(term) or {}).get("fitbasis") or []]
 
 
 def _mesh_line(what: str, m: dict) -> str:
@@ -84,11 +87,12 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
     if not record:
         return [], []
     lines, rows = [], []
-    g = _grids(record)
-    q = (g or {}).get("xcQuadrature") or {}
-    for key, what in _MESHES:                         # each mesh's own report (it files itself, lane B b2dabdd0)
-        m = (g or {}).get(key) or {}
-        if "points" in m:
+    h, g = _section(record, "hamiltonian"), _section(record, "grids")
+    hartree, vxc = h.get("Hartree") or {}, h.get("Vxc_DFT") or {}
+    q = h.get("xcQuadrature") or {}
+    for what, m in (("XC mesh", q), ("PP mesh", h.get("ppQuadrature")), ("Hartree fit mesh", hartree.get("auxiliaryFit")),
+                    ("Vxc fit mesh", vxc.get("auxiliaryFit"))):   # each mesh's own report
+        if m and "points" in m:
             lines.append(_mesh_line(what, m))
     for build in (True, False):
         for run in _runs(record, build):
@@ -96,23 +100,23 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
             if mesh and "points" not in q:
                 lines.append(f"XC mesh: {mesh['raw']:,} points"
                              + (f", {mesh['reps']:,} after the {mesh['ops']}-operation fold" if mesh.get("ops") else ""))
-    if g:
-        if "densityEcut" in g:
-            lines.append(f"density Ecut floor: {g['densityEcut']:g} Ha (cutoff factor {g.get('cutoffFactor', 0):g})")
-        if q.get("kind") and "points" not in q:
-            lines.append(f"XC quadrature: {q['kind']}")
-        for key, what in (("densityFit", "density fit"), ("vxcFitGrid", "Vxc fit")):
-            f = g.get(key)
-            if f and "N" in f:
-                n = f["N"]
-                lines.append(f"{what}: {f.get('kind', '')} {n[0]}×{n[1]}×{n[2]} = {f.get('points', n[0] * n[1] * n[2]):,} points"
-                             + (f", spacing {f['dr'][0]:.3f} bohr" if f.get("dr") else ""))
-        audits = [(k, a) for k, a in g.items() if isinstance(a, dict) and "status" in a]
-        for k, a in audits:
+    if "densityEcut" in g:
+        lines.append(f"density Ecut floor: {g['densityEcut']:g} Ha (cutoff factor {g.get('cutoffFactor', 0):g})")
+    if q.get("kind") and "points" not in q:
+        lines.append(f"XC quadrature: {q['kind']}")
+    for what, f in (("density fit", hartree.get("densityFit")), ("Vxc fit", vxc.get("vxcFitGrid")),
+                    ("seed's density fit", _section(record, "seedDensity").get("densityFit")),
+                    ("mixer's Vxc fit", _section(record, "densityMixer").get("vxcFitGrid"))):
+        if f and "N" in f:
+            n = f["N"]
+            lines.append(f"{what}: {f.get('kind', '')} {n[0]}×{n[1]}×{n[2]} = {f.get('points', n[0] * n[1] * n[2]):,} points"
+                         + (f", spacing {f['dr'][0]:.3f} bohr" if f.get("dr") else ""))
+    for k, a in g.items():
+        if isinstance(a, dict) and "status" in a:
             lines.append(f"{'⚠ ' if a['status'] != 'OK' else ''}audit {a.get('term', k)}: {a['status']}")
-        for L in g.get("ladder") or []:
-            n = L["N"]
-            rows.append((L["level"], f"{n[0]}×{n[1]}×{n[2]}", f"{L['ecut']:g}", L["nG"], L["role"]))
+    for L in g.get("ladder") or []:
+        n = L["N"]
+        rows.append((L["level"], f"{n[0]}×{n[1]}×{n[2]}", f"{L['ecut']:g}", L["nG"], L["role"]))
     return lines, rows
 
 

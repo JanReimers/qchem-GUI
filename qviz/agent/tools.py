@@ -228,7 +228,8 @@ class Toolset:
     def get_grids(self, run_id: Optional[int] = None) -> dict:
         rec, source, spec, licensed = self._record_of(run_id)
         lines, ladder = gridinfo.built(rec)
-        raw = [run["grids"] for key, run in (rec or {}).items() if run.get("grids") and not key.startswith("gridAudit")]
+        raw = [{k: run[k] for k in gridinfo.GRID_SECTIONS if run.get(k)} for key, run in (rec or {}).items()
+               if not key.startswith("gridAudit") and any(run.get(k) for k in gridinfo.GRID_SECTIONS)]
         return {"is_result": True, "licensed": licensed, "source": source, "planned": gridinfo.planned(spec), "built": lines,
                 "ladder": [dict(zip(gridinfo.LADDER_COLUMNS, row)) for row in ladder], "record": raw,
                 "summary": "; ".join(lines) or f"no grids built yet ({source})"}

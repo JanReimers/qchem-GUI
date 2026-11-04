@@ -69,7 +69,7 @@ class WorkspaceOnFake(unittest.TestCase):
     def test_a_finished_run_comes_back_with_its_result_and_no_compute(self):
         ws = self.ws()
         done = ws.add_run(water())
-        done.result.record = {"water@t": {"grids": {"xcQuadrature": {"points": 100}}}}
+        done.result.record = {"water@t": {"hamiltonian": {"xcQuadrature": {"points": 100}}}}
         quit_mid_run = ws.add_run(water(theory="DFT", functional="LDA"), compute=False)   # still pending at quit
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "w.qproj.h5")

@@ -33,7 +33,7 @@ class McpOverStdio(unittest.TestCase):
         self.file = pathlib.Path(self.tmp.name) / "agent-bridge.json"
         self.draft = SpecDraft(molecules.preset_spec("Water (H2O)"))
         self.calls, self.said, self.hello = [], [], []
-        rec = {"water build@t": {"grids": {"xcQuadrature": {"kind": "Becke", "natom": 3, "nRadial": 50, "nDirs": 194, "L": 23,
+        rec = {"water build@t": {"hamiltonian": {"xcQuadrature": {"kind": "Becke", "natom": 3, "nRadial": 50, "nDirs": 194, "L": 23,
                                                             "points": 29100}},
                                  "basis": {"name": "dzvp", "nFunctions": 19, "perIrrep": [
                                      {"irrep": "A1", "nFunctions": 19, "lambdaMin": 0.0186, "lambdaMax": 4.7, "cond": 254.6}],

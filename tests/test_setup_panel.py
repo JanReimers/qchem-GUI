@@ -301,8 +301,10 @@ class GridsTab(unittest.TestCase):
         self.assertIn("Hartree: analytic", gridinfo.planned(hf)[1])
         self.assertIn("analytic", basisinfo.fits(hf, None)[0])
         self.assertIn("not in the library's record yet", basisinfo.fits(lda, {"run": {"basis": {"name": "dzvp"}}})[0])
-        rec = {"run": {"grids": {"hamiltonian": {"fits": [{"role": "Hartree ρ fit", "name": "A1_coul", "nFunctions": 70}]}}}}
-        self.assertEqual(basisinfo.fits(lda, rec), ["Hartree ρ fit: A1_coul, 70 functions"])
+        rec = {"run": {"hamiltonian": {"Vxc_DFT": {"fitbasis": [{"role": "Vxc fit", "name": "DeltaFit", "nFunctions": 900}]},
+                                        "Hartree": {"fitbasis": [{"role": "Hartree ρ fit", "name": "A1_coul", "nFunctions": 70}]}}}}
+        self.assertEqual(basisinfo.fits(lda, rec), ["Hartree ρ fit: A1_coul, 70 functions", "Vxc fit: DeltaFit, 900 functions"],
+                         "read by key: the record's member order is construction order")
 
     def test_build_fills_the_tabs_and_run_converges_that_build(self):
         if self.qc is None:
@@ -342,7 +344,7 @@ class GridsTab(unittest.TestCase):
         spec = molecules.preset_spec("Water (H2O)")
         run = Run(spec, FakeBackend())
         run.result = Result(converged=True, energy_Ha=-1.0, structure=None,
-                            record={"water@t": {"grids": {"xcQuadrature": {"kind": "Becke", "natom": 3, "nRadial": 50,
+                            record={"water@t": {"hamiltonian": {"xcQuadrature": {"kind": "Becke", "natom": 3, "nRadial": 50,
                                                                            "nDirs": 194, "L": 23, "points": 29100}}}})
         runs = []
         panel = SetupPanel(SpecDraft(spec), BackendRegistry([FakeBackend()]), runs=lambda: runs)
@@ -371,7 +373,7 @@ class GridsTab(unittest.TestCase):
         self.assertIn("basis", job.live["running@live"], "the record so far, taken at iteration 1 on the run's own thread")
         lines, rows = gridinfo.built(res.record)
         self.assertRegex(lines[0], r"^XC mesh: Becke, 3 atoms × \d+ radial × \d+ directions \(Lebedev L=\d+\) = [\d,]+ points",
-                         "the mesh's own report (grids.xcQuadrature), filed before iteration 1")
+                         "the mesh's own report (hamiltonian.xcQuadrature), filed before iteration 1")
         self.assertEqual(gridinfo.built(job.live)[0][0], lines[0], "the live snapshot already has it")
         self.assertEqual(rows, [], "a molecule has no density ladder")
         cond = gridinfo.conditioning(res.record)
@@ -381,9 +383,19 @@ class GridsTab(unittest.TestCase):
                          "the gates the record says the SCF used; off (1e30) gates are not listed")
         self.assertTrue(be.translate(w).resolved["SCF gates"].startswith("planned:"))
 
+    def test_a_fit_grid_is_named_for_whose_it_is(self):
+        from qviz import gridinfo
+        fit = {"kind": "uniform", "N": [8, 8, 8], "points": 512}
+        rec = {"si@t": {"hamiltonian": {"Hartree": {"densityFit": fit}, "Vxc_DFT": {"vxcFitGrid": fit}},
+                        "seedDensity": {"densityFit": fit}, "densityMixer": {"vxcFitGrid": fit}}}
+        self.assertEqual([l.split(":")[0] for l in gridinfo.built(rec)[0]],
+                         ["density fit", "Vxc fit", "seed's density fit", "mixer's Vxc fit"])
+        mixer_only = {"si@t": {"hamiltonian": {"xcQuadrature": {"kind": "Becke"}}, "densityMixer": {"vxcFitGrid": fit}}}
+        self.assertFalse(any(l.startswith("Vxc fit") for l in gridinfo.built(mixer_only)[0]), "a Becke run's only raster is the mixer's")
+
     def test_a_mesh_that_reports_itself_is_read_as_filed(self):
         from qviz import gridinfo
-        rec = {"water@t": {"grids": {"xcQuadrature": {"kind": "Becke", "natom": 3, "radial": "MHL", "nRadial": 50,
+        rec = {"water@t": {"hamiltonian": {"xcQuadrature": {"kind": "Becke", "natom": 3, "radial": "MHL", "nRadial": 50,
                                                       "angular": "Lebedev", "L": 23, "nDirs": 194, "points": 29100,
                                                       "dropped": 0}},
                            "folds": {"XC mesh": {"ops": 0, "raw": 29100, "reps": 29100, "factor": 1.0}}}}
