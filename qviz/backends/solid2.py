@@ -120,8 +120,9 @@ _GATES = (("minFD", "[F,D]"), ("minDrho", "density change"), ("minDE", "ΔE"), (
 
 
 def _gates_run(record: dict) -> Optional[str]:
-    """The SCF gates the run USED, from its record's scf.standard (the SCF iterator writes it); None when absent."""
-    for key, run in (record or {}).items():
+    """The SCF gates the run USED, from its record's scf.standard (the SCF iterator writes it); None when absent.  The run's
+    own SCF is the last filed: a +U crystal's pseudo-atom SCFs come first, each with its own standard."""
+    for key, run in reversed((record or {}).items()):
         std = (run.get("scf") or {}).get("standard")
         if std and not key.startswith("gridAudit"):
             on = [f"{label} {std[k]:g}" for k, label in _GATES

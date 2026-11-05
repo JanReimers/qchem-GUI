@@ -232,6 +232,25 @@ class States(unittest.TestCase):
 
 
 @unittest.skipUnless(solid2()._qc is not None and RUNDECK.exists(), "qchem_py / rundeck not built (QCHEM_BUILD)")
+class HelperRuns(unittest.TestCase):
+    """A +U crystal's record files its pseudo-atom SCFs first: what the Setup panel states is the crystal's own run."""
+    RECORD = {"pseudo-atom Si (+U projector)@1": {"scf": {"standard": {"minFD": 1e-7, "nMaxIter": 120}},
+                                                  "basis": {"perIrrep": [{"irrep": "s", "nFunctions": 9, "lambdaMin": 0.5, "cond": 2.0}]}},
+              "inline build@2": {"basis": {"perIrrep": [{"irrep": "Γ", "nFunctions": 26, "lambdaMin": 0.1, "cond": 9.0}]}},
+              "gridAudit reference@3": {"scf": {"standard": {"minFD": 1.0}}},
+              "inline@4": {"scf": {"standard": {"minFD": 1e-5, "nMaxIter": 100}}}}
+
+    def test_the_gates_are_the_run_s_own_not_a_pseudo_atom_s(self):
+        from qviz.backends.solid2 import _gates_run
+        self.assertEqual(_gates_run(self.RECORD), "run: [F,D] 1e-05; at most 100 iterations")
+
+    def test_the_conditioning_is_the_crystal_s_not_a_pseudo_atom_s(self):
+        from qviz import gridinfo
+        lines = gridinfo.conditioning(self.RECORD)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("Γ: 26 functions", lines[0])
+
+
 class TheBridgeRunsThem(unittest.TestCase):
     def test_the_inline_cell_lands_on_rundeck_s_energy(self):
         be, spec = solid2(), si_inline()

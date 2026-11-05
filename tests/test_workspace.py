@@ -160,7 +160,7 @@ class Solid2EndToEnd(unittest.TestCase):
         steps = []
         run = self.ws().add_run(water(accuracy=Accuracy(representation={"basis": "dzvp"})), compute=False)
         run.compute(on_step=steps.append)
-        self.assertEqual(steps[-1].titles[:4], ("Etotal", "[F,D]", "ΔE/E", "Δρ"), "the molecular console's columns")
+        self.assertEqual(steps[-1].titles[:4], ("Etotal", "[F,D]", "ΔE/E", "‖ΔD‖"), "the molecular HF console's columns")
         fd = steps[-1].cells[1]
         self.assertEqual((fd.scale, fd.tolerance), ("log", 1e-5))
         self.assertAlmostEqual(steps[-1].value("Etotal"), steps[-1].energy)

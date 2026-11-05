@@ -42,7 +42,8 @@ def planned(spec: RunSpec) -> list[str]:
 
 
 def _runs(record: dict, build: bool) -> list[dict]:
-    """The record's runs, the build runs ("<name> build@...") or the SCF runs; nested pilot runs are skipped."""
+    """The record's build runs ("<name> build@...") or its SCF run, the last filed: an earlier one is a helper's (a +U
+    crystal's pseudo-atom SCFs file a basis and gates of their own), and nested pilot runs are skipped."""
     out = []
     for key, run in (record or {}).items():
         name = key.rsplit("@", 1)[0]
@@ -50,7 +51,7 @@ def _runs(record: dict, build: bool) -> list[dict]:
             continue
         if name.endswith(" build") == build:
             out.append(run)
-    return out
+    return out if build else out[-1:]
 
 
 def _section(record: Optional[dict], name: str) -> dict:
