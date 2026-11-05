@@ -122,15 +122,22 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
 
 
 def conditioning(record: Optional[dict]) -> list[str]:
-    """Per-irrep overlap conditioning from a record's basis section (a crystal's is per k): the [basis trim] facts."""
+    """Overlap conditioning from a record's basis section, one row per block (S has no spin; a crystal's blocks are per k), under
+    the library's verdict on the whole: the [basis trim] facts.  Below the library's floor is a run to look at, not a wrong one."""
     out = []
     for build in (True, False):
         for run in _runs(record, build):
             basis = run.get("basis") or {}
+            whole = basis.get("conditioning") or {}
             for b in basis.get("perIrrep") or []:
                 if "lambdaMin" in b:
                     out.append(f"{b['irrep'].strip()}: {b['nFunctions']} functions, S min eigenvalue {b['lambdaMin']:.3e}, "
-                               f"condition number {b['cond']:.3g}" + ("  ⚠ near-linear dependence" if b["lambdaMin"] < 1e-6 else ""))
+                               f"condition number {b['cond']:.3g}"
+                               + ("  ⚠ near-linear dependence" if b["lambdaMin"] < whole.get("floor", 0.0) else ""))
+            if out and whole:
+                out.insert(0, f"worst: S min eigenvalue {whole['lambdaMin']:.3e} at {whole['lambdaMinAt'].strip()}, condition number "
+                              f"{whole['cond']:.3g} at {whole['condAt'].strip()}; {whole['wouldDrop']} function(s) would drop "
+                              f"at floor {whole['floor']:g}")
             if out and "nFunctions" in basis:
                 out.insert(0, f"{basis['nFunctions']} functions" + (f" ({basis['name']})" if basis.get("name") else ""))
             removed = (run.get("basis") or {}).get("removed")

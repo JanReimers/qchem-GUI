@@ -251,6 +251,17 @@ class HelperRuns(unittest.TestCase):
         self.assertIn("Γ: 26 functions", lines[0])
 
 
+class Conditioning(unittest.TestCase):
+    def test_the_verdict_and_its_floor_are_the_library_s(self):
+        from qviz import gridinfo
+        rows = [{"irrep": "A1 ", "nFunctions": 12, "lambdaMin": 5e-4, "cond": 9e3}, {"irrep": "B1", "nFunctions": 5, "lambdaMin": 0.05, "cond": 48.0}]
+        whole = {"lambdaMin": 5e-4, "lambdaMinAt": "A1 ", "cond": 9e3, "condAt": "A1 ", "floor": 1e-3, "wouldDrop": 2}
+        worst, a1, b1 = gridinfo.conditioning({"m@1": {"basis": {"perIrrep": rows, "conditioning": whole}}})
+        self.assertEqual(worst, "worst: S min eigenvalue 5.000e-04 at A1, condition number 9e+03 at A1; 2 function(s) would drop at floor 0.001")
+        self.assertIn("⚠", a1, "under the library's floor, whatever that floor is")
+        self.assertNotIn("⚠", b1)
+
+
 class TheBridgeRunsThem(unittest.TestCase):
     def test_the_inline_cell_lands_on_rundeck_s_energy(self):
         be, spec = solid2(), si_inline()
