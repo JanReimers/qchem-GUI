@@ -25,7 +25,9 @@ RECORD = {
     "inline build@1": {"policy": [
         {"name": "DensityEcutFloor", "decided": "density Ecut 4 Ha", "verdict": "choose", "reason": "the floor: cutoff factor 2 x the tightest exponent"},
         {"name": "BeckeOnSolid", "decided": "a Becke XC mesh on a periodic cell", "verdict": "warn", "reason": "not a production route",
-         "cost": {"wallSeconds": 840, "memoryBytes": 3.2 * 2**30}}]},
+         "cost": {"wallSeconds": 840, "memoryBytes": 3.2 * 2**30}}],
+        "basis": {"nFunctions": 26, "policy": [
+            {"name": "AutoTrim", "decided": "2 near-dependent functions dropped", "verdict": "choose", "reason": "min eig S below orthoTol"}]}},
     "inline@2": {"policy": [
         {"name": "DensityEcutFloor", "decided": "density Ecut 4 Ha", "verdict": "choose", "reason": "the floor: cutoff factor 2 x the tightest exponent"},
         {"name": "MemoryBudget", "decided": "the ERI4 cache", "verdict": "resource", "reason": "over the box's free memory",
@@ -42,8 +44,9 @@ class Reading(unittest.TestCase):
             "✗ refused: a multipole Coulomb fit on a periodic cell -- site multipoles have no periodic form  [AdmitCoulomb]",
             "✗ refused on resources: the ERI4 cache -- over the box's free memory (would need 40.0 GB)  [MemoryBudget]",
             "⚠ warning: a Becke XC mesh on a periodic cell -- not a production route (estimated 14 min, 3.2 GB)  [BeckeOnSolid]"])
-        self.assertEqual(chosen, ["density Ecut 4 Ha -- the floor: cutoff factor 2 x the tightest exponent  [DensityEcutFloor]"],
-                         "a row the build and the SCF both file is listed once")
+        self.assertEqual(chosen, ["density Ecut 4 Ha -- the floor: cutoff factor 2 x the tightest exponent  [DensityEcutFloor]",
+                                  "2 near-dependent functions dropped -- min eig S below orthoTol  [AutoTrim, in basis]"],
+                         "a row the build and the SCF both file is listed once; a nested row says where it fired")
 
     def test_no_policy_rows_is_nothing_to_say(self):
         self.assertEqual(policyinfo.lines({"m@1": {"basis": {}}}), ([], []))
@@ -60,7 +63,7 @@ class SetupShowsThem(unittest.TestCase):
         panel.show_run(run)
         self.assertFalse(panel.policy_loud.isHidden())
         self.assertIn("✗ refused: a multipole Coulomb fit", panel.policy_loud.text())
-        self.assertIn("1 automatic choice by policy", panel.policy_more.text())
+        self.assertIn("2 automatic choices by policy", panel.policy_more.text())
         self.assertTrue(panel.policy_chosen.isHidden(), "automatic choices are collapsed")
         panel.policy_more.setChecked(True)
         self.assertFalse(panel.policy_chosen.isHidden())

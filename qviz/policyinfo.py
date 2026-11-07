@@ -2,8 +2,10 @@
 qviz.policyinfo -- the decisions the library's POLICIES made for a run, as its run record states them.
 
 Every policy reports itself (CLAUDE.md framework-vs-efficiency; doc/OpenWork.md, "Every existing policy reports itself under
-policy"): each run of the record carries a `policy` array, one row per decision in firing order,
+policy"): a policy writes one row, where it fired, into a `policy` array at its report cursor -- the run's own, or nested
+(basis.policy, ...) -- so where it fired is part of the record:
     {name, decided, verdict: refuse | resource | warn | choose, reason, cost?: {wallSeconds?, memoryBytes?}}
+A reader collects every `policy` array in each run's tree, in tree order.
 The library owns that contract; this module only reads it, never rebuilds a decision from the spec.  A refusal leads
 (refuse, resource), a warn-and-run follows with its cost estimate, and `choose` -- an automatic setting a policy picked
 because the user stated none -- is listed apart, quietly: it is how the user finds every policy that acted, not an alarm.
@@ -18,15 +20,32 @@ LOUD = ("refuse", "resource", "warn")
 _MARK = {"refuse": "✗ refused", "resource": "✗ refused on resources", "warn": "⚠ warning"}
 
 
+def _arrays(node, path: str):
+    """(path, policy array) for every `policy` array in a run's tree, depth first in the record's own order."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "policy" and isinstance(v, list):
+                yield path, v
+            else:
+                yield from _arrays(v, f"{path}.{k}" if path else k)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _arrays(v, f"{path}[{i}]")
+
+
 def decisions(record: Optional[dict]) -> list[dict]:
-    """Every policy row of the record, in filing order, each with the `run` that filed it; a row two runs repeat once."""
+    """Every policy row of the record, in tree order, each with the `run` that filed it and `where` in that run it fired
+    ('' = the run's own level); a row two runs repeat is listed once."""
     out, seen = [], set()
     for key, run in (record or {}).items():
-        for row in (run or {}).get("policy") or []:
-            ident = (row.get("name"), row.get("decided"), row.get("verdict"))
-            if ident not in seen:
-                seen.add(ident)
-                out.append({**row, "run": key.rsplit("@", 1)[0]})
+        for where, rows in _arrays(run, ""):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                ident = (row.get("name"), row.get("decided"), row.get("verdict"))
+                if ident not in seen:
+                    seen.add(ident)
+                    out.append({**row, "run": key.rsplit("@", 1)[0], "where": where})
     return out
 
 
@@ -50,8 +69,9 @@ def line(d: dict) -> str:
     if cost:
         cost = f" (would need {cost})" if d.get("verdict") == "resource" else f" (estimated {cost})"
     head = _MARK.get(d.get("verdict"), "")
+    tag = ", ".join(x for x in (d.get("name"), f"in {d['where']}" if d.get("where") else "") if x)
     return (f"{head}: " if head else "") + f"{d.get('decided', '?')}" + (f" -- {d['reason']}" if d.get("reason") else "") + cost \
-        + (f"  [{d['name']}]" if d.get("name") else "")
+        + (f"  [{tag}]" if tag else "")
 
 
 def lines(record: Optional[dict]) -> tuple[list[str], list[str]]:
