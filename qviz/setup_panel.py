@@ -25,7 +25,7 @@ from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import basisinfo, geometry, gridinfo, molecules, states, symmetry
+from . import basisinfo, geometry, gridinfo, molecules, policyinfo, states, symmetry
 from .backends import solid2_deck
 from .backends.base import BackendRegistry, data_structure
 from .backends.solid2 import mesh_for
@@ -123,6 +123,18 @@ class SetupPanel(QtWidgets.QWidget):
         self.draft_btn = QtWidgets.QPushButton("Back to draft")
         head.addWidget(self.mode_label, 1); head.addWidget(self.copy_btn); head.addWidget(self.draft_btn)
         outer.addLayout(head)
+        # the library's policies, as the record states them: refusals and warnings shown, automatic choices one click away
+        self.policy_loud = QtWidgets.QLabel(); self.policy_loud.setWordWrap(True)
+        self.policy_loud.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        self.policy_loud.setStyleSheet("border: 1px solid #cf222e; border-radius: 3px; padding: 4px")
+        self.policy_more = QtWidgets.QToolButton(); self.policy_more.setCheckable(True)
+        self.policy_more.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon); self.policy_more.setAutoRaise(True)
+        self.policy_more.setToolTip("settings a policy picked because the spec states none (policy, verdict choose)")
+        self.policy_chosen = QtWidgets.QLabel(); self.policy_chosen.setWordWrap(True)
+        self.policy_chosen.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        self.policy_more.toggled.connect(lambda on: (self.policy_chosen.setVisible(on), self._policy_arrow()))
+        for w in (self.policy_loud, self.policy_more, self.policy_chosen):
+            outer.addWidget(w); w.setVisible(False)
 
         self.tabs = QtWidgets.QTabWidget(); self.tabs.setDocumentMode(True)
         outer.addWidget(self.tabs, 1)
@@ -481,6 +493,20 @@ class SetupPanel(QtWidgets.QWidget):
             self._rendering = False
         self._refresh_strip()
         self._render_codes()
+        self._render_policy(s)
+
+    def _render_policy(self, s: Optional[RunSpec]) -> None:
+        """The policies that acted on the shown run (or the draft's Build / newest run of its spec), from its record."""
+        loud, chosen = policyinfo.lines(self._record(s)[0] if s is not None else None)
+        self.policy_loud.setText("\n".join(loud)); self.policy_loud.setVisible(bool(loud))
+        self.policy_chosen.setText("\n".join(chosen))
+        self._n_chosen = len(chosen)
+        self.policy_more.setVisible(bool(chosen)); self.policy_chosen.setVisible(bool(chosen) and self.policy_more.isChecked())
+        self._policy_arrow()
+
+    def _policy_arrow(self) -> None:
+        n = getattr(self, "_n_chosen", 0)
+        self.policy_more.setText(f"{'▾' if self.policy_more.isChecked() else '▸'} {n} automatic choice{'s' if n != 1 else ''} by policy")
 
     def _render_preset(self, s, mol: bool) -> None:
         preset = molecules.preset_of(s) if mol else None
@@ -629,8 +655,8 @@ class SetupPanel(QtWidgets.QWidget):
             return None, "this run has no record yet (not started, or not SOLID²)"
         key = s.to_json()
         got = self._builds.get(key)
-        if isinstance(got, Exception):
-            return None, f"the Build refused: {got}"
+        if isinstance(got, Exception):                # a library refusal carries what it filed before refusing
+            return getattr(got, "record", None) or None, f"the Build refused: {got}"
         if got == "pending":
             return None, "building…"
         if got is not None:
@@ -707,6 +733,7 @@ class SetupPanel(QtWidgets.QWidget):
         if s is not None:
             self._render_basis(s)
             self._render_grids(s)
+        self._render_policy(s)
 
     def _solid2(self):
         return self.registry.get(_SOLID2) if _SOLID2 in self.registry.names() else None

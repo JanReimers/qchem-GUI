@@ -19,7 +19,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Callable, Optional
 
-from .backends.base import Backend, BackendRegistry, Job, Result
+from .backends.base import Backend, BackendRegistry, Job, Refused, Result, RunStopped, data_structure
 from .data import ScalarField, SCFRow, Structure, VectorField
 from .spec import RunSpec
 
@@ -29,13 +29,6 @@ class RunStatus(Enum):
     RUNNING = "running"
     READY   = "ready"
     FAILED  = "failed"
-
-
-class RunStopped(RuntimeError):
-    """Raised from the SCF stream when the user stops a run: the back end abandons its solve (SOLID²'s bridge unwinds
-    the SCF loop; an external code's process is terminated) and the run settles FAILED, "stopped by the user"."""
-    def __init__(self):
-        super().__init__("stopped by the user")
 
 
 class Run:
@@ -119,6 +112,10 @@ class Run:
             if not self.result.converged:
                 raise RuntimeError(self.result.failure or f"SCF did not converge in {len(self.result.scf)} iterations")
             self.status = RunStatus.READY
+        except Refused as e:             # the code refused: a failed Result keeps its record (policy rows), saved with the run
+            self.result = Result(converged=False, energy_Ha=None, structure=data_structure(self.spec), failure=str(e), record=e.record)
+            self.error = str(e)
+            self.status = RunStatus.FAILED
         except Exception as e:           # noqa: BLE001 -- surface any back-end failure as a state
             self.error = str(e)
             self.status = RunStatus.FAILED

@@ -17,7 +17,7 @@ import itertools
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .. import basisinfo, compare, gridinfo, molecules
+from .. import basisinfo, compare, gridinfo, molecules, policyinfo
 from ..backends import solid2_deck
 from ..backends.base import BackendRegistry
 from ..spec import Z_OF, RunSpec, SpecError, molecule
@@ -102,6 +102,11 @@ class Toolset:
                   "conditioning per irrep (or per k) from the library's record -- smallest eigenvalue, condition number, "
                   "functions trimmed as near-dependent.",
                   _schema({"run_id": {"type": "integer"}}), self.get_basis)
+        self._add("get_policy", f"{R} The decisions the library's policies made for the draft (or run_id), as its run record "
+                  "states them: refusals (refuse, or resource: too slow / too big, with what it would have needed), warnings "
+                  "(it ran anyway, with a cost estimate) and automatic choices (a setting picked because the spec states none).  "
+                  "A refused run keeps its record, so this says WHICH policy refused and why.  Empty: no policy acted.",
+                  _schema({"run_id": {"type": "integer"}}), self.get_policy)
         self._add("search_docs", f"{R} The curated notes of banked experience.", _schema({"query": {"type": "string"}}, ["query"]),
                   self.search_docs)
         self._add("propose_spec_patch", f"{W} Apply a JSON merge patch (RFC 7386) to the draft, with the reason.",
@@ -233,6 +238,13 @@ class Toolset:
         return {"is_result": True, "licensed": licensed, "source": source, "planned": gridinfo.planned(spec), "built": lines,
                 "ladder": [dict(zip(gridinfo.LADDER_COLUMNS, row)) for row in ladder], "record": raw,
                 "summary": "; ".join(lines) or f"no grids built yet ({source})"}
+
+    def get_policy(self, run_id: Optional[int] = None) -> dict:
+        rec, source, spec, licensed = self._record_of(run_id)
+        loud, chosen = policyinfo.lines(rec)
+        return {"is_result": True, "licensed": licensed, "source": source, "decisions": policyinfo.decisions(rec),
+                "summary": "; ".join(loud) or (f"{len(chosen)} automatic choice(s), no refusal or warning" if chosen
+                                               else f"no policy acted ({source})")}
 
     def get_basis(self, run_id: Optional[int] = None) -> dict:
         rec, source, spec, licensed = self._record_of(run_id)

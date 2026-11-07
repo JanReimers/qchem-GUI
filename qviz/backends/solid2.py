@@ -43,7 +43,7 @@ from . import gaussian_basis
 from ..data import ScalarField, SCFCell, SCFRow, VectorField
 from ..spec import RunSpec
 from . import solid2_deck
-from .base import FieldRef, Job, Result, StepSink, code_block, data_structure, shared_representation
+from .base import FieldRef, Job, Refused, Result, RunStopped, StepSink, code_block, data_structure, shared_representation
 
 NAME = "SOLID²"
 
@@ -160,12 +160,16 @@ class Solid2Backend:
     def build(self, job: Job) -> dict:
         """deck::Build alone -- basis, grids, pseudopotentials, audits -- and the build run's record.  The built calculation
         is KEPT: a Run of the same deck converges it instead of building again (an edited spec's deck differs: rebuilt).
-        Raises with the library's text on a refusal.  Call on the app's serial library thread."""
+        Raises Refused (the library's text and record) on a refusal.  Call on the app's serial library thread."""
         if "deck" not in job.native:
             raise RuntimeError(self.why_no_build(job.spec) or "no build-only step for this spec")
         self._built = None                                       # one kept build at a time (a crystal's can be large)
         self._qc.clear_report()
-        run = self._qc.SolidRun(job.native["deck"])
+        self._prior = {}
+        try:
+            run = self._qc.SolidRun(job.native["deck"])
+        except Exception as e:                                   # noqa: BLE001 -- the library's refusal, in its own words
+            raise Refused(str(e), self._filed()) from e
         record = json.loads(self._qc.report())
         self._built = (job.native["deck"], run, record)
         return record
@@ -280,8 +284,28 @@ class Solid2Backend:
 
     # -- run + parse --------------------------------------------------------
     def run(self, job: Job, on_step: Optional[StepSink] = None) -> Result:
+        """Converge `job`, streaming its rows.  A library throw raises Refused with the record filed up to it."""
         if self._qc is None:
             raise RuntimeError(self._why_absent)
+        try:
+            return self._solve(job, on_step)
+        except (RunStopped, Refused):
+            raise
+        except Exception as e:                        # noqa: BLE001 -- the library's refusal, in its own words
+            raise Refused(str(e), self._filed()) from e
+        finally:
+            self._prior = {}
+
+    def _filed(self) -> dict:
+        """The record so far: the runs the library filed, and the one it was in when it refused (still open).  A run refused
+        before it wrote anything files as an empty json value, not an object: dropped, so every reader sees runs as objects."""
+        record = self._prior | json.loads(self._qc.report())
+        open_run = self._qc.current_report()
+        if open_run:
+            record["refused@open"] = json.loads(open_run)
+        return {k: v for k, v in record.items() if isinstance(v, dict) and v}
+
+    def _solve(self, job: Job, on_step: Optional[StepSink]) -> Result:
         n = job.native
         steps: list[SCFRow] = []
 
@@ -346,11 +370,8 @@ class Solid2Backend:
             run, self._prior = built[1], built[2]                  # the Build of THIS deck: converge it, do not rebuild
         else:
             run, self._prior = self._qc.SolidRun(job.native["deck"]), {}
-        try:
-            converged = run.converge(step)
-        finally:
-            prior, self._prior = self._prior, {}
-        record = prior | json.loads(self._qc.report())
+        converged = run.converge(step)                             # run() clears self._prior, after a refusal has read it
+        record = self._prior | json.loads(self._qc.report())
         saved = (json.loads(job.native["deck"]).get("state") or {}).get("save")
         return Result(converged=converged, energy_Ha=run.total_energy(), failure=run.failure(),
                       structure=data_structure(job.spec), scf=steps,

@@ -43,6 +43,21 @@ class FieldRef:
     sample: Callable[[int, float], ScalarField | VectorField]
 
 
+class RunStopped(RuntimeError):
+    """Raised from the SCF stream when the user stops a run: the back end abandons its solve (SOLID²'s bridge unwinds
+    the SCF loop; an external code's process is terminated) and the run settles FAILED, "stopped by the user"."""
+    def __init__(self):
+        super().__init__("stopped by the user")
+
+
+class Refused(RuntimeError):
+    """The code refused the run (or its Build), in its own words, with the run record it filed before refusing -- its
+    `policy` rows say which policy refused and why -- so the refusal is read from the record, not only from the text."""
+    def __init__(self, text: str, record: dict):
+        super().__init__(text)
+        self.record = record
+
+
 @dataclass
 class Result:
     converged: bool
