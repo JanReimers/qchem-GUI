@@ -387,13 +387,20 @@ class TheBridgeRunsThem(unittest.TestCase):
                 accel = [c.text for r in rows for c in r.cells if c.title == "accel"]
                 self.assertEqual(any("GDM" in a for a in accel), hands, accel)
 
-    def test_a_molecule_takes_no_g_space_mixer(self):
+    def test_the_library_refuses_a_molecule_s_g_space_mixer_and_runs_its_smearing(self):
+        from qviz.backends.base import Refused
         from qviz.spec import Accuracy, molecule
+        be = solid2()
         w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
                      accuracy=Accuracy(scf={"mixer": "Kerker"}))
-        v = solid2().capabilities().can_run(w)
-        self.assertFalse(v)
-        self.assertTrue(any("mix in G space" in r for r in v.reasons), v.reasons)
+        self.assertTrue(be.capabilities().can_run(w), "the GUI no longer pre-empts the library")
+        with self.assertRaises(Refused) as got:
+            be.run(be.translate(w))
+        self.assertIn("periodic (G-space) run", str(got.exception))
+        smeared = RunSpec.from_dict(w.to_dict() | {"accuracy": {"epsilon_Ha_per_atom": 1e-5},
+                                                   "physics": w.to_dict()["physics"] | {"occupations": {"smearing": "fermi-dirac", "kT_Ha": 0.01}}})
+        res = be.run(be.translate(smeared))
+        self.assertTrue(res.converged, res.failure)
 
     def test_compute_u_is_rundeck_s(self):
         s = mno_plus_u()

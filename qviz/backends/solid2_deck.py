@@ -107,9 +107,7 @@ def why_not(spec: RunSpec) -> Optional[str]:
             return "+U with U to be computed: state U_eV (0 to probe) and ask task.compute_U"
     if tk.kind not in ("energy", "compute_U"):
         return f"task {tk.kind} not mapped to a deck yet"
-    if ph.spin.polarized and ph.hubbard and ph.spin.site_moments is None:
-        return "a polarized +U run states its magnetic ordering (physics.spin.site_moments)"
-    return None
+    return None              # a polarized +U run with no stated ordering: the library refuses it itself (SolidSetup's siteSpins rule)
 
 
 #: the library's accuracy target when a deck states none (pinned by test against the deck's resolved "accuracy")

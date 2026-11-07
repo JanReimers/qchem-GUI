@@ -196,20 +196,20 @@ class Solid2Backend:
                        or (s.physics.relativity == "scalar" and s.physics.core == "pseudopotential"),
                        "non-relativistic all-electron (scalar relativity only through a pseudopotential)"),
             Capability("physics.hubbard=()", molecule(lambda s: not s.physics.hubbard), "no molecular DFT+U in the facade"),
-            Capability("physics.occupations=none", molecule(lambda s: s.physics.occupations.smearing == "none"),
-                       "no smearing for molecules"),
-            Capability("physics.core=pseudopotential needs LDA + a valence basis",
-                       molecule(lambda s: s.physics.core != "pseudopotential"
-                                or (s.physics.functional == "LDA" and rep(s).get("basis") in _VALENCE_BASES)),
-                       "a molecular pseudopotential run is LDA with a stated valence basis (sipp*, valence_lowq*)"),
+            Capability("physics.occupations: Fermi-Dirac", molecule(lambda s: s.physics.occupations.smearing in ("none", "fermi-dirac")),
+                       "the molecular facade smears Fermi-Dirac only"),
+            # the model half is the library's own refusal (MoleculeSetup::Resolve: a PP run is LDA); the basis half stays here until
+            # the library warns about core shells under a pseudopotential (doc/OpenWork.md, the policy row)
+            Capability("physics.core=pseudopotential needs a valence basis",
+                       molecule(lambda s: s.physics.core != "pseudopotential" or rep(s).get("basis") in _VALENCE_BASES),
+                       "a molecular pseudopotential run states a valence basis (sipp*, valence_lowq*): an all-electron one "
+                       "carries core shells the pseudopotential has removed"),
             Capability("accuracy.representation keys", molecule(lambda s: set(rep(s)) <= {"basis"}
                        and set(code_block(s, "solid2")) <= _REP_KEYS),
                        "a stated representation is a shared basis, or SOLID² settings under representation['solid2'] "
                        "(mesh_radial, mesh_angular)"),
             Capability("accuracy.representation.basis", molecule(lambda s: rep(s).get("basis") in (None, *BASES)),
                        "the stated basis is not a registered Gaussian basis"),
-            Capability("accuracy.scf.mixer", molecule(lambda s: scf(s).get("mixer", "Auto") in ("Auto", "Linear")),
-                       "Kerker and Pulay mix in G space: a molecule's density mixer is Auto (= linear) or Linear"),
             Capability("accuracy.scf.mixing_alpha", lambda s: all(0.0 < float(scf(s)[k]) <= 1.0 for k in
                                                                  ("mixing_alpha", "mixing_alpha_max") if k in scf(s)),
                        "a linear mixing step α is in (0, 1]"),
@@ -254,6 +254,8 @@ class Solid2Backend:
             "mom": bool(scf.get("mom", False)), "mom_start": int(scf.get("mom_start", 0)),
             "relax_min": float(scf.get("mixing_alpha_min") or 0.0),
             "ladder_switch_at": -1.0 if scf.get("ladder_switch_at") is None else float(scf["ladder_switch_at"]),
+            "mixer": str(scf.get("mixer", "Auto")),          # the facade refuses what a molecule cannot mix (Kerker: G space)
+            "smearing_kT": float(ph.occupations.kT_Ha) if ph.occupations.smearing == "fermi-dirac" else 0.0,
             **{key: -1.0 if scf.get(key) is None else 0.0 if scf[key] == "off" else float(scf[key])   # < 0: default, 0: off
                for key, _ in solid2_deck.DECK_GATES},
         }
@@ -332,6 +334,7 @@ class Solid2Backend:
                                    accelerator=n["accelerator"], mesh_radial=n["mesh_radial"],
                                    mesh_angular=n["mesh_angular"], relax_start=n.get("relax_start", 0.0),
                                    relax_max=n.get("relax_max", 0.0), diis_depth=n["diis_depth"], diis_sv_tol=n["diis_sv_tol"],
+                                   mixer=n["mixer"], smearing_kT=n["smearing_kT"],
                                    diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"],
                                    relax_min=n["relax_min"], ladder_switch_at=n["ladder_switch_at"],
                                    **{k: n[k] for k, _ in solid2_deck.DECK_GATES}, on_iteration=step)
