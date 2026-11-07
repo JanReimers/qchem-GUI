@@ -146,3 +146,44 @@ def conditioning(record: Optional[dict]) -> list[str]:
             if out:
                 return out
     return out
+
+
+# -- the grids a run settled, as deck keys, and whether a re-run reproduced them ---------------------------------------
+def restate(record: Optional[dict]) -> tuple[Optional[dict], bool]:
+    """(the deck keys that restate the run's grids, whether the pilot settled) from its rasterPilot section (None: no pilot).
+    Not settled still restates THIS run's grids, but not grids that met the target."""
+    for run in reversed(_runs(record, False) + _runs(record, True)):
+        pilot = run.get("rasterPilot") or {}
+        if pilot.get("restate"):
+            return pilot["restate"], bool(pilot.get("settled"))
+    return None, False
+
+
+def restated_by(deck: dict, keys: dict) -> bool:
+    """Whether a deck states every key of `keys` with its value: the deck restates those grids."""
+    return all(restated_by(deck.get(k) or {}, v) if isinstance(v, dict) and isinstance(deck.get(k), dict)
+               else deck.get(k) == v for k, v in keys.items())
+
+
+#: what "the same grids" means: the grids section and the meshes the Hamiltonian was built on (a restated run converges
+#: COLD, so its energy agrees with the pilot's only to the SCF's gate: the grids are what must be identical)
+GRID_FACTS = (("grids", None), ("hamiltonian", "xcQuadrature"), ("hamiltonian", "ppQuadrature"))
+
+
+def grid_differences(a: Optional[dict], b: Optional[dict]) -> list[str]:
+    """The paths where two records' grids differ ([] = the same grids).  A restated value is the same grid as the derived one
+    it restates: an entry {value, source, ...} compares by its value."""
+    def facts(rec):
+        out = {}
+        for sec, key in GRID_FACTS:
+            v = _section(rec, sec)
+            out[sec if key is None else f"{sec}.{key}"] = v if key is None else v.get(key)
+        return out
+
+    def diff(x, y, path):
+        if isinstance(x, dict) and isinstance(y, dict) and "value" in x and "value" in y and ("source" in x or "source" in y):
+            x, y = x["value"], y["value"]              # {value, source: derived | stated, ...}: the grid is the value, not how it was chosen
+        if isinstance(x, dict) and isinstance(y, dict):
+            return [p for k in sorted(set(x) | set(y)) for p in diff(x.get(k), y.get(k), f"{path}.{k}" if path else k)]
+        return [] if x == y else [path]
+    return diff(facts(a), facts(b), "")

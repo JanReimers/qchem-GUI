@@ -27,7 +27,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import basisinfo, geometry, gridinfo, molecules, policyinfo, states, symmetry
 from .backends import solid2_deck
-from .backends.base import BackendRegistry, data_structure
+from .backends.base import BackendRegistry, code_block, data_structure
 from .backends.solid2 import mesh_for
 from .draft import Edit, SpecDraft
 from .spec import RunSpec, SpecError
@@ -355,6 +355,13 @@ class SetupPanel(QtWidgets.QWidget):
         self.grids_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.grids_table.horizontalHeader().setStretchLastSection(True)
         f.addRow(self.grids_table)
+        self.grids_save = QtWidgets.QPushButton("Save these grids into my deck")
+        self.grids_save.setToolTip("the deck keys the raster pilot says restate this run's grids (rasterPilot.restate), merged into "
+                                   "the draft's deck: accuracy 0, so a re-run builds these grids without piloting again (undoable)")
+        self.grids_save.clicked.connect(self._save_grids)
+        f.addRow(self.grids_save)
+        self.grids_same = QtWidgets.QLabel(); self.grids_same.setWordWrap(True)
+        f.addRow("Reproduced", self.grids_same)
 
     def _build_spec(self):
         w = QtWidgets.QWidget(); lay = QtWidgets.QVBoxLayout(w)
@@ -709,6 +716,38 @@ class SetupPanel(QtWidgets.QWidget):
         self.grids_table.resizeColumnsToContents()
         self.grids_table.setFixedHeight(self.grids_table.horizontalHeader().height() + 4
                                         + sum(self.grids_table.rowHeight(r) for r in range(len(rows))))
+        keys, settled = gridinfo.restate(rec)
+        self._restate = keys
+        self.grids_save.setVisible(keys is not None)
+        self.grids_save.setText("Save these grids into my deck" + ("" if settled else " (NOT SETTLED: they miss the target)"))
+        same = self._reproduced(s, rec)
+        self._grids_form.setRowVisible(self.grids_same, same is not None)
+        self.grids_same.setText(same or "")
+
+    def _save_grids(self) -> None:
+        """The shown record's restated grids into the draft's deck (a viewed run's spec becomes the draft first)."""
+        keys = self._restate
+        if keys is None:
+            return
+        whose = f"run {self._run.summary}" if self._run is not None else "the draft's record"
+        if self._run is not None:
+            self._copy_to_draft()
+        self._edit({"accuracy": {"representation": {"solid2": {"deck": keys}}}}, f"the grids of {whose} (rasterPilot.restate)")
+
+    def _reproduced(self, s: RunSpec, rec: Optional[dict]) -> Optional[str]:
+        """When `s`'s deck restates an earlier run's grids: whether this record built the same ones (None: no such run)."""
+        if rec is None or s.structure.kind != "crystal":
+            return None
+        deck = (code_block(s, "solid2").get("deck") or {})
+        for other in reversed(self._runs()):
+            if other.result is None or other.result.record is rec or not other.result.record:
+                continue
+            keys, _ = gridinfo.restate(other.result.record)
+            if keys is not None and gridinfo.restated_by(deck, keys):
+                diff = gridinfo.grid_differences(other.result.record, rec)
+                return (f"the same grids as run {other.summary}" if not diff else
+                        f"NOT the grids of run {other.summary}: they differ in " + ", ".join(diff))
+        return None
 
     def _mesh_edit(self, key: Optional[str], value) -> None:
         """A molecular XC-mesh setting (representation.solid2), or None: both dropped, ε chooses again."""
