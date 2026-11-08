@@ -52,7 +52,6 @@ _MODEL = {("HF", None): "HF", ("DFT", "LDA"): "LDA", ("DFT", "Xalpha"): "Xalpha"
 # The registered Gaussian basis sets (BasisSet::Gaussian::Factory) -- a stated representation must be one.
 BASES = ("dzvp", "dzvp2", "tzvp", "orb", "orb1", "sipp", "sipp_sr", "valence_lowq", "valence_lowq_sph",
          "valence_lowq_sr", "valence_lowq_sr2", "valence_lowq_va", "valence_lowq_vb")
-_VALENCE_BASES = tuple(b for b in BASES if b.startswith(("sipp", "valence")))
 
 
 _REP_KEYS = {"mesh_radial", "mesh_angular"}          # representation["solid2"]: the molecular XC mesh
@@ -185,12 +184,6 @@ class Solid2Backend:
             Capability("physics.hubbard=()", molecule(lambda s: not s.physics.hubbard), "no molecular DFT+U in the facade"),
             Capability("physics.occupations: Fermi-Dirac", molecule(lambda s: s.physics.occupations.smearing in ("none", "fermi-dirac")),
                        "the molecular facade smears Fermi-Dirac only"),
-            # the model half is the library's own refusal (MoleculeSetup::Resolve: a PP run is LDA); the basis half stays here until
-            # the library warns about core shells under a pseudopotential (doc/OpenWork.md, the policy row)
-            Capability("physics.core=pseudopotential needs a valence basis",
-                       molecule(lambda s: s.physics.core != "pseudopotential" or rep(s).get("basis") in _VALENCE_BASES),
-                       "a molecular pseudopotential run states a valence basis (sipp*, valence_lowq*): an all-electron one "
-                       "carries core shells the pseudopotential has removed"),
             Capability("accuracy.representation keys", molecule(lambda s: set(rep(s)) <= {"basis"}
                        and set(code_block(s, "solid2")) <= _REP_KEYS),
                        "a stated representation is a shared basis, or SOLID² settings under representation['solid2'] "
