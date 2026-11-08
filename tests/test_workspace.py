@@ -224,6 +224,7 @@ class Solid2EndToEnd(unittest.TestCase):
 
 class Solid2BasisCoverage(unittest.TestCase):
     def test_a_basis_without_a_block_for_an_element_is_the_library_s_refusal_by_name(self):
+        from qviz import policyinfo
         from qviz.backends.base import Refused
         be = Solid2Backend()
         pp = molecule("water", *WATER, theory="DFT", functional="LDA", core="pseudopotential",
@@ -231,7 +232,9 @@ class Solid2BasisCoverage(unittest.TestCase):
         self.assertTrue(be.capabilities().can_run(pp).ok, "the GUI no longer pre-empts the basis reader")
         with self.assertRaises(Refused) as got:
             be.run(be.translate(pp))
-        self.assertIn("(Z=1) has no entry in the basis-set data file", str(got.exception))
+        self.assertIn("basis valence_lowq_vb has no block for H", str(got.exception))
+        self.assertIn("BasisCoverage", " ".join(f"[{d['name']}]" for d in policyinfo.decisions(got.exception.record)),
+                      "the refusal files its policy row, which the Setup Policy box shows")
 
 
 class TheRunnerStops(unittest.TestCase):
