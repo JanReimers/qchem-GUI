@@ -52,6 +52,11 @@ class Reading(unittest.TestCase):
         deck["solid"]["tolerances"]["vlocEps"] = 1e-6                           # not the full-precision value
         self.assertFalse(gridinfo.restated_by(deck, KEYS))
 
+    def test_the_grids_that_ran_are_the_scf_run_s_after_the_pilot_raised_them(self):
+        raised = copy.deepcopy(PILOTED); raised["inline@2"]["grids"] = {**GRIDS, "cutoffFactor": 4.0, "densityEcut": 8.0}
+        self.assertEqual(gridinfo._section(raised, "grids")["cutoffFactor"], 4.0, "the SCF run's grids, not the build's")
+        self.assertEqual(gridinfo.grid_differences(raised, RESTATED), ["grids.cutoffFactor", "grids.densityEcut"])
+
     def test_a_stated_value_is_the_grid_it_restates_and_a_changed_grid_is_named(self):
         self.assertEqual(gridinfo.grid_differences(PILOTED, RESTATED), [], "stated vs derived: the same value, the same grid")
         moved = copy.deepcopy(RESTATED); moved["inline build@3"]["hamiltonian"]["xcQuadrature"]["N"] = [18, 18, 18]

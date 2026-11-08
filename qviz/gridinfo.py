@@ -55,8 +55,10 @@ def _runs(record: dict, build: bool) -> list[dict]:
 
 
 def _section(record: Optional[dict], name: str) -> dict:
-    """A section of the record, from its build run when it has one, else from the SCF run ({}: not filed)."""
-    for build in (True, False):
+    """A section of the record, from its SCF run when that filed it, else from its build run ({}: not filed).  The SCF run's is
+    the one that RAN: the raster pilot raises a crystal's grids after the build (cutoffFactor, rasters), and only the SCF run
+    files the raised ones; before the SCF (a Build alone, or a run still in setup) the build run's are all there is."""
+    for build in (False, True):
         for run in _runs(record, build):
             if run.get(name):
                 return run[name]
@@ -168,6 +170,9 @@ def restated_by(deck: dict, keys: dict) -> bool:
 #: what "the same grids" means: the grids section and the meshes the Hamiltonian was built on (a restated run converges
 #: COLD, so its energy agrees with the pilot's only to the SCF's gate: the grids are what must be identical)
 GRID_FACTS = (("grids", None), ("hamiltonian", "xcQuadrature"), ("hamiltonian", "ppQuadrature"))
+#: entries of the grids section that report WORK done on the grids, not the grids: boxTasks (the collocation's task count) is
+#: filed root-anchored by the evaluator into whichever run is open, so one run of two identical grids may lack it
+NOT_GRIDS = ("boxTasks",)
 
 
 def grid_differences(a: Optional[dict], b: Optional[dict]) -> list[str]:
@@ -177,7 +182,7 @@ def grid_differences(a: Optional[dict], b: Optional[dict]) -> list[str]:
         out = {}
         for sec, key in GRID_FACTS:
             v = _section(rec, sec)
-            out[sec if key is None else f"{sec}.{key}"] = v if key is None else v.get(key)
+            out[sec if key is None else f"{sec}.{key}"] = {k: x for k, x in v.items() if k not in NOT_GRIDS} if key is None else v.get(key)
         return out
 
     def diff(x, y, path):
