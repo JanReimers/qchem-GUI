@@ -103,8 +103,10 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
             if mesh and "points" not in q:
                 lines.append(f"XC mesh: {mesh['raw']:,} points"
                              + (f", {mesh['reps']:,} after the {mesh['ops']}-operation fold" if mesh.get("ops") else ""))
-    if "densityEcut" in g:
-        lines.append(f"density Ecut floor: {g['densityEcut']:g} Ha (cutoff factor {g.get('cutoffFactor', 0):g})")
+    if "densityEcut" in g:                      # {value, source: stated | floor}; a run saved before lane B's 4303815f6: the floor, a number
+        de = g["densityEcut"] if isinstance(g["densityEcut"], dict) else {"value": g["densityEcut"], "source": "floor"}
+        lines.append(f"density Ecut: {de['value']:g} Ha (stated)" if de.get("source") == "stated" else
+                     f"density Ecut floor: {de['value']:g} Ha (cutoff factor {g.get('cutoffFactor', 0):g})")
     if q.get("kind") and "points" not in q:
         lines.append(f"XC quadrature: {q['kind']}")
     for what, f in (("density fit", hartree.get("densityFit")), ("Vxc fit", vxc.get("vxcFitGrid")),
@@ -185,9 +187,12 @@ def grid_differences(a: Optional[dict], b: Optional[dict]) -> list[str]:
             out[sec if key is None else f"{sec}.{key}"] = {k: x for k, x in v.items() if k not in NOT_GRIDS} if key is None else v.get(key)
         return out
 
+    def chosen(v):                                 # {value, source: derived | stated | floor, ...}: the grid is the value, not how it was chosen
+        return isinstance(v, dict) and "value" in v and "source" in v
+
     def diff(x, y, path):
-        if isinstance(x, dict) and isinstance(y, dict) and "value" in x and "value" in y and ("source" in x or "source" in y):
-            x, y = x["value"], y["value"]              # {value, source: derived | stated, ...}: the grid is the value, not how it was chosen
+        if chosen(x) or chosen(y):                 # either side may be a saved run's bare number (densityEcut before lane B's 4303815f6)
+            x, y = (x["value"] if chosen(x) else x), (y["value"] if chosen(y) else y)
         if isinstance(x, dict) and isinstance(y, dict):
             return [p for k in sorted(set(x) | set(y)) for p in diff(x.get(k), y.get(k), f"{path}.{k}" if path else k)]
         return [] if x == y else [path]

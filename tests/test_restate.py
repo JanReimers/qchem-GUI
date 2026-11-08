@@ -52,6 +52,12 @@ class Reading(unittest.TestCase):
         deck["solid"]["tolerances"]["vlocEps"] = 1e-6                           # not the full-precision value
         self.assertFalse(gridinfo.restated_by(deck, KEYS))
 
+    def test_densityecut_reads_stated_or_floor_and_a_saved_number_compares_by_value(self):
+        new = copy.deepcopy(RESTATED); new["inline build@3"]["grids"]["densityEcut"] = {"value": 20.0, "source": "stated"}
+        self.assertIn("density Ecut: 20 Ha (stated)", gridinfo.built(new)[0])
+        self.assertIn("density Ecut floor: 20 Ha (cutoff factor 2)", gridinfo.built(PILOTED)[0], "a saved run's bare number is the floor")
+        self.assertEqual(gridinfo.grid_differences(PILOTED, new), [], "20 (a saved number) and {value 20, stated}: the same grid")
+
     def test_the_grids_that_ran_are_the_scf_run_s_after_the_pilot_raised_them(self):
         raised = copy.deepcopy(PILOTED); raised["inline@2"]["grids"] = {**GRIDS, "cutoffFactor": 4.0, "densityEcut": 8.0}
         self.assertEqual(gridinfo._section(raised, "grids")["cutoffFactor"], 4.0, "the SCF run's grids, not the build's")
