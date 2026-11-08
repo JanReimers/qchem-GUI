@@ -63,6 +63,17 @@ class Reading(unittest.TestCase):
         self.assertEqual(gridinfo._section(raised, "grids")["cutoffFactor"], 4.0, "the SCF run's grids, not the build's")
         self.assertEqual(gridinfo.grid_differences(raised, RESTATED), ["grids.cutoffFactor", "grids.densityEcut"])
 
+    def test_the_rasters_say_who_set_them_and_a_restated_deck_builds_the_same_ones(self):
+        piloted = copy.deepcopy(PILOTED)
+        piloted["inline build@1"]["grids"] = {**GRIDS, "raster": {"x": 14.5, "vlocX": 0.0, "xcX": 29.0}, "rasterSource": "pilot"}
+        self.assertIn("rasters: x(density, V_long, XC) = (14.5, ball, 29) (sized by the pilot)", gridinfo.built(piloted)[0])
+        restated = copy.deepcopy(RESTATED)
+        restated["inline build@3"]["grids"] = {**restated["inline build@3"]["grids"], "raster": {"x": 14.5, "vlocX": 0.0, "xcX": 29.0},
+                                               "rasterSource": "stated"}
+        self.assertEqual(gridinfo.grid_differences(piloted, restated), [], "who set the rasters is not a grid")
+        ball = copy.deepcopy(RESTATED); ball["inline build@3"]["grids"]["raster"] = {"x": 0, "vlocX": 0, "xcX": 0}
+        self.assertIn("rasters: the ball's own", gridinfo.built(ball)[0], "a run saved before rasterSource: no source")
+
     def test_a_stated_value_is_the_grid_it_restates_and_a_changed_grid_is_named(self):
         self.assertEqual(gridinfo.grid_differences(PILOTED, RESTATED), [], "stated vs derived: the same value, the same grid")
         moved = copy.deepcopy(RESTATED); moved["inline build@3"]["hamiltonian"]["xcQuadrature"]["N"] = [18, 18, 18]

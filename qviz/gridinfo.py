@@ -107,6 +107,11 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
         de = g["densityEcut"] if isinstance(g["densityEcut"], dict) else {"value": g["densityEcut"], "source": "floor"}
         lines.append(f"density Ecut: {de['value']:g} Ha (stated)" if de.get("source") == "stated" else
                      f"density Ecut floor: {de['value']:g} Ha (cutoff factor {g.get('cutoffFactor', 0):g})")
+    if "raster" in g:                           # the demands (0 = the ball's own), and who set them: grids.rasterSource (lane G, 2026-11-07)
+        r, src = g["raster"], g.get("rasterSource")
+        xs = (r.get("x", 0), r.get("vlocX", 0), r.get("xcX", 0))
+        what = "the ball's own" if not any(xs) else "x(density, V_long, XC) = (" + ", ".join(f"{x:.3g}" if x else "ball" for x in xs) + ")"
+        lines.append(f"rasters: {what}" + (f" ({RASTER_SOURCES.get(src, src)})" if src else ""))
     if q.get("kind") and "points" not in q:
         lines.append(f"XC quadrature: {q['kind']}")
     for what, f in (("density fit", hartree.get("densityFit")), ("Vxc fit", vxc.get("vxcFitGrid")),
@@ -174,7 +179,12 @@ def restated_by(deck: dict, keys: dict) -> bool:
 GRID_FACTS = (("grids", None), ("hamiltonian", "xcQuadrature"), ("hamiltonian", "ppQuadrature"))
 #: entries of the grids section that report WORK done on the grids, not the grids: boxTasks (the collocation's task count) is
 #: filed root-anchored by the evaluator into whichever run is open, so one run of two identical grids may lack it
-NOT_GRIDS = ("boxTasks",)
+#: and rasterSource says WHO set the rasters, not what they are: a deck restating a pilot's rasters states the same grids
+NOT_GRIDS = ("boxTasks", "rasterSource")
+
+#: grids.rasterSource, in words
+RASTER_SOURCES = {"stated": "stated", "calibration": "from the stated calibration", "pilot": "sized by the pilot",
+                  "savedState": "from the saved state", "conditioning": "raised for the overlap's conditioning"}
 
 
 def grid_differences(a: Optional[dict], b: Optional[dict]) -> list[str]:
