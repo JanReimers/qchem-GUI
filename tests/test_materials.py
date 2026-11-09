@@ -5,7 +5,6 @@ materials.json entry and lists its layers (shipped, then the user's own); the GU
 """
 import os as _os, tempfile as _tempfile
 _os.environ.setdefault("QCHEM_GUI_STATES", _tempfile.mkdtemp(prefix="qchem-gui-states-"))   # saved SCF states: never ~
-_os.environ["QCHEM_USER_MATERIALS"] = _os.path.join(_tempfile.mkdtemp(prefix="qchem-gui-materials-"), "materials.json")   # never ~/.qchem
 import json
 import os
 import pathlib
@@ -15,6 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6 import QtWidgets                                     # noqa: E402
 
 from qviz import materials                                        # noqa: E402
+materials.USER_LIBRARY = os.path.join(_tempfile.mkdtemp(prefix="qchem-gui-materials-"), "materials.json")   # never ~/.qchem
 from qviz.backends import solid2_deck                             # noqa: E402
 from qviz.backends.base import BackendRegistry                    # noqa: E402
 from qviz.backends import FakeBackend                             # noqa: E402
@@ -101,7 +101,7 @@ class TheLibraryTranslates(unittest.TestCase):
     def test_save_to_my_materials_lists_it_as_mine_and_never_takes_a_shipped_name(self):
         spec = materials.spec_of("MnO mine", ROCKSALT, ROCKSALT["lattice"]["vectors_bohr"], {"import": ROCKSALT["provenance"]})
         path = materials.save("MnO_mine_test", spec, replace=True)
-        self.assertEqual(path, os.environ["QCHEM_USER_MATERIALS"])
+        self.assertEqual(path, materials.USER_LIBRARY)
         mine = [m for m in materials.listing() if m["name"] == "MnO_mine_test"]
         self.assertEqual(len(mine), 1)
         self.assertEqual(mine[0]["layer"], "user")

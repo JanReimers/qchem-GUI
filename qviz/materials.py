@@ -9,9 +9,23 @@ else.  Site spins are stated after import (the Structure tab), and ride into a s
 from __future__ import annotations
 
 import json
+import pathlib
 from typing import Optional
 
 from .spec import RunSpec
+
+
+#: The user's own library.  THE GUI resolves it: the C++ library reads no environment and is handed every path it layers over the
+#: shipped file (controller ruling 2026-11-09).  None = ~/.qchem/materials.json; a test sets a temporary file here.
+USER_LIBRARY: Optional[str] = None
+
+
+def user_library() -> str:
+    return USER_LIBRARY or str(pathlib.Path.home() / ".qchem" / "materials.json")
+
+
+def _layers() -> list[dict]:
+    return [{"layer": "user", "path": user_library()}]
 
 
 class MaterialsError(RuntimeError):
@@ -50,8 +64,8 @@ def available() -> bool:
 
 
 def listing() -> list[dict]:
-    """Every material over the library's layers, shipped first: [{name, layer, file, entry, lattice_bohr}]."""
-    return ask("list")["materials"]
+    """Every material over the shipped file and the user's library, shipped first: [{name, layer, file, entry, lattice_bohr}]."""
+    return ask("list", libraries=_layers())["materials"]
 
 
 def spec_of(label: str, entry: dict, lattice_bohr, source: dict) -> RunSpec:
@@ -117,7 +131,7 @@ def export_text(spec: RunSpec, fmt: str) -> str:
 def save(name: str, spec: RunSpec, replace: bool = False) -> str:
     """Save to my materials: the user's library (never the shipped file); returns its path.  A shipped name, or an existing
     one without `replace`, is refused by the library."""
-    return ask("save", name=name, entry=entry_of(spec), replace=replace)["path"]
+    return ask("save", into={"layer": "user", "path": user_library()}, name=name, entry=entry_of(spec), replace=replace)["path"]
 
 
 def parse_spins(text: str, n_sites: int) -> Optional[tuple[float, ...]]:
