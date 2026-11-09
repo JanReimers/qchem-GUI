@@ -133,8 +133,12 @@ def structure_entry(spec: RunSpec) -> str | dict:
     src = (spec.structure.source or {}).get("materials")
     if src and _material_mismatch(spec, src) is None:
         return src
-    return {"lattice": {"vectors_bohr": [list(r) for r in spec.structure.lattice_bohr]},
-            "atoms": [{"el": s.element, "frac": list(s.frac)} for s in spec.structure.sites]}
+    entry: dict = {"lattice": {"vectors_bohr": [list(r) for r in spec.structure.lattice_bohr]},
+                   "atoms": [{"el": s.element, "frac": list(s.frac)} for s in spec.structure.sites]}
+    prov = (spec.structure.source or {}).get("import") or (spec.structure.source or {}).get("provenance")
+    if prov:                              # an imported (or saved-import) cell: the deck keeps where it came from (Inline takes it)
+        entry["provenance"] = prov
+    return entry
 
 
 def to_deck(spec: RunSpec) -> dict:

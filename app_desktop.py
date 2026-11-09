@@ -36,7 +36,7 @@ from qviz import scene, compare, geometry
 from qviz.scene import field_to_imagedata
 from qviz.workspace import Workspace, RunStatus
 from qviz.backends import default_registry, solid2_deck
-from qviz import molecules, states
+from qviz import materials, molecules, states
 from qviz.setup_panel import SetupPanel
 from qviz.backends.solid2 import _import_qchem_py
 from qviz.scfview import SCFView, export_column
@@ -262,7 +262,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         m = self.menuBar().addMenu("&File")
         m.addAction("Import molecule (xyz)…", self._import_xyz)
+        m.addAction("Import crystal (CIF / POSCAR / extended xyz)…", self._import_crystal)
         m.addAction("Export structure (xyz)…", self._export_xyz)
+        m.addAction("Export crystal (CIF / POSCAR / extended xyz)…", self._export_crystal)
         m.addSeparator()
         m.addAction("Open Workspace…", self._open_workspace)
         m.addAction("Save Workspace…", self._save_workspace)
@@ -403,6 +405,42 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"xyz import failed: {e}"); return
         self.setup.set_structure(label, numbers, positions)   # into the draft; the user clicks ▶ Run
         self._setup_dock.raise_()
+
+    def _import_crystal(self):
+        """The LIBRARY translates the file into a materials entry (qchem.CrystalFiles); the draft becomes that crystal.  What
+        it refuses (a partial occupancy, ...) or warns about (a space group it detects differently) is said in its words."""
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import crystal", "", materials.IMPORT_FILTER)
+        if not path:
+            return
+        try:
+            spec, warnings = materials.import_file(path)
+        except materials.MaterialsError as e:
+            self.statusBar().showMessage(f"crystal import refused: {e}")
+            QtWidgets.QMessageBox.warning(self, "Import crystal", str(e)); return
+        self.setup.set_crystal(spec, f"import {pathlib.Path(path).name}")
+        self._setup_dock.raise_()
+        note = f"{spec.label}: {len(spec.structure.sites)} sites imported; state the site spins in Setup > Structure"
+        self.statusBar().showMessage(note + (f"  ⚠ {len(warnings)} warning(s)" if warnings else ""))
+        for w in warnings:
+            self._log(f"⚠ import {pathlib.Path(path).name}: {w}")
+        if warnings:
+            QtWidgets.QMessageBox.information(self, "Import crystal", "\n\n".join(warnings))
+
+    def _export_crystal(self):
+        """The crystal the Setup panel shows, written by the library as CIF / POSCAR / extended xyz (for the oracles)."""
+        spec = self.setup._spec()
+        if spec is None or spec.structure.kind != "crystal":
+            self.statusBar().showMessage("nothing to export: the Setup panel shows no crystal"); return
+        filters = ";;".join(f for f, _ in materials.FORMATS.values())
+        path, chosen = QtWidgets.QFileDialog.getSaveFileName(self, "Export crystal", f"{spec.label.replace(' ', '_')}.cif", filters)
+        if not path:
+            return
+        fmt = next(k for k, (f, _) in materials.FORMATS.items() if f == chosen)
+        try:
+            pathlib.Path(path).write_text(materials.export_text(spec, fmt))
+        except materials.MaterialsError as e:
+            self.statusBar().showMessage(f"export refused: {e}"); return
+        self.statusBar().showMessage(f"{spec.label} ({len(spec.structure.sites)} sites) → {path}")
 
     def _run_menu(self, pos):
         row = self.run_list.indexAt(pos).row()

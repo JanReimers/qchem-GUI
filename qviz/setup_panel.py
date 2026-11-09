@@ -25,7 +25,7 @@ from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import basisinfo, geometry, gridinfo, molecules, policyinfo, states, symmetry
+from . import basisinfo, geometry, gridinfo, materials, molecules, policyinfo, states, symmetry
 from .backends import solid2_deck
 from .backends.base import BackendRegistry, code_block, data_structure
 from .backends.solid2 import mesh_for
@@ -178,10 +178,28 @@ class SetupPanel(QtWidgets.QWidget):
         return form
 
     def _build_structure(self):
-        f = self._page("Structure")
+        f = self._page("Structure"); self._sform = f
         self.mol_box = QtWidgets.QComboBox(); self.mol_box.addItems(molecules.MOLECULES.keys())
         self.mol_box.activated.connect(lambda _i: self._pick_preset(self.mol_box.currentText()))
         f.addRow("Preset", self.mol_box)
+        # THE MATERIALS PICKER (OpenWork §2, 2026-11-09): the library's layers -- the shipped materials, then "mine" (the user's
+        # ~/.qchem/materials.json, where Save to my materials writes).  Filled from the library on first show and after a save.
+        self.material_box = QtWidgets.QComboBox()
+        self.material_box.setToolTip("A crystal from the library's materials: the shipped ones, then yours (Save to my materials)")
+        self.material_box.activated.connect(self._pick_material)
+        self._materials: list[dict] = []
+        f.addRow("Material", self.material_box)
+        self.spins_edit = QtWidgets.QLineEdit()
+        self.spins_edit.setPlaceholderText("one per site: + - 0  (empty = no magnetic order)")
+        self.spins_edit.setToolTip("The crystal's collinear magnetic order, stated after import: one of + - 0 per site in site "
+                                   "order (an AFM-II MnO cell: + - 0 0).  The deck gets the signs (solid.siteSpins).")
+        self.spins_edit.editingFinished.connect(self._on_spins)
+        f.addRow("Site spins", self.spins_edit)
+        self.save_material_btn = QtWidgets.QPushButton("Save to my materials…")
+        self.save_material_btn.setToolTip("Save this crystal (cell, sites, site spins, where it came from) to your own materials "
+                                          "library, ~/.qchem/materials.json -- never the shipped file")
+        self.save_material_btn.clicked.connect(self._save_material)
+        f.addRow(self.save_material_btn)
         self.sites = QtWidgets.QTableWidget(0, 5); self.sites.setFont(_mono())
         self.sites.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.sites.verticalHeader().setVisible(False)
@@ -441,6 +459,77 @@ class SetupPanel(QtWidgets.QWidget):
         if self._run is None and name in molecules.MOLECULES:
             self.draft.set(molecules.preset_spec(name), "user", f"Setup: preset {name}")
 
+    # -- the materials picker, site spins, Save to my materials ------------------------------------------------------------
+    def refresh_materials(self) -> None:
+        """The picker's list, from the library's layers (shipped first, then the user's)."""
+        try:
+            self._materials = materials.listing()
+        except materials.MaterialsError as e:
+            self._materials = []
+            self.material_box.setToolTip(f"no materials: {e}")
+        self.material_box.blockSignals(True)
+        self.material_box.clear()
+        self.material_box.addItem(_NOT_PRESET)
+        for m in self._materials:
+            self.material_box.addItem(m["name"] + ("" if m["layer"] == "shipped" else f"  ({'mine' if m['layer'] == 'user' else 'workspace'})"))
+        self.material_box.blockSignals(False)
+        self._render_material(self._spec())
+
+    def _render_material(self, s) -> None:
+        name = ((s.structure.source or {}).get("materials") if s is not None and s.structure.kind == "crystal" else None)
+        i = next((k + 1 for k, m in enumerate(self._materials) if m["name"] == name), 0)
+        self.material_box.blockSignals(True)
+        self.material_box.setCurrentIndex(i if i < self.material_box.count() else 0)
+        self.material_box.blockSignals(False)
+
+    def _pick_material(self, index: int) -> None:
+        if self._run is not None or index <= 0 or index > len(self._materials):
+            return
+        m = self._materials[index - 1]
+        try:
+            self.draft.set(materials.pick(m), "user", f"Setup: material {m['name']}")
+        except Exception as e:                       # noqa: BLE001 -- a malformed user entry: say so, keep the draft
+            self.reason.setText(f"{m['name']}: {e}")
+
+    def set_crystal(self, spec: RunSpec, what: str) -> None:
+        """A crystal from outside (File > Import crystal) into the draft: the structure and its default physics."""
+        self.show_run(None)
+        self.draft.set(spec, "user", what)
+
+    def _on_spins(self) -> None:
+        s = self._spec()
+        if s is None or s.structure.kind != "crystal" or self._run is not None:
+            return
+        try:
+            m = materials.parse_spins(self.spins_edit.text(), len(s.structure.sites))
+        except ValueError as e:
+            self.reason.setText(f"not applied: {e}")
+            return
+        if m == (s.physics.spin.site_moments if s.physics.spin.polarized else None):
+            return
+        self._edit({"physics": {"spin": {"site_moments": list(m), "polarized": True} if m else {"site_moments": None}}}, "site spins")
+
+    def _save_material(self) -> None:
+        s = self._spec()
+        if s is None or s.structure.kind != "crystal":
+            return
+        name, ok = QtWidgets.QInputDialog.getText(self, "Save to my materials", "Name (a new name; the shipped ones are taken):",
+                                                  text=s.label.replace(" ", "_"))
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        try:
+            path = materials.save(name, s)
+        except materials.MaterialsError as e:
+            if "replace it" not in str(e):
+                self.reason.setText(f"not saved: {e}"); return
+            if QtWidgets.QMessageBox.question(self, "Save to my materials", f"'{name}' is already in your materials.  Replace it?") \
+                    != QtWidgets.QMessageBox.Yes:
+                return
+            path = materials.save(name, s, replace=True)
+        self.reason.setText(f"saved {name} to {path}")
+        self.refresh_materials()
+
     def _apply_json(self) -> None:
         try:
             self.draft.set(RunSpec.from_json(self.spec_view.toPlainText()), "user", "edited in the Spec tab")
@@ -467,7 +556,7 @@ class SetupPanel(QtWidgets.QWidget):
 
     _rendering = False
     _EDITORS = ("mix_box", "alpha", "alpha_min", "alpha_max", "ladder_switch", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
-                "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut")
+                "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut", "material_box", "spins_edit")
 
     def _render(self) -> None:
         s = self._spec()
@@ -485,8 +574,17 @@ class SetupPanel(QtWidgets.QWidget):
             self.spec_view.setPlainText(s.to_json(indent=1) if s else "")
             mol = s is not None and s.structure.kind == "molecule"
             self._render_preset(s, mol)
+            if not self._materials and self.material_box.count() == 0:
+                self.refresh_materials()
+            self._render_material(s)
+            crystal = s is not None and not mol
+            self.spins_edit.setText(materials.spins_text(s) if crystal else "")
+            self._sform.setRowVisible(self.spins_edit, crystal)
+            self._sform.setRowVisible(self.save_material_btn, crystal and not ro)
             for w in editors:
                 w.setEnabled(not ro and s is not None)
+            self.material_box.setEnabled(not ro)        # a material starts a draft, even from an empty one
+            self.mol_box.setEnabled(not ro)
             for w in (self.method_box, self.pp_check, self.mult_spin, self.sym_check, self.basis_box):
                 w.setEnabled(not ro and mol)          # a crystal's are stated through its deck (Spec / representation)
             self.mult_spin.setVisible(s is None or mol)
