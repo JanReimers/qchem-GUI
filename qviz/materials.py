@@ -2,7 +2,7 @@
 
 THE ENTRY IS THE INTERNAL FORMAT (OpenWork §2, ruled by the user 2026-11-09).  A CIF, POSCAR or extended xyz file is
 translated by the LIBRARY (qchem.CrystalFiles) into one materials.json entry -- the GUI never parses a crystal file -- and
-the picker lists the library's layers: the SHIPPED materials (curated) and the user's own library (~/.qchem/materials.json,
+the picker lists the library's layers: the SHIPPED materials (curated) and the user's own library (~/.solid2/materials.json,
 where "Save to my materials" writes).  This module turns an entry into a crystal spec and a spec back into an entry; nothing
 else.  Site spins are stated after import (the Structure tab), and ride into a saved entry as its `spin` decoration.
 """
@@ -16,12 +16,12 @@ from .spec import RunSpec
 
 
 #: The user's own library.  THE GUI resolves it: the C++ library reads no environment and is handed every path it layers over the
-#: shipped file (controller ruling 2026-11-09).  None = ~/.qchem/materials.json; a test sets a temporary file here.
+#: shipped file (controller ruling 2026-11-09).  None = ~/.solid2/materials.json; a test sets a temporary file here.
 USER_LIBRARY: Optional[str] = None
 
 
 def user_library() -> str:
-    return USER_LIBRARY or str(pathlib.Path.home() / ".qchem" / "materials.json")
+    return USER_LIBRARY or str(pathlib.Path.home() / ".solid2" / "materials.json")
 
 
 def _layers() -> list[dict]:

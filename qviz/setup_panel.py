@@ -183,7 +183,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.mol_box.activated.connect(lambda _i: self._pick_preset(self.mol_box.currentText()))
         f.addRow("Preset", self.mol_box)
         # THE MATERIALS PICKER (OpenWork §2, 2026-11-09): the library's layers -- the shipped materials, then "mine" (the user's
-        # ~/.qchem/materials.json, where Save to my materials writes).  Filled from the library on first show and after a save.
+        # ~/.solid2/materials.json, where Save to my materials writes).  Filled from the library on first show and after a save.
         self.material_box = QtWidgets.QComboBox()
         self.material_box.setToolTip("A crystal from the library's materials: the shipped ones, then yours (Save to my materials)")
         self.material_box.activated.connect(self._pick_material)
@@ -197,7 +197,7 @@ class SetupPanel(QtWidgets.QWidget):
         f.addRow("Site spins", self.spins_edit)
         self.save_material_btn = QtWidgets.QPushButton("Save to my materials…")
         self.save_material_btn.setToolTip("Save this crystal (cell, sites, site spins, where it came from) to your own materials "
-                                          "library, ~/.qchem/materials.json -- never the shipped file")
+                                          "library, ~/.solid2/materials.json -- never the shipped file")
         self.save_material_btn.clicked.connect(self._save_material)
         f.addRow(self.save_material_btn)
         self.sites = QtWidgets.QTableWidget(0, 5); self.sites.setFont(_mono())
