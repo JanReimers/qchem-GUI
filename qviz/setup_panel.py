@@ -95,6 +95,7 @@ def _mono() -> QtGui.QFont:
 
 
 class SetupPanel(QtWidgets.QWidget):
+    workspace_library_changed = QtCore.Signal(object)   # the workspace's materials library (a path, or None): the app stores it
     run_requested = QtCore.Signal(object, list)        # (spec, back-end names): the user's ▶ Run click
     refused = QtCore.Signal(str)                       # an edit the spec refused, and why
     _built = QtCore.Signal(str, object)                # (spec JSON, record | the exception): a Build finished
@@ -189,6 +190,18 @@ class SetupPanel(QtWidgets.QWidget):
         self.material_box.activated.connect(self._pick_material)
         self._materials: list[dict] = []
         f.addRow("Material", self.material_box)
+        self._ws_library: Optional[str] = None
+        wsl = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(wsl); h.setContentsMargins(0, 0, 0, 0)
+        self.ws_library_label = QtWidgets.QLabel("none"); self.ws_library_label.setWordWrap(True)
+        self.ws_library_btn = QtWidgets.QPushButton("Choose…")
+        self.ws_library_btn.setToolTip("This workspace's own materials library (materials.json schema), listed after yours: an "
+                                       "existing file, or a new name (created by the first save into it).  Saved with the workspace.")
+        self.ws_library_btn.clicked.connect(self._choose_ws_library)
+        self.ws_library_clear = QtWidgets.QToolButton(); self.ws_library_clear.setText("✕")
+        self.ws_library_clear.setToolTip("This workspace uses no materials library of its own (the file is left as it is)")
+        self.ws_library_clear.clicked.connect(lambda: self._set_ws_library(None))
+        h.addWidget(self.ws_library_label, 1); h.addWidget(self.ws_library_btn); h.addWidget(self.ws_library_clear)
+        f.addRow("Workspace library", wsl)
         self.spins_edit = QtWidgets.QLineEdit()
         self.spins_edit.setPlaceholderText("one per site: + - 0  (empty = no magnetic order)")
         self.spins_edit.setToolTip("The crystal's collinear magnetic order, stated after import: one of + - 0 per site in site "
@@ -460,13 +473,33 @@ class SetupPanel(QtWidgets.QWidget):
             self.draft.set(molecules.preset_spec(name), "user", f"Setup: preset {name}")
 
     # -- the materials picker, site spins, Save to my materials ------------------------------------------------------------
+    def set_workspace_library(self, path: Optional[str]) -> None:
+        """The workspace's own materials library (the app hands it over on open / new workspace); no signal back."""
+        self._ws_library = path or None
+        self.ws_library_label.setText(path or "none")
+        self.ws_library_label.setToolTip(path or "")
+        self.ws_library_clear.setEnabled(bool(path))
+        self.refresh_materials()
+
+    def _set_ws_library(self, path: Optional[str]) -> None:
+        self.set_workspace_library(path)
+        self.workspace_library_changed.emit(self._ws_library)
+
+    def _choose_ws_library(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "This workspace's materials library", self._ws_library or "materials.json",
+                                                        "materials library (*.json)", options=QtWidgets.QFileDialog.DontConfirmOverwrite)
+        if path:
+            self._set_ws_library(path)
+
     def refresh_materials(self) -> None:
-        """The picker's list, from the library's layers (shipped first, then the user's)."""
+        """The picker's list, from the library's layers: shipped, then the user's, then this workspace's."""
         try:
-            self._materials = materials.listing()
+            self._materials = materials.listing(self._ws_library)
+            self.material_box.setToolTip("A crystal from the library's materials: the shipped ones, then yours, then this workspace's")
         except materials.MaterialsError as e:
             self._materials = []
             self.material_box.setToolTip(f"no materials: {e}")
+            self.reason.setText(f"materials: {e}")
         self.material_box.blockSignals(True)
         self.material_box.clear()
         self.material_box.addItem(_NOT_PRESET)
@@ -518,15 +551,23 @@ class SetupPanel(QtWidgets.QWidget):
         if not ok or not name.strip():
             return
         name = name.strip()
+        into_ws = False
+        if self._ws_library:
+            where, ok = QtWidgets.QInputDialog.getItem(self, "Save to my materials", "Into:",
+                                                       ["My materials (~/.solid2)", "This workspace's library"], 0, False)
+            if not ok:
+                return
+            into_ws = where.startswith("This workspace")
+        save = lambda replace: materials.save(name, s, replace=replace, workspace=self._ws_library, into_workspace=into_ws)
         try:
-            path = materials.save(name, s)
+            path = save(False)
         except materials.MaterialsError as e:
             if "replace it" not in str(e):
                 self.reason.setText(f"not saved: {e}"); return
-            if QtWidgets.QMessageBox.question(self, "Save to my materials", f"'{name}' is already in your materials.  Replace it?") \
+            if QtWidgets.QMessageBox.question(self, "Save to my materials", f"'{name}' is already there.  Replace it?") \
                     != QtWidgets.QMessageBox.Yes:
                 return
-            path = materials.save(name, s, replace=True)
+            path = save(True)
         self.reason.setText(f"saved {name} to {path}")
         self.refresh_materials()
 

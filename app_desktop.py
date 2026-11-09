@@ -160,6 +160,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ws = ws
         self.ws.on_change(lambda _w: self._bridge.changed.emit())   # model -> GUI thread, thread-safe
         self.agent.session.tools.workspace = ws                      # the agent reads the runs of THIS workspace
+        if hasattr(self, "setup"):                                   # (the first workspace is set before the Setup panel exists)
+            self.setup.set_workspace_library(ws.materials)           # its own materials library, listed after the user's
 
     # -- layout -----------------------------------------------------------
     def _build_ui(self):
@@ -200,6 +202,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 runs=lambda: self.ws.runs)
         self.setup.run_requested.connect(lambda spec, names: [self._add_spec(spec, n) for n in names])
         self.setup.refused.connect(lambda why: self.statusBar().showMessage(f"not applied: {why}"))
+        self.setup.workspace_library_changed.connect(lambda path: setattr(self.ws, "materials", path))   # saved with the workspace
         self._setup_dock = self._dock("Setup", self.setup, QtCore.Qt.LeftDockWidgetArea)
 
         # Output: the selected run's results

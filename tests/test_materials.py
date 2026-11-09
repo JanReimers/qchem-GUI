@@ -138,3 +138,46 @@ class TheSetupPanel(unittest.TestCase):
         self.panel._on_spins()
         self.assertIn("3 spins for 2 sites", self.panel.reason.text())
         self.assertEqual(self.draft.spec.physics.spin.site_moments, (1.0, -1.0), "a refused line leaves the draft")
+
+
+@unittest.skipUnless(live(), "qchem_py with the materials face not built (QCHEM_BUILD)")
+class TheWorkspaceLibrary(unittest.TestCase):
+    """A workspace may add its own materials library on top of the user's (OpenWork §2, ruled 2026-11-09): listed after it,
+    saved into on request, stored with the workspace, and one name is one structure across them."""
+
+    def setUp(self):
+        self.ws_lib = os.path.join(_tempfile.mkdtemp(prefix="qchem-gui-ws-materials-"), "materials.json")
+        self.spec = materials.spec_of("MnO", ROCKSALT, ROCKSALT["lattice"]["vectors_bohr"], {"import": ROCKSALT["provenance"]})
+
+    def test_a_workspace_library_is_listed_after_the_user_s_and_saved_into(self):
+        materials.save("InTheWorkspace", self.spec, workspace=self.ws_lib, into_workspace=True)
+        ms = materials.listing(self.ws_lib)
+        self.assertEqual(ms[-1]["name"], "InTheWorkspace")
+        self.assertEqual(ms[-1]["layer"], "workspace")
+        self.assertNotIn("InTheWorkspace", [m["name"] for m in materials.listing()], "without the workspace it is not listed")
+        materials.save("MineToo", self.spec, replace=True, workspace=self.ws_lib)        # the default target is the user's library
+        with self.assertRaisesRegex(materials.MaterialsError, "already in"):
+            materials.save("MineToo", self.spec, workspace=self.ws_lib, into_workspace=True)   # one name, one structure
+        with self.assertRaisesRegex(materials.MaterialsError, "no materials library"):
+            materials.save("X", self.spec, into_workspace=True)
+
+    def test_the_workspace_keeps_its_library_across_save_and_open(self):
+        from qviz import project
+        from qviz.workspace import Workspace
+        reg = BackendRegistry([FakeBackend()])
+        ws = Workspace("t", registry=reg); ws.materials = self.ws_lib
+        path = os.path.join(_tempfile.mkdtemp(), "w.qproj.h5")
+        project.save_workspace(path, ws)
+        self.assertEqual(project.load_workspace(path, reg, compute=False).materials, self.ws_lib)
+
+    def test_the_setup_panel_lists_it_and_says_so(self):
+        materials.save("PanelWs", self.spec, workspace=self.ws_lib, into_workspace=True, replace=True)
+        panel = SetupPanel(SpecDraft(), BackendRegistry([FakeBackend()]))
+        seen = []
+        panel.workspace_library_changed.connect(seen.append)
+        panel._set_ws_library(self.ws_lib)
+        self.assertEqual(seen, [self.ws_lib], "the app hears the choice, to store it with the workspace")
+        self.assertGreater(panel.material_box.findText("PanelWs  (workspace)"), 0)
+        panel._set_ws_library(None)
+        self.assertLess(panel.material_box.findText("PanelWs  (workspace)"), 0)
+        self.assertEqual(panel.ws_library_label.text(), "none")

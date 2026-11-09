@@ -24,8 +24,9 @@ def user_library() -> str:
     return USER_LIBRARY or str(pathlib.Path.home() / ".solid2" / "materials.json")
 
 
-def _layers() -> list[dict]:
-    return [{"layer": "user", "path": user_library()}]
+def _layers(workspace: Optional[str] = None) -> list[dict]:
+    """The libraries over the shipped file: the user's, then the workspace's when it has one."""
+    return [{"layer": "user", "path": user_library()}] + ([{"layer": "workspace", "path": workspace}] if workspace else [])
 
 
 class MaterialsError(RuntimeError):
@@ -63,9 +64,10 @@ def available() -> bool:
         return False
 
 
-def listing() -> list[dict]:
-    """Every material over the shipped file and the user's library, shipped first: [{name, layer, file, entry, lattice_bohr}]."""
-    return ask("list", libraries=_layers())["materials"]
+def listing(workspace: Optional[str] = None) -> list[dict]:
+    """Every material over the shipped file, the user's library and the workspace's (when it has one), in that order:
+    [{name, layer, file, entry, lattice_bohr}].  One name lives in one layer: a collision is the library's refusal."""
+    return ask("list", libraries=_layers(workspace))["materials"]
 
 
 def spec_of(label: str, entry: dict, lattice_bohr, source: dict) -> RunSpec:
@@ -128,10 +130,14 @@ def export_text(spec: RunSpec, fmt: str) -> str:
     return ask("export", entry=entry_of(spec), format=fmt, name=spec.label)["text"]
 
 
-def save(name: str, spec: RunSpec, replace: bool = False) -> str:
-    """Save to my materials: the user's library (never the shipped file); returns its path.  A shipped name, or an existing
-    one without `replace`, is refused by the library."""
-    return ask("save", into={"layer": "user", "path": user_library()}, name=name, entry=entry_of(spec), replace=replace)["path"]
+def save(name: str, spec: RunSpec, replace: bool = False, workspace: Optional[str] = None, into_workspace: bool = False) -> str:
+    """Save the crystal to the user's library, or (`into_workspace`) to the workspace's -- never the shipped file; returns the
+    file's path.  A shipped name, another layer's name, or an existing one without `replace` is refused by the library."""
+    if into_workspace and not workspace:
+        raise MaterialsError("this workspace has no materials library: choose one first")
+    into = {"layer": "workspace", "path": workspace} if into_workspace else {"layer": "user", "path": user_library()}
+    others = [l for l in _layers(workspace) if l["path"] != into["path"]]
+    return ask("save", into=into, name=name, entry=entry_of(spec), replace=replace, libraries=others)["path"]
 
 
 def parse_spins(text: str, n_sites: int) -> Optional[tuple[float, ...]]:

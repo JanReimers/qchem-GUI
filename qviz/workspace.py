@@ -195,6 +195,9 @@ class Workspace:
         self.runs: list[Run] = []
         self.selected: Optional[Run] = None
         self.path: Optional[str] = None           # the file it was opened from / last saved to (None: never saved)
+        #: this workspace's own materials library (materials.json schema), layered over the shipped materials and the user's
+        #: ~/.solid2 one (OpenWork §2, ruled 2026-11-09); None = none.  Saved with the workspace.
+        self.materials: Optional[str] = None
         self._listeners: list[Callable[["Workspace"], None]] = []
 
     def on_change(self, cb: Callable[["Workspace"], None]) -> None:

@@ -98,7 +98,7 @@ def save_workspace(path: str, ws) -> None:
     has one (energy, SCF trace, levels, resolved settings, the code's run record: JSON in a `result` dataset), so a
     reopen restores it with zero compute.  3D fields are not stored: they need the live calculation (Recompute)."""
     with h5py.File(path, "w") as h:
-        h.attrs.update(format=WORKSPACE_FORMAT, title=ws.title,
+        h.attrs.update(format=WORKSPACE_FORMAT, title=ws.title, materials=ws.materials or "",
                        created=_dt.datetime.now().isoformat(timespec="seconds"),
                        selected=(ws.runs.index(ws.selected) if ws.selected in ws.runs else -1))
         g = h.create_group("runs")
@@ -125,6 +125,7 @@ def load_workspace(path: str, registry, compute: bool = True):
             raise ValueError(f"{path}: workspace format {fmt!r}, this reader knows {WORKSPACE_FORMAT!r}"
                              + (" -- convert it with scripts/convert_workspace_v1.py" if fmt == "qviz-workspace/1" else ""))
         ws = Workspace(str(h.attrs.get("title", "Untitled")), registry=registry)
+        ws.materials = str(h.attrs.get("materials", "")) or None   # its own materials library (an older file: none)
         g = h["runs"]
         for key in sorted(g):
             rg = g[key]
