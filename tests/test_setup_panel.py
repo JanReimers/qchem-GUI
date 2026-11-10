@@ -146,9 +146,7 @@ class BasisDetails(unittest.TestCase):
                      accuracy=Accuracy(representation={"basis": "dzvp"}))
         rows = basisinfo.element_rows(w)
         self.assertEqual(rows, [("O", 1, "3s 2p 1d", 15), ("H", 2, "2s", 2)], "dzvp.bsd, read past its free-text trailer")
-        lines = basisinfo.summary(w, qc)
-        self.assertEqual(lines[0], f"{sum(n * f for _, n, _, f in rows)} functions (dzvp, Cartesian)")
-        self.assertIn("condition number", lines[1])
+        self.assertIn("Build (or Run) shows", basisinfo.summary(w)[0], "the conditioning is the library's record, not recomputed")
 
 
 class ScfKnobs(unittest.TestCase):
@@ -353,11 +351,40 @@ class GridsTab(unittest.TestCase):
         self.assertIn("from the run of this spec", panel.grids_source.text())
         self.assertIn("29,100 points", panel.grids_built.text())
 
-    def test_a_molecule_cannot_build_yet(self):
+    def test_a_molecule_builds_and_run_converges_that_build(self):
+        if self.qc is None:
+            self.skipTest(self.why)
+        from qviz import gridinfo
         from qviz.backends.solid2 import Solid2Backend
-        panel = SetupPanel(SpecDraft(molecules.preset_spec("Water (H2O)")), BackendRegistry([FakeBackend(), Solid2Backend()]))
-        self.assertFalse(panel.build_btn.isEnabled())
-        self.assertIn("build-only step", panel.build_btn.toolTip())
+        from qviz.spec import Accuracy, molecule
+        w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
+                     accuracy=Accuracy(representation={"basis": "dzvp"}))
+        be = Solid2Backend()
+        panel = SetupPanel(SpecDraft(w), BackendRegistry([FakeBackend(), be]), qc=self.qc)
+        self.assertTrue(panel.build_btn.isEnabled(), panel.build_btn.toolTip())
+        panel.build_btn.click()                        # no `serial`: runs here, synchronously
+        APP.processEvents()
+        self.assertEqual(panel.grids_source.text(), "from this spec's Build (no SCF)")
+        self.assertRegex(panel.grids_built.text(), r"XC mesh: Becke, 3 atoms", "the mesh, from the build run")
+        self.assertIn("19 functions (dzvp)", panel.basis_summary.text())
+        self.assertIn("condition number", panel.basis_summary.text(), "basis.perIrrep, from the same record")
+
+        made = []
+        real = self.qc.Calculator
+        self.qc.Calculator = lambda *a, **k: made.append(k) or real(*a, **k)
+        try:
+            rows = []
+            res = be.run(be.translate(w), rows.append)   # the kept Build of this job: converged, not rebuilt
+            self.assertEqual(made, [])
+            self.assertTrue(res.converged, res.failure)
+            self.assertEqual(rows[0].iteration, 1, "the SCF on the built graph streams from its first iteration")
+            self.assertTrue(any(k.split("@")[0].endswith(" build") for k in res.record), "the build run stays in the record")
+            self.assertTrue(gridinfo.built(res.record)[0], "the SCF run's own mesh report")
+            fresh = be.run(be.translate(w))            # the Build was consumed: a second Run builds afresh
+            self.assertEqual(len(made), 1)
+            self.assertAlmostEqual(fresh.energy_Ha, res.energy_Ha, delta=1e-8, msg="Build -> Run is the same calculation")
+        finally:
+            self.qc.Calculator = real
 
     def test_a_molecule_run_carries_its_record(self):
         if self.qc is None:

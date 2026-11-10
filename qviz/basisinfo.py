@@ -1,14 +1,13 @@
 """
 qviz.basisinfo -- what a spec's orbital basis IS, before any SCF: the shells on each element (read from qchem's
-BasisSetData file) and, for a molecule, the size and conditioning the facade's own basis builder reports
-(qchem_py.basis_info: the overlap S's extreme eigenvalues).
+BasisSetData file); its size and the overlap's conditioning are the library's own record (a Build's or a run's basis section,
+gridinfo.conditioning), never recomputed here.
 
 A small S eigenvalue is a near-linear dependence: diffuse functions on neighbouring atoms spanning almost the same
 space.  The condition number s_max/s_min says how much the SCF's orthogonalization amplifies round-off.
 """
 from __future__ import annotations
 
-import functools
 from collections import Counter
 from typing import Optional
 
@@ -19,7 +18,6 @@ from .spec import RunSpec
 
 _L = "spdfgh"
 _CART = (1, 3, 6, 10, 15, 21)                     # Cartesian components per l (the facade's molecular basis is Cartesian)
-_NEAR_DEPENDENT = 1e-6                            # an S eigenvalue below this is flagged as a near-linear dependence
 
 
 def basis_name(spec: RunSpec) -> str:
@@ -46,11 +44,6 @@ def element_rows(spec: RunSpec) -> list[tuple[str, int, str, int]]:
     return out
 
 
-@functools.lru_cache(maxsize=32)
-def _info(qc, numbers: tuple, positions: tuple, basis: str) -> dict:
-    return qc.basis_info(list(numbers), list(positions), basis)
-
-
 def fits(spec: RunSpec, record: Optional[dict]) -> list[str]:
     """The Basis tab's other bases -- what the run fits ρ (Hartree) and Vxc in -- as the record files them
     (hamiltonian.<term>.fitbasis: [{role, name, nFunctions}]).  Hartree-Fock has none: its Coulomb and exchange are analytic."""
@@ -64,21 +57,10 @@ def fits(spec: RunSpec, record: Optional[dict]) -> list[str]:
             for f in got]
 
 
-def summary(spec: RunSpec, qc) -> list[str]:
-    """Lines for the Basis tab: the function count and S's conditioning for a molecule (None-safe on `qc`)."""
+def summary(spec: RunSpec) -> list[str]:
+    """The Basis tab's lines before the library has built this spec: its conditioning is the build's own record
+    (basis.perIrrep, gridinfo.conditioning), so Build (or Run) fills them."""
     name = basis_name(spec)
     if spec.structure.kind != "molecule":
-        return [f"{name}: a crystal's overlap is per k -- its conditioning is the run's [basis trim] report"]
-    if qc is None:
-        return ["the overlap needs the qchem_py extension (QCHEM_BUILD)"]
-    try:
-        d = _info(qc, tuple(s.Z for s in spec.structure.sites), tuple(x for s in spec.structure.sites for x in s.xyz), name)
-    except Exception as e:                            # noqa: BLE001 -- a readout, never a crash
-        return [f"{name}: {e}"]
-    cond = d["s_max"] / d["s_min"] if d["s_min"] > 0 else float("inf")
-    out = [f"{d['n_functions']} functions ({name}, Cartesian)",
-           f"overlap S: min eigenvalue {d['s_min']:.3e}, max {d['s_max']:.3g}, condition number {cond:.3g}"]
-    if d["s_min"] < _NEAR_DEPENDENT:
-        out.append(f"⚠ near-linear dependence: S's smallest eigenvalue is below {_NEAR_DEPENDENT:g}")
-    return out
-
+        return [f"{name}: a crystal's overlap is per k -- Build (or Run) shows its conditioning (the [basis trim] report)"]
+    return [f"{name}: Build (or Run) shows the function count and the overlap's conditioning per irrep"]

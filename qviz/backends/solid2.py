@@ -26,6 +26,9 @@ names for its native arguments) and continues through the same spec key (restart
 resume, a warm start naming each difference, or RestartRefused) and the Result's provenance carries what it did
 (restartedFrom).
 
+BUILD -> RUN: build(job) stops before the SCF (a crystal's deck::Build, a molecule's MoleculeCalculation::Prepare) and keeps
+the calculation; a Run of the same job converges it, so the Basis and Grids tabs read what the run will use.
+
 Scope today: single points.  A crystal's post-SCF actions (compute_U) need `rundeck` (deck::Build stops at the
 SCF); a crystal's fields and bands are not sampled through the bridge yet.
 """
@@ -120,6 +123,23 @@ def _gates_run(record: dict) -> Optional[str]:
     return None
 
 
+def _calculator_args(n: dict) -> dict:
+    """qchem_py.Calculator's keyword arguments from a molecule job's native dict (the state it saves is not one)."""
+    return dict(numbers=n["numbers"], positions=n["positions"], basis=n["basis"], model=n["model"],
+                symmetry=n["symmetry"], polarized=n["polarized"], multiplicity=n["multiplicity"], max_iter=n["max_iter"],
+                pp=n["pp"], accelerator=n["accelerator"], mesh_radial=n["mesh_radial"], mesh_angular=n["mesh_angular"],
+                relax_start=n.get("relax_start", 0.0), relax_max=n.get("relax_max", 0.0), diis_depth=n["diis_depth"],
+                diis_sv_tol=n["diis_sv_tol"], mixer=n["mixer"], smearing_kT=n["smearing_kT"],
+                diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"], relax_min=n["relax_min"],
+                ladder_switch_at=n["ladder_switch_at"], restart_from=n.get("restart_from", ""),
+                **{k: n[k] for k, _ in solid2_deck.DECK_GATES})
+
+
+def _native_key(n: dict) -> str:
+    """What identifies a job for its kept Build: a crystal's deck text, a molecule's arguments."""
+    return n["deck"] if "deck" in n else json.dumps(n, sort_keys=True)
+
+
 def _molecule_deck_ok(deck) -> bool:
     """A molecule's deck block: none, or only state.restartFrom (the molecular deck keys wait for V-FACADE-OPTS)."""
     return not deck or (set(deck) == {"state"} and set(deck["state"]) <= {"restartFrom"})
@@ -153,7 +173,7 @@ class Solid2Backend:
 
     def __init__(self):
         self._qc, self._why_absent = _import_qchem_py()
-        self._built = None          # (deck text, built SolidRun, its build record): the ONE Build kept for a Run of that deck
+        self._built = None          # (native key, built SolidRun / Calculator, its build record): the ONE Build kept for a Run of it
         self._prior: dict = {}      # the reused build's record, for the live snapshot of the run it feeds
 
     # -- build: every pre-SCF step, no SCF -----------------------------------
@@ -162,25 +182,31 @@ class Solid2Backend:
         if self._qc is None:
             return self._why_absent
         if spec.structure.kind == "molecule":
-            return "a molecule has no build-only step in the library yet (OpenWork §3: lane B is adding it)"
+            return None                               # MoleculeCalculation::Prepare (the translate refuses what it cannot run)
         return solid2_deck.why_not(spec)
 
     def build(self, job: Job) -> dict:
-        """deck::Build alone -- basis, grids, pseudopotentials, audits -- and the build run's record.  The built calculation
-        is KEPT: a Run of the same deck converges it instead of building again (an edited spec's deck differs: rebuilt).
-        Raises Refused (the library's text and record) on a refusal.  Call on the app's serial library thread."""
-        if "deck" not in job.native:
-            raise RuntimeError(self.why_no_build(job.spec) or "no build-only step for this spec")
+        """Every pre-SCF step alone and the build run's record: a crystal's deck::Build (basis, grids, pseudopotentials, audits),
+        a molecule's MoleculeCalculation::Prepare (basis per irrep with the overlap's conditioning, every mesh, the SCF iterator;
+        its run "<ID> build").  The built calculation is KEPT: a Run of the same job converges it instead of building again (an
+        edited spec's job differs: rebuilt).  Raises Refused (the library's text and record) on a refusal.  Call on the app's
+        serial library thread."""
         self._built = None                                       # one kept build at a time (a crystal's can be large)
         self._qc.clear_report()
         self._prior = {}
         try:
-            run = self._qc.SolidRun(job.native["deck"])
+            built = (self._qc.SolidRun(job.native["deck"]) if "deck" in job.native
+                     else self._qc.Calculator(**_calculator_args(job.native), build_only=True))
         except Exception as e:                                   # noqa: BLE001 -- the library's refusal, in its own words
             raise Refused(str(e), self._filed()) from e
         record = json.loads(self._qc.report())
-        self._built = (job.native["deck"], run, record)
+        self._built = (_native_key(job.native), built, record)
         return record
+
+    def _kept_build(self, native: dict):
+        """The kept Build of exactly this job (its calculation and record, consumed), else None."""
+        built, self._built = self._built, None
+        return built[1:] if built is not None and built[0] == _native_key(native) else None
 
     # -- capabilities ------------------------------------------------------
     def capabilities(self) -> Capabilities:
@@ -335,17 +361,12 @@ class Solid2Backend:
             return self._run_deck(job, step, steps)
 
         self._qc.clear_report()
-        calc = self._qc.Calculator(n["numbers"], n["positions"], basis=n["basis"], model=n["model"],
-                                   symmetry=n["symmetry"], polarized=n["polarized"],
-                                   multiplicity=n["multiplicity"], max_iter=n["max_iter"], pp=n["pp"],
-                                   accelerator=n["accelerator"], mesh_radial=n["mesh_radial"],
-                                   mesh_angular=n["mesh_angular"], relax_start=n.get("relax_start", 0.0),
-                                   relax_max=n.get("relax_max", 0.0), diis_depth=n["diis_depth"], diis_sv_tol=n["diis_sv_tol"],
-                                   mixer=n["mixer"], smearing_kT=n["smearing_kT"],
-                                   diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"],
-                                   relax_min=n["relax_min"], ladder_switch_at=n["ladder_switch_at"],
-                                   restart_from=n.get("restart_from", ""),
-                                   **{k: n[k] for k, _ in solid2_deck.DECK_GATES}, on_iteration=step)
+        kept = self._kept_build(n)
+        if kept is not None:                          # this job's Build: converge its graph, do not rebuild
+            calc, self._prior = kept
+            calc.run_scf(step, n["max_iter"])
+        else:
+            calc = self._qc.Calculator(**_calculator_args(n), on_iteration=step)
         saved = n.get("state_save")
         if saved:                                     # converged or not: a later run continues from it (the file says which)
             states.state_dir().mkdir(parents=True, exist_ok=True)
@@ -374,18 +395,18 @@ class Solid2Backend:
                       structure=data_structure(job.spec),
                       scf=steps, levels=levels, polarized=polarized, fields=fields,
                       orbital=lambda i, npts, pad: scalar(calc.orbital(i, npts, pad), f"MO #{i}", True),
-                      resolved=_as_run(job.resolved, record := json.loads(self._qc.report()), restarted),
+                      resolved=_as_run(job.resolved, record := self._prior | json.loads(self._qc.report()), restarted),
                       provenance={"code": NAME, "iterations": calc.iterations(), "restartedFrom": restarted},
                       record=record,                  # the closures above own `calc`
                       state_file=saved if saved and os.path.exists(saved) else None)
 
     def _run_deck(self, job: Job, step, steps: list[SCFRow]) -> Result:
         """A crystal: deck::Build (a refusal raises with the library's text), then the deck's schedule, streamed."""
-        built, self._built = self._built, None
+        kept = self._kept_build(job.native)
         states.state_dir().mkdir(parents=True, exist_ok=True)      # the facade writes the state aside and renames it in
         self._qc.clear_report()
-        if built is not None and built[0] == job.native["deck"]:
-            run, self._prior = built[1], built[2]                  # the Build of THIS deck: converge it, do not rebuild
+        if kept is not None:
+            run, self._prior = kept                                # the Build of THIS deck: converge it, do not rebuild
         else:
             run, self._prior = self._qc.SolidRun(job.native["deck"]), {}
         converged = run.converge(step)                             # run() clears self._prior, after a refusal has read it

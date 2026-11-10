@@ -773,7 +773,7 @@ class SetupPanel(QtWidgets.QWidget):
             per = "per k" if s.structure.kind == "crystal" else "per irrep"
             lines = [f"overlap {per} (the library's record):"] + rec
         else:
-            lines = basisinfo.summary(s, self._qc)
+            lines = basisinfo.summary(s)
         self.basis_summary.setText("\n".join(lines + basisinfo.fits(s, record)))
         rows = basisinfo.element_rows(s)
         self.basis_table.setRowCount(len(rows))
