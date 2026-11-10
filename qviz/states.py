@@ -3,8 +3,8 @@ qviz.states -- where a run's SAVED SCF STATE lives, and how much disk the saved 
 
 A code that can save its converged (or last) iterate writes it to a file this module names; the Result records the
 path (Result.state_file), the workspace keeps it, and a later run can CONTINUE from it -- a different accelerator, tighter
-gates -- instead of starting from scratch.  Today that is SOLID²'s crystals (the deck's state.save / state.restartFrom,
-SolidCalculation::SaveState / PrepareRestart); the molecular facade has no saved state yet.
+gates -- instead of starting from scratch.  Today that is SOLID²: a crystal through its deck (state.save / state.restartFrom), a
+molecule through the binding (Calculator.save_state / restart_from); both are Calculation::SaveState files ("qchem-state 2.0").
 
 The files are the app's own, under STATE_DIR (QCHEM_GUI_STATES overrides it: tests).  A file is named for the deck that
 wrote it (label + a hash of the deck), so running the same deck again overwrites its own file instead of piling up

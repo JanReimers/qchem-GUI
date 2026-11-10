@@ -202,7 +202,7 @@ class Solid2EndToEnd(unittest.TestCase):
         self.assertEqual(run.backend_name, "SOLID²")
         run.compute(on_step=steps.append)
         self.assertIs(run.status, RunStatus.READY, run.error)
-        self.assertAlmostEqual(run.energy, -7.1150676592, places=8)     # rundeck decks/Si_diamond_inline.json, same deck (main b1c8d632; was -7.1150676382 before lib main moved it 2.1e-8)
+        self.assertAlmostEqual(run.energy, -7.1150674706, places=8)     # rundeck decks/Si_diamond_inline.json, same deck (main c70781405: -7.115067471; was -7.1150676592 before lane S's E_KS[D_out] at convergence, 80fed9a8b, moved it 1.9e-7)
         self.assertEqual(steps[0].titles[:3], ("Etotal", "[F,D]", "ΔE/E"), "the periodic console's columns")
         # a cell whose stated electron count is not its valence sum: the setup refuses it, in its own words, before any SCF
         bad = RunSpec.from_dict(spec.to_dict() | {"accuracy": {"kmesh": [1, 1, 1], "representation": {

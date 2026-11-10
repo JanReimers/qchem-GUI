@@ -455,9 +455,7 @@ class MainWindow(QtWidgets.QMainWindow):
         act = menu.addAction("Recompute" + (" (brings back its 3D fields)" if run.restored else ""))
         act.setEnabled(idle)
         saved = states.of(run)
-        cont = menu.addAction("Continue from this run…" if saved else
-                              "Continue from this run (no saved state: " + ("a molecule cannot save one yet)"
-                                                                            if run.spec.structure.kind == "molecule" else "none on disk)"))
+        cont = menu.addAction("Continue from this run…" if saved else "Continue from this run (no saved state on disk)")
         cont.setToolTip("Its spec into the Setup draft, starting from its saved state: change the accelerator or gates, then ▶ Run")
         cont.setEnabled(idle and saved is not None)
         menu.addSeparator()
@@ -534,7 +532,10 @@ class MainWindow(QtWidgets.QMainWindow):
             e = f"{r.energy:.5f}" if r.energy is not None else "—"
             n = states.size(states.of(r))
             acc = (r.spec.accuracy.scf or {}).get("accelerator")
-            cont = f"   ↻ continued{' on ' + acc if acc else ''}" if solid2_deck.continues_from(r.spec) else ""
+            how = ((r.result.provenance or {}).get("restartedFrom") or {}) if r.result is not None else {}
+            kind = "exact resume" if how.get("exact") else f"warm, {len(how['warm'])} differences" if how else ""
+            cont = (f"   ↻ continued{' on ' + acc if acc else ''}{' (' + kind + ')' if kind else ''}"
+                    if solid2_deck.continues_from(r.spec) else "")
             self.run_list.addItem(f"{_STATUS_ICON[r.status]}  {r.summary}   E={e}{cont}" + (f"   ⛁ {states.human(n)}" if n else ""))
             if r is ws.selected: sel_row = i
         if sel_row >= 0: self.run_list.setCurrentRow(sel_row)

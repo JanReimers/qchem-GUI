@@ -21,7 +21,10 @@ installed, so the back-end strip greys it out instead of the app failing to star
 
 SAVED STATES: every crystal deck carries state.save (a file qviz.states names for the deck), so a finished run -- converged
 or not -- leaves a state a later run can CONTINUE from (solid2_deck.continued: the deck's state.restartFrom, under whatever
-accelerator and gates that spec states).  A molecule has no saved state yet (the molecular facade has none).
+accelerator and gates that spec states).  A molecule saves too (Calculator.save_state after every run, the file qviz.states
+names for its native arguments) and continues through the same spec key (restart_from); the library judges the file (an exact
+resume, a warm start naming each difference, or RestartRefused) and the Result's provenance carries what it did
+(restartedFrom).
 
 Scope today: single points.  A crystal's post-SCF actions (compute_U) need `rundeck` (deck::Build stops at the
 SCF); a crystal's fields and bands are not sampled through the bridge yet.
@@ -117,12 +120,31 @@ def _gates_run(record: dict) -> Optional[str]:
     return None
 
 
-def _as_run(resolved: dict, record: dict) -> dict:
+def _molecule_deck_ok(deck) -> bool:
+    """A molecule's deck block: none, or only state.restartFrom (the molecular deck keys wait for V-FACADE-OPTS)."""
+    return not deck or (set(deck) == {"state"} and set(deck["state"]) <= {"restartFrom"})
+
+
+def restart_text(R: Optional[dict]) -> Optional[str]:
+    """What a restart did (the facade's RestartedFrom, as Calculator / SolidRun.restarted_from return it), one line; None: fresh."""
+    if not R:
+        return None
+    head = ("exact resume" if R["exact"] else "warm start") + f" from {os.path.basename(R['path'])}"
+    more = list(R.get("warm") or [])
+    if R.get("maxDisplacement", 0.0) > 1e-10:
+        more.append(f"atoms moved up to {R['maxDisplacement']:.3g} bohr (density carried as AO coefficients)")
+    more.append(f"restored density holds {R['electrons']:.6f} electrons here")
+    return head + ": " + "; ".join(more)
+
+
+def _as_run(resolved: dict, record: dict, restarted: Optional[dict] = None) -> dict:
     """A job's resolved settings with what the run's record states in place of what was planned."""
     out = dict(resolved)
     gates = _gates_run(record)
     if gates:
         out["SCF gates"] = gates
+    if "starts from" in out:
+        out["starts from"] = restart_text(restarted) or out["starts from"]
     return out
 
 
@@ -185,16 +207,16 @@ class Solid2Backend:
             Capability("physics.occupations: Fermi-Dirac", molecule(lambda s: s.physics.occupations.smearing in ("none", "fermi-dirac")),
                        "the molecular facade smears Fermi-Dirac only"),
             Capability("accuracy.representation keys", molecule(lambda s: set(rep(s)) <= {"basis"}
-                       and set(code_block(s, "solid2")) <= _REP_KEYS),
+                       and set(code_block(s, "solid2")) <= _REP_KEYS | {"deck"}),
                        "a stated representation is a shared basis, or SOLID² settings under representation['solid2'] "
                        "(mesh_radial, mesh_angular)"),
+            Capability("molecular deck keys", molecule(lambda s: _molecule_deck_ok(code_block(s, "solid2").get("deck"))),
+                       "a molecule has no input deck yet (V-FACADE-OPTS): its only deck key is state.restartFrom"),
             Capability("accuracy.representation.basis", molecule(lambda s: rep(s).get("basis") in (None, *BASES)),
                        "the stated basis is not a registered Gaussian basis"),
             Capability("accuracy.scf.mixing_alpha", lambda s: all(0.0 < float(scf(s)[k]) <= 1.0 for k in
                                                                  ("mixing_alpha", "mixing_alpha_max") if k in scf(s)),
                        "a linear mixing step α is in (0, 1]"),
-            Capability("continue from a saved state", molecule(lambda s: solid2_deck.continues_from(s) is None),
-                       "the molecular facade has no saved state to continue from yet"),
         ])
 
     # -- translate ----------------------------------------------------------
@@ -234,10 +256,17 @@ class Solid2Backend:
             "ladder_switch_at": -1.0 if scf.get("ladder_switch_at") is None else float(scf["ladder_switch_at"]),
             "mixer": str(scf.get("mixer", "Auto")),          # the facade refuses what a molecule cannot mix (Kerker: G space)
             "smearing_kT": float(ph.occupations.kT_Ha) if ph.occupations.smearing == "fermi-dirac" else 0.0,
+            "restart_from": solid2_deck.continues_from(spec) or "",
             **{key: -1.0 if scf.get(key) is None else 0.0 if scf[key] == "off" else float(scf[key])   # < 0: default, 0: off
                for key, _ in solid2_deck.DECK_GATES},
         }
+        # the state this run SAVES: named for its arguments (where it starts from excluded: a continuation of the same
+        # settings overwrites its own file, as a crystal deck's does)
+        native["state_save"] = states.path_for(spec.label, json.dumps({k: v for k, v in native.items() if k != "restart_from"},
+                                                                      sort_keys=True))
         resolved = {
+            "starts from": (f"the saved state {native['restart_from']} (judged when it runs)" if native["restart_from"]
+                            else "scratch (the facade's seed)"),
             "basis": f"{basis} ({'stated' if rep.get('basis') else 'from ε, provisional'})",
             "model": native["model"],
             "pseudopotential": native["pp"] or "all-electron",
@@ -315,7 +344,13 @@ class Solid2Backend:
                                    mixer=n["mixer"], smearing_kT=n["smearing_kT"],
                                    diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"],
                                    relax_min=n["relax_min"], ladder_switch_at=n["ladder_switch_at"],
+                                   restart_from=n.get("restart_from", ""),
                                    **{k: n[k] for k, _ in solid2_deck.DECK_GATES}, on_iteration=step)
+        saved = n.get("state_save")
+        if saved:                                     # converged or not: a later run continues from it (the file says which)
+            states.state_dir().mkdir(parents=True, exist_ok=True)
+            calc.save_state(saved)
+        restarted = calc.restarted_from()
         # the lib's label is "<n><irrep>" -- n counts WITHIN the irrep (methane C2v: 1A1 2A1 1B2 3A1 1B1), the Mulliken
         # numbering; with no symmetry there is one irrep and n is the global count ("5No Symmetry")
         levels = [dict(L, n=int(L["label"].strip()[:len(L["label"].strip()) - len(lab)] or i + 1), label=lab)
@@ -339,8 +374,10 @@ class Solid2Backend:
                       structure=data_structure(job.spec),
                       scf=steps, levels=levels, polarized=polarized, fields=fields,
                       orbital=lambda i, npts, pad: scalar(calc.orbital(i, npts, pad), f"MO #{i}", True),
-                      resolved=_as_run(job.resolved, record := json.loads(self._qc.report())),
-                      provenance={"code": NAME, "iterations": calc.iterations()}, record=record)   # the closures above own `calc`
+                      resolved=_as_run(job.resolved, record := json.loads(self._qc.report()), restarted),
+                      provenance={"code": NAME, "iterations": calc.iterations(), "restartedFrom": restarted},
+                      record=record,                  # the closures above own `calc`
+                      state_file=saved if saved and os.path.exists(saved) else None)
 
     def _run_deck(self, job: Job, step, steps: list[SCFRow]) -> Result:
         """A crystal: deck::Build (a refusal raises with the library's text), then the deck's schedule, streamed."""
@@ -354,8 +391,10 @@ class Solid2Backend:
         converged = run.converge(step)                             # run() clears self._prior, after a refusal has read it
         record = self._prior | json.loads(self._qc.report())
         saved = (json.loads(job.native["deck"]).get("state") or {}).get("save")
+        restarted = run.restarted_from()
         return Result(converged=converged, energy_Ha=run.total_energy(), failure=run.failure(),
                       structure=data_structure(job.spec), scf=steps,
-                      resolved=_as_run(job.resolved, record),
-                      provenance={"code": NAME, "iterations": run.iterations(), "deck": json.loads(run.resolved())},
+                      resolved=_as_run(job.resolved, record, restarted),
+                      provenance={"code": NAME, "iterations": run.iterations(), "deck": json.loads(run.resolved()),
+                                  "restartedFrom": restarted},
                       record=record, state_file=saved if saved and os.path.exists(saved) else None)

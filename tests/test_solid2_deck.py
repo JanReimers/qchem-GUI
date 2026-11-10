@@ -206,13 +206,79 @@ class SavedStates(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "refused"):
             be.run(be.translate(D.continued(strained, si.state_file)))
 
-    def test_a_molecule_cannot_continue_yet(self):
+    def test_a_continued_crystal_says_it_resumed_exactly(self):
+        be = solid2()
+        first = be.run(be.translate(si_inline()))
+        then = be.run(be.translate(D.continued(si_inline(accelerator="GDM"), first.state_file)))
+        how = then.provenance["restartedFrom"]
+        self.assertTrue(how["exact"], how)
+        self.assertEqual(how["path"], first.state_file)
+        self.assertTrue(then.resolved["starts from"].startswith("exact resume"), then.resolved["starts from"])
+        self.assertIsNone(first.provenance["restartedFrom"], "a fresh run restarted from nothing")
+
+
+def water(xyz=(0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107), basis="dzvp", **scf):
+    from qviz.spec import Accuracy, molecule
+    return molecule("water", [8, 1, 1], list(xyz), accuracy=Accuracy(representation={"basis": basis}, scf=scf or None))
+
+
+@unittest.skipUnless(solid2()._qc is not None, "qchem_py not built (QCHEM_BUILD)")
+class MolecularSavedStates(unittest.TestCase):
+    """V-FACADE-STATE through the binding: a molecule saves after every run and continues through the same spec key a crystal
+    uses (the solid2 deck block's state.restartFrom), judged by the library."""
+
+    def test_a_molecule_saves_and_a_continuation_under_gdm_resumes_exactly(self):
+        be = solid2()
+        first = be.run(be.translate(water()))
+        self.assertTrue(first.converged, first.failure)
+        self.assertTrue(first.state_file and os.path.exists(first.state_file))
+        rows = []
+        then = be.run(be.translate(D.continued(water(accelerator="GDM"), first.state_file)), rows.append)
+        self.assertTrue(then.converged, then.failure)
+        how = then.provenance["restartedFrom"]
+        self.assertTrue(how["exact"], how)
+        self.assertAlmostEqual(how["electrons"], 10.0, places=8)
+        self.assertLessEqual(len(rows), 4, "a continuation starts at the answer, not from scratch")
+        self.assertAlmostEqual(rows[0].energy, first.energy_Ha, delta=1e-6, msg="its first iterate is the saved state")
+        self.assertAlmostEqual(then.energy_Ha, first.energy_Ha, delta=1e-6)
+        self.assertTrue(then.resolved["starts from"].startswith("exact resume"), then.resolved["starts from"])
+        self.assertNotEqual(then.state_file, first.state_file, "the continuation banks its own state")
+
+    def test_moved_atoms_are_a_warm_start_that_names_the_move(self):
+        be = solid2()
+        first = be.run(be.translate(water()))
+        moved = water(xyz=(0, 0, 0, 0, 1.431, 1.171, 0, -1.431, 1.107))      # one H 0.064 bohr
+        then = be.run(be.translate(D.continued(moved, first.state_file)))
+        self.assertTrue(then.converged, then.failure)
+        how = then.provenance["restartedFrom"]
+        self.assertFalse(how["exact"], how)
+        self.assertAlmostEqual(how["maxDisplacement"], 0.064, places=6)
+        self.assertIn("atoms moved", then.resolved["starts from"])
+
+    def test_a_state_of_another_basis_is_refused_in_the_library_s_words(self):
+        be = solid2()
+        first = be.run(be.translate(water()))
+        with self.assertRaisesRegex(RuntimeError, "restart refused \\(mismatch\\)"):
+            be.run(be.translate(D.continued(water(basis="tzvp"), first.state_file)))
+
+    def test_judge_state_answers_without_running(self):
+        be = solid2()
+        first = be.run(be.translate(water()))
+        n = be.translate(water()).native
+        calc = be._qc.Calculator(n["numbers"], n["positions"], basis="dzvp", model="HF")
+        self.assertEqual(calc.judge_state(first.state_file), {"exact": True, "warm": []})
+        self.assertEqual(calc.judge_state("/nonexistent.h5")["refused"]["why"], "unreadable")
+        self.assertIsNone(calc.restarted_from())
+
+    def test_a_molecular_deck_has_no_keys_but_restart_from(self):
         from qviz.spec import Accuracy, molecule
         w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107],
-                     accuracy=Accuracy(representation={"solid2": {"deck": {"state": {"restartFrom": "/x.h5"}}}}))
+                     accuracy=Accuracy(representation={"solid2": {"deck": {"solid": {"densityEcut": 20.0}}}}))
         v = solid2().capabilities().can_run(w)
         self.assertFalse(v)
-        self.assertTrue(any("no saved state" in r for r in v.reasons), v.reasons)
+        self.assertTrue(any("V-FACADE-OPTS" in r for r in v.reasons), v.reasons)
+        ok = D.continued(water(), "/x.h5")
+        self.assertTrue(solid2().capabilities().can_run(ok), solid2().capabilities().can_run(ok).reasons)
 
 
 class States(unittest.TestCase):

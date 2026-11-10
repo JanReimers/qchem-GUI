@@ -47,7 +47,7 @@ def _runs(record: dict, build: bool) -> list[dict]:
     out = []
     for key, run in (record or {}).items():
         name = key.rsplit("@", 1)[0]
-        if name.startswith("gridAudit"):
+        if name.startswith("gridAudit") or name.endswith(" state save"):    # a saved state's own run (its HDF5 timing)
             continue
         if name.endswith(" build") == build:
             out.append(run)
