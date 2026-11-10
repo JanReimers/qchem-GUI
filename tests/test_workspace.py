@@ -154,10 +154,29 @@ class Solid2EndToEnd(unittest.TestCase):
                                msg="an iterate holds about the same electrons on this grid as the answer")
         self.assertGreater(float(np.abs(f.values - final.values).max()), 0.0, "an iterate, not the answer")
 
-    def test_a_crystal_offers_no_live_snapshot_yet(self):
-        from tests.test_solid2_deck import SI, crystal
-        si = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}})
-        self.assertIn("crystal", SOLID2.why_no_snapshot(si))
+    def test_a_crystal_s_density_is_sampled_converged_and_live(self):
+        """SolidRun.field over the cell's bounding box: Si's conventional cube holds 8 atoms x 4 valence electrons, so its sampled
+        rho integrates to 32 (measured 32.000000 at 24^3, 15 us/point); a snapshot asked at iteration 2 arrives at 3."""
+        from tests.test_solid2_deck import si_inline
+        run = self.ws().add_run(si_inline(), compute=False)
+        self.assertIsNone(SOLID2.why_no_snapshot(run.spec))
+        got = []
+
+        def watch(row):
+            if row.iteration == 2:
+                self.assertIsNone(run.snapshot(lambda it, f, err: got.append((it, f, err)), n=24))
+        run.compute(on_step=watch)
+        self.assertIs(run.status, RunStatus.READY, run.error)
+        it, f, err = got[0]
+        self.assertIsNone(err)
+        self.assertEqual(it, 3)
+        rho = run.density(n=24)
+        self.assertEqual(rho.values.shape, (24, 24, 24), "the fcc cell's bounding box is the conventional cube")
+        self.assertAlmostEqual(float(rho.values.sum()) * float(np.prod(rho.spacing)), 32.0, places=4)
+        self.assertAlmostEqual(float(f.values.sum()) * float(np.prod(f.spacing)), 32.0, places=4,
+                               msg="every iterate holds the cell's electrons")
+        self.assertGreater(float(np.abs(f.values - rho.values).max()), 0.0, "an iterate, not the answer")
+        self.assertFalse(run.offers("spin_density"), "an unpolarized crystal offers no m(r)")
 
     def test_stop_ends_the_scf_at_the_next_iteration(self):
         steps = []

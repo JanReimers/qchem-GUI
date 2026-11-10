@@ -30,7 +30,7 @@ BUILD -> RUN: build(job) stops before the SCF (a crystal's deck::Build, a molecu
 the calculation; a Run of the same job converges it, so the Basis and Grids tabs read what the run will use.
 
 Scope today: single points.  A crystal's post-SCF actions (compute_U) need `rundeck` (deck::Build stops at the
-SCF); a crystal's fields and bands are not sampled through the bridge yet.
+SCF); a crystal's density and spin density are sampled (SolidRun.field, over the cell's bounding box), its bands are not yet.
 """
 from __future__ import annotations
 
@@ -141,6 +141,19 @@ def _native_key(n: dict) -> str:
     return n["deck"] if "deck" in n else json.dumps(n, sort_keys=True)
 
 
+def cell_box(lattice, n: int, reps=(1, 1, 1)) -> tuple[list[int], list[float], list[float]]:
+    """The Cartesian box a crystal's field is sampled on: the bounding box of `reps` cells (rows of `lattice`, bohr), n points
+    along its longest side and as many per bohr along the others, PERIODIC (no end point: the density repeats).  Returns
+    (n3, origin, spacing) for SolidRun.field."""
+    L = np.asarray(lattice, float) * np.asarray(reps, float)[:, None]
+    corners = np.array([[i, j, k] for i in (0, 1) for j in (0, 1) for k in (0, 1)], float) @ L
+    lo, hi = corners.min(axis=0), corners.max(axis=0)
+    side = hi - lo
+    h = side.max() / n
+    n3 = [max(2, int(round(s / h))) for s in side]
+    return n3, lo.tolist(), (side / np.asarray(n3)).tolist()
+
+
 def _molecule_deck_ok(deck) -> bool:
     """A molecule's deck block: none, or only state.restartFrom (the molecular deck keys wait for V-FACADE-OPTS)."""
     return not deck or (set(deck) == {"state"} and set(deck["state"]) <= {"restartFrom"})
@@ -180,11 +193,7 @@ class Solid2Backend:
     # -- build: every pre-SCF step, no SCF -----------------------------------
     def why_no_snapshot(self, spec: RunSpec) -> Optional[str]:
         """Why a RUNNING job of `spec` cannot hand out its current iterate's density (None: it can)."""
-        if self._qc is None:
-            return self._why_absent
-        if spec.structure.kind != "molecule":
-            return "a crystal's fields are not sampled through the bridge yet (not even converged ones)"
-        return None
+        return self._why_absent if self._qc is None else None   # a molecule's iterate_density, a crystal's field(iterate=True)
 
     def why_no_build(self, spec: RunSpec) -> Optional[str]:
         """Why `build` cannot run for `spec` (None: it can)."""
@@ -362,16 +371,18 @@ class Solid2Backend:
         n = job.native
         steps: list[SCFRow] = []
 
+        live = {}                                     # "sample": (n, pad, spin) -> grid dict of the CURRENT iterate, once a handle exists
+
         def step(it, E, cells):
             # the lib's IterationRow, cell for cell: the console's columns, titles, printed text, gates and scales
             s = SCFRow(it, E, tuple(SCFCell(title, math.nan if title in _TABLE_ONLY else value, scale, text, tol)
                                     for title, value, text, tol, scale in cells))
             steps.append(s)
-            while job.snapshots and "calc" in live:   # a live snapshot: the compute thread, between iterations (the safe point)
+            while job.snapshots and "sample" in live:   # a live snapshot: the compute thread, between iterations (the safe point)
                 spin, npts, pad, deliver = job.snapshots.pop(0)
                 name = "Spin density (ρ↑−ρ↓)" if spin else "Electron density"
                 try:
-                    d = live["calc"].iterate_density(npts, pad, spin)
+                    d = live["sample"](npts, pad, spin)
                 except Exception as e:                # noqa: BLE001 -- told to the asker, never a stopped run
                     deliver(it, None, str(e))
                 else:
@@ -386,8 +397,7 @@ class Solid2Backend:
                 on_step(s)
 
         if "deck" in n:
-            return self._run_deck(job, step, steps)
-        live = {}                                     # the calculation, once it exists: what a snapshot request samples
+            return self._run_deck(job, step, steps, live)
 
         self._qc.clear_report()
         kept = self._kept_build(n)
@@ -395,7 +405,7 @@ class Solid2Backend:
             calc, self._prior = kept
         else:                                         # Prepare, then the SCF: a handle exists while it runs (live snapshots)
             calc = self._qc.Calculator(**_calculator_args(n), build_only=True)
-        live["calc"] = calc
+        live["sample"] = lambda npts, pad, spin: calc.iterate_density(npts, pad, spin)
         calc.run_scf(step, n["max_iter"])
         saved = n.get("state_save")
         if saved:                                     # converged or not: a later run continues from it (the file says which)
@@ -430,7 +440,7 @@ class Solid2Backend:
                       record=record,                  # the closures above own `calc`
                       state_file=saved if saved and os.path.exists(saved) else None)
 
-    def _run_deck(self, job: Job, step, steps: list[SCFRow]) -> Result:
+    def _run_deck(self, job: Job, step, steps: list[SCFRow], live: dict) -> Result:
         """A crystal: deck::Build (a refusal raises with the library's text), then the deck's schedule, streamed."""
         kept = self._kept_build(job.native)
         states.state_dir().mkdir(parents=True, exist_ok=True)      # the facade writes the state aside and renames it in
@@ -439,12 +449,30 @@ class Solid2Backend:
             run, self._prior = kept                                # the Build of THIS deck: converge it, do not rebuild
         else:
             run, self._prior = self._qc.SolidRun(job.native["deck"]), {}
+        struct = data_structure(job.spec)
+
+        def sample(npts: int, iterate: bool, spin: bool) -> dict:
+            box = cell_box(struct.lattice, npts)
+            return run.field(*box, spin=spin, iterate=iterate)
+        live["sample"] = lambda npts, pad, spin: sample(npts, True, spin)
         converged = run.converge(step)                             # run() clears self._prior, after a refusal has read it
         record = self._prior | json.loads(self._qc.report())
         saved = (json.loads(job.native["deck"]).get("state") or {}).get("save")
         restarted = run.restarted_from()
+        polarized = bool(job.spec.physics.spin.polarized)
+
+        def scalar(name: str, spin: bool):
+            def f(npts: int, pad: float) -> ScalarField:
+                d = sample(npts, False, spin)              # the CONVERGED density, over the cell's bounding box (pad: unused)
+                return ScalarField(name, np.asarray(d["values"]), tuple(d["origin"]), tuple(d["spacing"]), signed=spin)
+            return f
+        fields = {}
+        if converged:                                  # a crystal's fields: rho, and m when polarized (the library refuses an unconverged one)
+            fields["density"] = FieldRef("Electron density", False, scalar("Electron density", False))
+            if polarized:
+                fields["spin_density"] = FieldRef("Spin density (ρ↑−ρ↓)", True, scalar("Spin density (ρ↑−ρ↓)", True))
         return Result(converged=converged, energy_Ha=run.total_energy(), failure=run.failure(),
-                      structure=data_structure(job.spec), scf=steps,
+                      structure=struct, scf=steps, fields=fields, polarized=polarized,
                       resolved=_as_run(job.resolved, record, restarted),
                       provenance={"code": NAME, "iterations": run.iterations(), "deck": json.loads(run.resolved()),
                                   "restartedFrom": restarted},
