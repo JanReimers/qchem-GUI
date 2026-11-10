@@ -187,8 +187,15 @@ class BSE(unittest.TestCase):
         self.assertIn("downloaded", job.resolved["basis"])
         res = be.run(job)
         self.assertTrue(res.converged, res.failure)
-        # HF/cc-pVDZ water, Cartesian d (25 functions): a literature-sized number, not an anchor (no oracle on this box)
-        self.assertLess(res.energy_Ha, -76.0); self.assertGreater(res.energy_Ha, -76.1)
+        # ORACLE: PySCF 2.14.0 (~/Code/pyscf-env) RHF on the SAME downloaded text (CC_HO, split per element), cart=True (25
+        # functions), this geometry in bohr, conv_tol 1e-12 -- its built-in cc-pVDZ gives the identical number:
+        #     from pyscf import gto, scf; from pyscf.gto.basis import parse_gaussian
+        #     basis = {el: parse_gaussian.parse(<the CC_HO block of el>) for el in ("H", "O")}
+        #     mol = gto.M(atom="O 0 0 0; H 0 1.431 1.107; H 0 -1.431 1.107", unit="Bohr", basis=basis, cart=True)
+        #     mf = scf.RHF(mol); mf.conv_tol = 1e-12; mf.kernel()
+        #     -> nao 25, converged, E_HF -76.0271296557   (built-in basis="cc-pvdz", cart=True: -76.0271296557)
+        # Ours, 2026-11-10: -76.0271296557.  Gated at 1e-8 Ha: the default [F,D] 1e-5 stop puts the energy within ~1e-10.
+        self.assertAlmostEqual(res.energy_Ha, -76.0271296557, delta=1e-8)
         basis = next(r["basis"] for k, r in res.record.items() if "basis" in r and "file" in r["basis"])
         self.assertEqual(basis["file"], side["path"])
         self.assertEqual(basis["nFunctions"], 25)
