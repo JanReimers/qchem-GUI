@@ -25,12 +25,18 @@ def basis_name(spec: RunSpec) -> str:
     return (spec.accuracy.representation or {}).get("basis") or basis_for(spec.accuracy.epsilon_Ha_per_atom)
 
 
+def basis_file(spec: RunSpec) -> Optional[str]:
+    """The downloaded .bsd a spec runs on (representation['solid2']['basis_file'], qviz.bse), None for a shipped basis."""
+    return ((spec.accuracy.representation or {}).get("solid2") or {}).get("basis_file")
+
+
 def element_rows(spec: RunSpec) -> list[tuple[str, int, str, int]]:
     """(element, atoms of it, contracted shells like "3s 2p 1d", Cartesian functions per atom) per element in the
     structure; shells "no block in <basis>" (and 0 functions) for an element the file lacks."""
     name = basis_name(spec)
+    file = basis_file(spec)
     try:
-        data = gaussian_basis.read_bsd(name)
+        data = gaussian_basis.read_bsd_file(file) if file else gaussian_basis.read_bsd(name)
     except (OSError, ValueError):
         data = {}
     out = []

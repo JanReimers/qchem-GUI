@@ -60,7 +60,7 @@ BASES = ("dzvp", "dzvp2", "tzvp", "orb", "orb1", "sipp", "sipp_sr", "valence_low
          "valence_lowq_sr", "valence_lowq_sr2", "valence_lowq_va", "valence_lowq_vb")
 
 
-_REP_KEYS = {"mesh_radial", "mesh_angular"}          # representation["solid2"]: the molecular XC mesh
+_REP_KEYS = {"mesh_radial", "mesh_angular", "basis_file"}   # representation["solid2"]: the molecular XC mesh, a downloaded basis
 #: console columns that are STATE, not a convergence trace -- the mixer ("Lin 0.50"), the accelerator ("DIIS:3") and the
 #: configuration-changed flag: their numbers plot as nonsense, so they stay table-only (their printed text is kept)
 _TABLE_ONLY = {"ρ_mix", "accel", "cfg"}
@@ -132,6 +132,7 @@ def _calculator_args(n: dict) -> dict:
                 diis_sv_tol=n["diis_sv_tol"], mixer=n["mixer"], smearing_kT=n["smearing_kT"],
                 diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"], relax_min=n["relax_min"],
                 ladder_switch_at=n["ladder_switch_at"], restart_from=n.get("restart_from", ""),
+                basis_file=n.get("basis_file", ""),
                 **{k: n[k] for k, _ in solid2_deck.DECK_GATES})
 
 
@@ -246,8 +247,15 @@ class Solid2Backend:
                        "(mesh_radial, mesh_angular)"),
             Capability("molecular deck keys", molecule(lambda s: _molecule_deck_ok(code_block(s, "solid2").get("deck"))),
                        "a molecule has no input deck yet (V-FACADE-OPTS): its only deck key is state.restartFrom"),
-            Capability("accuracy.representation.basis", molecule(lambda s: rep(s).get("basis") in (None, *BASES)),
-                       "the stated basis is not a registered Gaussian basis"),
+            Capability("accuracy.representation.basis", molecule(lambda s: rep(s).get("basis") in (None, *BASES)
+                                                                 or bool(code_block(s, "solid2").get("basis_file"))),
+                       "the stated basis is not a registered Gaussian basis (nor a downloaded one: Basis ▸ Basis Set Exchange)"),
+            Capability("a downloaded basis file exists", lambda s: not code_block(s, "solid2").get("basis_file")
+                       or os.path.exists(code_block(s, "solid2")["basis_file"]),
+                       "the downloaded basis file is gone (Basis ▸ Basis Set Exchange downloads it again)"),
+            Capability("a downloaded basis is molecular", lambda s: s.structure.kind == "molecule"
+                       or not code_block(s, "solid2").get("basis_file"),
+                       "a downloaded basis is all-electron and molecular; a crystal runs on a valence basis with its pseudopotential"),
             Capability("accuracy.scf.mixing_alpha", lambda s: all(0.0 < float(scf(s)[k]) <= 1.0 for k in
                                                                  ("mixing_alpha", "mixing_alpha_max") if k in scf(s)),
                        "a linear mixing step α is in (0, 1]"),
@@ -290,6 +298,7 @@ class Solid2Backend:
             "ladder_switch_at": -1.0 if scf.get("ladder_switch_at") is None else float(scf["ladder_switch_at"]),
             "mixer": str(scf.get("mixer", "Auto")),          # the facade refuses what a molecule cannot mix (Kerker: G space)
             "smearing_kT": float(ph.occupations.kT_Ha) if ph.occupations.smearing == "fermi-dirac" else 0.0,
+            "basis_file": str(own.get("basis_file") or ""),
             "restart_from": solid2_deck.continues_from(spec) or "",
             **{key: -1.0 if scf.get(key) is None else 0.0 if scf[key] == "off" else float(scf[key])   # < 0: default, 0: off
                for key, _ in solid2_deck.DECK_GATES},
@@ -301,7 +310,8 @@ class Solid2Backend:
         resolved = {
             "starts from": (f"the saved state {native['restart_from']} (judged when it runs)" if native["restart_from"]
                             else "scratch (the facade's seed)"),
-            "basis": f"{basis} ({'stated' if rep.get('basis') else 'from ε, provisional'})",
+            "basis": (f"{basis} (downloaded: {native['basis_file']})" if native["basis_file"] else
+                      f"{basis} ({'stated' if rep.get('basis') else 'from ε, provisional'})"),
             "model": native["model"],
             "pseudopotential": native["pp"] or "all-electron",
             "spin": ("polarized" if native["polarized"] or native["multiplicity"] > 1 else "unpolarized")
@@ -309,7 +319,7 @@ class Solid2Backend:
             "point-group blocking": native["symmetry"],
             "accelerator": native["accelerator"] or "DIIS (Auto: the molecular facade's default)",
             "XC mesh": (f"{mesh[0]} radial x Lebedev {mesh[1]} per atom"
-                        + (" stated" if own else " from ε, provisional")) if dft else "none (HF)",
+                        + (" stated" if {"mesh_radial", "mesh_angular"} & set(own) else " from ε, provisional")) if dft else "none (HF)",
             "SCF gates": "planned: " + (", ".join(f"{k[5:]} {scf[k]}" for k, _ in solid2_deck.DECK_GATES if k in scf)
                                         + "; the rest the facade's defaults" if any(k in scf for k, _ in solid2_deck.DECK_GATES)
                                         else "the facade's defaults (ε not yet mapped)") + "; the run states what it used",

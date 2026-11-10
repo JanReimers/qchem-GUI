@@ -24,11 +24,21 @@ def bsd_dir() -> pathlib.Path:
     return pathlib.Path(os.environ.get("QCHEM_SRC", pathlib.Path.home() / "Code/qchem-main")) / "BasisSetData"
 
 
-@functools.lru_cache(maxsize=None)
 def read_bsd(name: str) -> dict[str, list[tuple[int, tuple[tuple[float, float], ...]]]]:
     """BasisSetData/<name>.bsd as {ELEMENT: [(l, ((alpha, coef), ...)), ...]} in file order.  Raises OSError when the
     file is absent, ValueError on a shell type it does not know (an SP shell, say)."""
-    lines = (bsd_dir() / f"{name}.bsd").read_text().splitlines()
+    return read_bsd_file(str(bsd_dir() / f"{name}.bsd"))
+
+
+def read_bsd_file(path: str) -> dict[str, list[tuple[int, tuple[tuple[float, float], ...]]]]:
+    """read_bsd for any .bsd path (a downloaded basis, qviz.bse): cached per file version (its mtime)."""
+    return _read_bsd(path, os.path.getmtime(path))
+
+
+@functools.lru_cache(maxsize=None)
+def _read_bsd(path: str, _mtime: float) -> dict[str, list[tuple[int, tuple[tuple[float, float], ...]]]]:
+    name = pathlib.Path(path).stem
+    lines = pathlib.Path(path).read_text().splitlines()
     body = lines[lines.index("!") + 1:] if "!" in lines else lines
     out: dict = {}
     el, i = None, 0

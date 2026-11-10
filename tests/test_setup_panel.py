@@ -21,6 +21,7 @@ from qviz.backends.base import BackendRegistry                    # noqa: E402
 from qviz.draft import SpecDraft                                  # noqa: E402
 from qviz.setup_panel import SetupPanel                          # noqa: E402
 from qviz.workspace import Workspace                             # noqa: E402
+import tempfile as _bse_tmp; from qviz import bse as _bse; _bse.BASES_DIR = _bse_tmp.mkdtemp(prefix="qchem-gui-bases-")   # never ~/.solid2/bases
 
 APP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 

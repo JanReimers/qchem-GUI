@@ -25,7 +25,7 @@ from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import basisinfo, geometry, gridinfo, materials, molecules, policyinfo, states, symmetry
+from . import basisinfo, bse, geometry, gridinfo, materials, molecules, policyinfo, states, symmetry
 from .backends import solid2_deck
 from .backends.base import BackendRegistry, code_block, data_structure
 from .backends.solid2 import mesh_for
@@ -257,8 +257,16 @@ class SetupPanel(QtWidgets.QWidget):
         self.basis_box = QtWidgets.QComboBox(); self.basis_box.addItems(BASES)
         self.basis_box.setToolTip("orb1 is the smallest/fastest; valence_lowq_vb / sipp_sr are valence (GTH) bases -- "
                                   "with the pseudopotential ticked, the same spec runs on SOLID² and CP2K")
-        self.basis_box.activated.connect(lambda _i: self._edit({"accuracy": {"representation": {"basis": self.basis_box.currentText()}}}, "basis"))
+        self.basis_box.activated.connect(self._on_basis_pick)
         f.addRow("Basis", self.basis_box)
+        self.bse_btn = QtWidgets.QPushButton("Basis Set Exchange…")
+        self.bse_btn.setToolTip("Download an orbital basis for this molecule's elements from basissetexchange.org; it is saved with "
+                                "its version and citations under ~/.solid2/bases and listed in the Basis box")
+        self.bse_btn.clicked.connect(self._open_bse)
+        f.addRow("", self.bse_btn)
+        self.bse_note = QtWidgets.QLabel(); self.bse_note.setWordWrap(True)
+        self.bse_note.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        f.addRow("Downloaded basis", self.bse_note)
         self.eps_box = QtWidgets.QComboBox(); self.eps_box.addItems(EPSILONS)
         self.eps_box.setToolTip("ε, Ha/atom: the ONE accuracy target; each code's resolved settings say what it became")
         self.eps_box.activated.connect(lambda _i: self._edit({"accuracy": {"epsilon_Ha_per_atom": float(self.eps_box.currentText())}}, "ε"))
@@ -707,11 +715,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.hubbard.setText("; ".join(f"U = {h.U_eV} eV on {', '.join(h.sites)} (l = {h.l}, {h.projector})"
                                        for h in p.hubbard) or "none")
         self.relativity.setText(p.relativity)
-        basis = (ac.representation or {}).get("basis")
-        if basis and self.basis_box.findText(basis) < 0:
-            self.basis_box.addItem(basis)
-        if basis:
-            self.basis_box.setCurrentText(basis)
+        self._fill_basis_box(s)
         eps = f"{ac.epsilon_Ha_per_atom:.0e}".replace("e-0", "e-")
         if self.eps_box.findText(eps) < 0:
             self.eps_box.addItem(eps)
@@ -766,6 +770,55 @@ class SetupPanel(QtWidgets.QWidget):
         self._scf_form.setRowVisible(self.mom_start, bool(scf.get("mom")))
 
     # -- back ends ----------------------------------------------------------------
+    # -- the basis: shipped files and the downloaded ones (qviz.bse) ------------------------------------------
+    def _fill_basis_box(self, s: RunSpec) -> None:
+        """The Basis box: the shipped bases, then every downloaded set (its path as item data), the spec's choice selected."""
+        basis, file = (s.accuracy.representation or {}).get("basis"), basisinfo.basis_file(s)
+        self.basis_box.blockSignals(True)
+        self.basis_box.clear()
+        self.basis_box.addItems(BASES)
+        for side in bse.installed():
+            self.basis_box.addItem(f"{side['name']} v{side['version']} (downloaded)", side["path"])
+        if file:
+            i = self.basis_box.findData(file)
+            if i < 0:                                  # the spec names a file this machine does not have
+                self.basis_box.addItem(f"{basis} (missing: {file})", file); i = self.basis_box.count() - 1
+            self.basis_box.setCurrentIndex(i)
+        elif basis:
+            if self.basis_box.findText(basis) < 0:
+                self.basis_box.addItem(basis)
+            self.basis_box.setCurrentText(basis)
+        self.basis_box.blockSignals(False)
+        side = next((x for x in bse.installed() if x["path"] == file), None) if file else None
+        self.bse_btn.setEnabled(s.structure.kind == "molecule")
+        lines = []
+        if side:
+            lines += [f"{side['name']} v{side['version']}, Basis Set Exchange, fetched {side['fetched']}"] + bse.notes(side)
+            gaps = bse.fit_gaps(s)
+            if gaps and (s.physics.theory == "DFT" or s.physics.core == "pseudopotential"):
+                lines.append(f"⚠ no Coulomb fit set (A1_coul) covers {', '.join(gaps)}: a DFT run's Hartree fit cannot be built")
+        self.bse_note.setText("\n".join(lines) or "none (a shipped basis)")
+
+    def _on_basis_pick(self, _i: int) -> None:
+        i = self.basis_box.currentIndex()             # the box's own selection (what the person sees picked)
+        file = self.basis_box.itemData(i)
+        if file:
+            side = next((x for x in bse.installed() if x["path"] == file), None)
+            key = side["key"] if side else (self.draft.spec.accuracy.representation or {}).get("basis")
+            self._edit({"accuracy": {"representation": {"basis": key, "solid2": {"basis_file": file}}}}, f"basis {key} (downloaded)")
+        else:
+            self._edit({"accuracy": {"representation": {"basis": self.basis_box.itemText(i), "solid2": {"basis_file": None}}}}, "basis")
+
+    def _open_bse(self) -> None:
+        s = self.draft.spec
+        if s is None:
+            return
+        from .bse_dialog import BSEDialog
+        dlg = BSEDialog({site.Z for site in s.structure.sites}, serial=self._serial, parent=self)
+        dlg.downloaded.connect(lambda side: self._edit({"accuracy": {"representation": {
+            "basis": side["key"], "solid2": {"basis_file": side["path"]}}}}, f"basis {side['name']} (downloaded)"))
+        dlg.exec()
+
     def _render_basis(self, s: RunSpec) -> None:
         record = self._record(s)[0]
         rec = gridinfo.conditioning(record)              # a run's (or a crystal build's) own: read, never recomputed
