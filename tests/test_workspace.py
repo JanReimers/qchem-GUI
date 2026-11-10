@@ -131,6 +131,34 @@ class Solid2EndToEnd(unittest.TestCase):
         self.assertEqual(rep["num_occupied"], 5)
         self.assertGreater(rep["num_orbitals"], 5, "virtuals are listed")
 
+    def test_a_live_snapshot_is_the_running_scf_s_density_at_its_next_iteration(self):
+        run = self.ws().add_run(water(accuracy=Accuracy(representation={"basis": "dzvp"})), compute=False)
+        self.assertEqual(run.snapshot(lambda *a: None), "the run is not running")
+        got = []
+
+        def watch(row):
+            if row.iteration == 2:
+                self.assertIsNone(run.snapshot(lambda it, f, err: got.append((it, f, err)), n=48))
+        run.compute(on_step=watch)
+        self.assertIs(run.status, RunStatus.READY, run.error)
+        self.assertEqual(len(got), 1)
+        it, f, err = got[0]
+        self.assertIsNone(err)
+        self.assertEqual(it, 3, "asked at iteration 2: served on the compute thread at the next one")
+        self.assertEqual(f.values.shape, (48, 48, 48))
+        self.assertIn("iteration 3", f.name)
+        final = run.density(n=48)
+        self.assertEqual(f.origin, final.origin, "the same box as the converged density")
+        n_snap, n_final = (float(x.values.sum()) * float(np.prod(x.spacing)) for x in (f, final))
+        self.assertAlmostEqual(n_snap, n_final, delta=0.02 * n_final,      # a 48^3 grid misses part of the O core either way
+                               msg="an iterate holds about the same electrons on this grid as the answer")
+        self.assertGreater(float(np.abs(f.values - final.values).max()), 0.0, "an iterate, not the answer")
+
+    def test_a_crystal_offers_no_live_snapshot_yet(self):
+        from tests.test_solid2_deck import SI, crystal
+        si = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}})
+        self.assertIn("crystal", SOLID2.why_no_snapshot(si))
+
     def test_stop_ends_the_scf_at_the_next_iteration(self):
         steps = []
         run = self.ws().add_run(water(accuracy=Accuracy(representation={"basis": "dzvp"})), compute=False)

@@ -36,6 +36,7 @@ from qviz import scene, compare, geometry
 from qviz.scene import field_to_imagedata
 from qviz.workspace import Workspace, RunStatus
 from qviz.backends import default_registry, solid2_deck
+from qviz.backends.base import data_structure
 from qviz import materials, molecules, states
 from qviz.setup_panel import SetupPanel
 from qviz.backends.solid2 import _import_qchem_py
@@ -94,6 +95,11 @@ class _ScfBridge(QtCore.QObject):
     started = QtCore.Signal(object)
     step = QtCore.Signal(object)
     done = QtCore.Signal(str)
+
+
+class _SnapshotBridge(QtCore.QObject):
+    """A live snapshot's field (or why it failed), from the compute worker onto the GUI thread: (run, iteration, field, error)."""
+    got = QtCore.Signal(object, int, object, object)
 
 
 class _SampleBridge(QtCore.QObject):
@@ -228,7 +234,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stop_btn = QtWidgets.QPushButton("■ Stop"); self.stop_btn.setEnabled(False)
         self.stop_btn.setToolTip("Stop the running SCF at its next iteration (an external code's process is terminated)")
         self.stop_btn.clicked.connect(self._stop_live_run)
-        self.output.setCornerWidget(self.stop_btn, QtCore.Qt.TopRightCorner)
+        self.snap_btn = QtWidgets.QPushButton("⧉ Snapshot ρ"); self.snap_btn.setEnabled(False)
+        self.snap_btn.setToolTip("Show the RUNNING SCF's current density in the 3D view (its spin density when the field box "
+                                 "says so), taken at its next iteration; the run goes on")
+        self.snap_btn.clicked.connect(self._snapshot_live_run)
+        self._snap_bridge = _SnapshotBridge(); self._snap_bridge.got.connect(self._on_snapshot)
+        corner = QtWidgets.QWidget(); lay = QtWidgets.QHBoxLayout(corner); lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.snap_btn); lay.addWidget(self.stop_btn)
+        self.output.setCornerWidget(corner, QtCore.Qt.TopRightCorner)
         self._output_dock = self._dock("Output", self.output, QtCore.Qt.LeftDockWidgetArea)
         # the Output tab the user last CLICKED (kept across sessions); until there is one, a run brings SCF graphs forward
         picked = str(self._settings.value("output/tab", "") or "")
@@ -382,6 +395,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scf_view.clear()                         # fresh convergence trace for this run
         self._live_run = self._scf_shown = run
         self.stop_btn.setEnabled(True)
+        why = getattr(run.backend, "why_no_snapshot", lambda s: "this code offers no live snapshot")(run.spec)
+        self.snap_btn.setEnabled(why is None)
+        self.snap_btn.setToolTip(why or self.snap_btn.toolTip())
         self._output_dock.raise_()                    # the live trace: the Output panel forward
         if not self._settings.value("output/tab", ""):   # a first run: show the graphs; after that, the user's own tab
             self.output.setCurrentWidget(self.scf_view.tabs)
@@ -858,6 +874,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scf_view.add_row(s)                          # runs on the GUI thread (queued from the worker)
         self.statusBar().showMessage(f"iter {s.iteration}  E = {s.energy:.6f} Ha")
 
+    def _snapshot_live_run(self):
+        run = getattr(self, "_live_run", None)
+        if run is None:
+            return
+        spin = self.field_box.currentText().startswith("Spin density")
+        why = run.snapshot(lambda it, f, err, r=run: self._snap_bridge.got.emit(r, it, f, err), spin=spin, n=64)
+        self.statusBar().showMessage(why or f"snapshot of {run.summary}'s {'spin ' if spin else ''}density at its next iteration …")
+
+    def _on_snapshot(self, run, iteration, f, err):
+        if err:
+            self.statusBar().showMessage(f"snapshot failed: {err}"); return
+        self._render_field(f, data_structure(run.spec))
+        self.statusBar().showMessage(f"{run.summary}: {f.name} (a live snapshot; the run goes on -- select a run to leave it)")
+
     def _stop_live_run(self):
         run = getattr(self, "_live_run", None)
         if run is not None:
@@ -868,6 +898,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_compute_done(self, err):
         self._live_run = None
         self.stop_btn.setEnabled(False)
+        self.snap_btn.setEnabled(False)
         if err:
             self.statusBar().showMessage(f"compute failed: {err}"); self._log(f"✗ {err}")
         else:

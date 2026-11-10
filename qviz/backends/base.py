@@ -33,6 +33,9 @@ class Job:
     files: dict[str, bytes] = field(default_factory=dict)   # an external code's input deck(s)
     command: tuple[str, ...] = ()         # an external code's argv WITHOUT the mpirun launcher (the runner adds it)
     live: dict = field(default_factory=dict)   # the code's run record SO FAR, while it runs (SOLID²: taken at iteration 1)
+    #: LIVE SNAPSHOT requests, served by the back end on its compute thread at the next SCF iteration (OpenWork §2: "grab 3D
+    #: plot data" mid-run): (spin, n, pad, deliver), deliver(iteration, ScalarField | None, error | None).  Run.snapshot appends.
+    snapshots: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)

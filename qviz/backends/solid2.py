@@ -177,6 +177,14 @@ class Solid2Backend:
         self._prior: dict = {}      # the reused build's record, for the live snapshot of the run it feeds
 
     # -- build: every pre-SCF step, no SCF -----------------------------------
+    def why_no_snapshot(self, spec: RunSpec) -> Optional[str]:
+        """Why a RUNNING job of `spec` cannot hand out its current iterate's density (None: it can)."""
+        if self._qc is None:
+            return self._why_absent
+        if spec.structure.kind != "molecule":
+            return "a crystal's fields are not sampled through the bridge yet (not even converged ones)"
+        return None
+
     def why_no_build(self, spec: RunSpec) -> Optional[str]:
         """Why `build` cannot run for `spec` (None: it can)."""
         if self._qc is None:
@@ -349,6 +357,16 @@ class Solid2Backend:
             s = SCFRow(it, E, tuple(SCFCell(title, math.nan if title in _TABLE_ONLY else value, scale, text, tol)
                                     for title, value, text, tol, scale in cells))
             steps.append(s)
+            while job.snapshots and "calc" in live:   # a live snapshot: the compute thread, between iterations (the safe point)
+                spin, npts, pad, deliver = job.snapshots.pop(0)
+                name = "Spin density (ρ↑−ρ↓)" if spin else "Electron density"
+                try:
+                    d = live["calc"].iterate_density(npts, pad, spin)
+                except Exception as e:                # noqa: BLE001 -- told to the asker, never a stopped run
+                    deliver(it, None, str(e))
+                else:
+                    deliver(it, ScalarField(f"{name}, iteration {it}", np.asarray(d["values"]), tuple(d["origin"]),
+                                            tuple(d["spacing"]), signed=spin), None)
             if not job.live:                          # setup has filed its sections (grids, basis) by iteration 1
                 snap = self._qc.current_report()
                 if snap:                              # + the runs already filed: a crystal's grids are its BUILD run's
@@ -359,14 +377,16 @@ class Solid2Backend:
 
         if "deck" in n:
             return self._run_deck(job, step, steps)
+        live = {}                                     # the calculation, once it exists: what a snapshot request samples
 
         self._qc.clear_report()
         kept = self._kept_build(n)
         if kept is not None:                          # this job's Build: converge its graph, do not rebuild
             calc, self._prior = kept
-            calc.run_scf(step, n["max_iter"])
-        else:
-            calc = self._qc.Calculator(**_calculator_args(n), on_iteration=step)
+        else:                                         # Prepare, then the SCF: a handle exists while it runs (live snapshots)
+            calc = self._qc.Calculator(**_calculator_args(n), build_only=True)
+        live["calc"] = calc
+        calc.run_scf(step, n["max_iter"])
         saved = n.get("state_save")
         if saved:                                     # converged or not: a later run continues from it (the file says which)
             states.state_dir().mkdir(parents=True, exist_ok=True)

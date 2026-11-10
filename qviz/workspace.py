@@ -83,6 +83,18 @@ class Run:
         Safe from any thread."""
         self._stop = True
 
+    def snapshot(self, deliver: Callable, spin: bool = False, n: int = 64, pad: float = 5.0) -> Optional[str]:
+        """Ask the RUNNING SCF for its current iterate's density (spin: its spin density), sampled on an n^3 grid at its next
+        iteration on the compute thread: deliver(iteration, ScalarField | None, error | None) is called THERE (marshal it).
+        Returns why it cannot (None: asked).  Safe from any thread."""
+        if self.status is not RunStatus.RUNNING or self.job is None:
+            return "the run is not running"
+        why = getattr(self.backend, "why_no_snapshot", lambda s: f"{self.backend_name} offers no live snapshot")(self.spec)
+        if why:
+            return why
+        self.job.snapshots.append((spin, n, pad, deliver))
+        return None
+
     def compute(self, on_step: Optional[Callable[[SCFRow], None]] = None) -> None:
         """Translate + run.  Blocking: the Qt layer calls it on a worker thread.  `on_step(SCFRow)` streams the
         SCF live.  Any failure (a refused capability, a throw in the code) becomes the FAILED state."""
