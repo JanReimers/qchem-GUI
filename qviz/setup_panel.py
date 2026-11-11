@@ -804,7 +804,7 @@ class SetupPanel(QtWidgets.QWidget):
                 self.trim_box.addItem(f"stated (orthoTol {tol:g})", tol); i = self.trim_box.count() - 1
         self.trim_box.setCurrentIndex(i)
         self._bform.setRowVisible(self._trim_row, not mol)    # a molecule's basis is never trimmed here
-        self.shells_btn.setEnabled(not mol and self._run is None and self._qc is not None and solid2_deck.why_not(s) is None)
+        self.shells_btn.setEnabled(not mol and self._run is None and self._qc is not None and hasattr(self._qc, "BasisShells") and solid2_deck.why_not(s) is None)
         self.kmesh.setText("×".join(map(str, ac.kmesh)) if ac.kmesh else ("—" if mol else "not stated"))
         start = solid2_deck.continues_from(s)
         self.start_label.setText(f"the saved state {pathlib.Path(start).name}"
