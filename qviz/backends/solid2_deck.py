@@ -197,6 +197,9 @@ def to_deck(spec: RunSpec) -> dict:
             scf[deck_key] = v if v == "off" else float(v)   # a Gate: a number, or "off"
     if (ac.scf or {}).get("mixer"):
         scf["mixer"] = ac.scf["mixer"]                    # SCFParams::Mixing by name: Auto | Linear | Kerker | Pulay
+    for ours, deck_key, type_ in MIXER_KNOBS:             # what a stated Kerker / Pulay reads (the library refuses one without them)
+        if (ac.scf or {}).get(ours):
+            scf[deck_key] = type_(ac.scf[ours])
     if (ac.scf or {}).get("mom"):
         scf["useMOM"] = True                              # SCFParams::UseMOM, and its delayed reference capture
         if (ac.scf or {}).get("mom_start"):
@@ -219,6 +222,11 @@ def to_deck(spec: RunSpec) -> dict:
         deck["postSCF"] = [{"hubbardLoop": {"estimator": "linearResponse"} if lr else {}} if cu.self_consistent
                            else {"hubbardLinearResponse" if lr else "estimateHubbardU": {}}]
     return _merge(deck, code_block(spec, "solid2").get("deck") or {})
+
+
+#: the spec's mixer knobs (accuracy.scf) -> the deck's SCFParams: Kerker reads kerkerG0 (> 0); Pulay reads pulayDepth (> 0), pulayStart,
+#: and kerkerG0 (0 or absent: a history on D, unpreconditioned).  No GUI default: the library states none for Kerker's G0.
+MIXER_KNOBS = (("kerker_g0", "kerkerG0", float), ("pulay_depth", "pulayDepth", int), ("pulay_start", "pulayStart", int))
 
 
 def continues_from(spec: RunSpec) -> Optional[str]:

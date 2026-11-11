@@ -56,15 +56,26 @@ def qchem_src() -> pathlib.Path:
     return pathlib.Path(os.environ.get("QCHEM_SRC", pathlib.Path.home() / "Code/qchem-main"))
 
 
+PP_SET = "gth-lda-valence"
+
+
 @functools.lru_cache(maxsize=None)
-def pp_valence() -> dict[str, int]:
-    """q per element of qchem's gth-lda-valence set (src/Pseudopotential/Data/pseudopotentials.json)."""
-    d = json.loads((qchem_src() / "src/Pseudopotential/Data/pseudopotentials.json").read_text())
-    return {k.capitalize(): int(v) for k, v in d["gth-lda-valence"]["valence"].items()}
+def pp_valence(element: str) -> int:
+    """q for `element` in qchem's gth-lda-valence set, ASKED of the library (PseudopotentialSet, the one reader of the choice and
+    its rule: the set's exception, else the smallest q the GTH database holds at the set's functional).  KeyError in the
+    library's words when the set does not cover it, or when qchem_py is unavailable."""
+    from .solid2 import _import_qchem_py
+    qc, why = _import_qchem_py()
+    if qc is None:
+        raise KeyError(why)
+    out = json.loads(qc.pseudopotentials(json.dumps({"set": PP_SET, "elements": [element]})))
+    if "error" in out:
+        raise KeyError(out["error"])
+    return int(out["valence"][element])
 
 
 def upf_name(element: str) -> str:
-    return f"{element}.pz-gth-q{pp_valence()[element]}.UPF"
+    return f"{element}.pz-gth-q{pp_valence(element)}.UPF"
 
 
 def good_fft(n: int) -> int:
@@ -110,12 +121,12 @@ def _missing_upf(s: RunSpec) -> Optional[str]:
     try:
         need = {e: upf_name(e) for e in els}
     except (OSError, KeyError) as e:
-        return f"no gth-lda-valence pseudopotential for {e}"
+        return f"no gth-lda-valence pseudopotential: {e}"
     d = pathlib.Path(_qe_rep(s).get("pseudo_dir") or qchem_src() / "IntegrationTests/QE")
     missing = [e for e, f in need.items() if not (d / f).exists()]
     if missing:
         return (f"{', '.join(need[e] for e in missing)} not in {d}: write it with qchem's "
-                + "; ".join(f"gth2upf --element {e} --q {pp_valence()[e]}" for e in missing))
+                + "; ".join(f"gth2upf --element {e} --q {pp_valence(e)}" for e in missing))
     return None
 
 
@@ -164,7 +175,6 @@ class QeBackend:
         kinds = species_kinds(spec)
         pseudo_dir = rep.get("pseudo_dir") or str(qchem_src() / "IntegrationTests/QE")
         sm = rep.get("starting_magnetization") or {}
-        q = pp_valence()
 
         sysl = [f"ibrav = 0", f"nat = {nat}", f"ntyp = {len(kinds)}", f"ecutwfc = {ecutwfc}", f"ecutrho = {ecutrho}",
                 f"input_dft = '{_XC[ph.functional]}'", f"nr1 = {nr[0]}", f"nr2 = {nr[1]}", f"nr3 = {nr[2]}"]
@@ -174,7 +184,7 @@ class QeBackend:
         if ph.spin.polarized:
             sysl.append("nspin = 2")
             for i, k in enumerate(kinds, 1):
-                m = sm.get(k["name"], max(-1.0, min(1.0, k["moment"] / q[k["element"]])))
+                m = sm.get(k["name"], max(-1.0, min(1.0, k["moment"] / pp_valence(k["element"]))))
                 if m:
                     sysl.append(f"starting_magnetization({i}) = {m:g}")
         if "nbnd" in rep:

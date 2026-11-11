@@ -389,12 +389,20 @@ class TheBridgeRunsThem(unittest.TestCase):
 
     def test_the_stated_mixer_reaches_the_deck_and_the_library_takes_it(self):
         be = solid2()
-        for mixer in ("Linear", "Kerker", "Pulay"):
+        for mixer, knobs in (("Linear", {}), ("Kerker", {"kerker_g0": 0.8}), ("Pulay", {"pulay_depth": 6, "pulay_start": 3})):
             with self.subTest(mixer):
-                deck = json.loads(be.translate(si_inline(mixer=mixer)).native["deck"])
+                deck = json.loads(be.translate(si_inline(mixer=mixer, **knobs)).native["deck"])
                 self.assertEqual(deck["scf"]["mixer"], mixer)
+                for ours, deck_key, _ in D.MIXER_KNOBS:
+                    self.assertEqual(deck["scf"].get(deck_key), knobs.get(ours))
                 r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
                 self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
+    def test_a_stated_kerker_without_its_g0_is_refused_in_the_library_s_words(self):
+        deck = json.loads(solid2().translate(si_inline(mixer="Kerker")).native["deck"])
+        r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("KerkerG0 > 0", r.stderr + r.stdout)
 
     def test_the_linear_alphas_reach_the_deck(self):
         deck = json.loads(solid2().translate(si_inline(mixer="Linear", mixing_alpha=0.3, mixing_alpha_max=0.5)).native["deck"])

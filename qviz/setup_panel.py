@@ -358,6 +358,21 @@ class SetupPanel(QtWidgets.QWidget):
                                 "Kerker and Pulay mix in G space, so a molecule takes Auto or Linear")
         self.mix_box.activated.connect(lambda _i: self._edit({"accuracy": {"scf": {"mixer": self.mix_box.currentText()}}}, "mixer"))
         f.addRow("ρ mixer", self.mix_box)
+        self.kerker_g0 = QtWidgets.QDoubleSpinBox(); self.kerker_g0.setRange(0.0, 5.0); self.kerker_g0.setDecimals(2)
+        self.kerker_g0.setSingleStep(0.1); self.kerker_g0.setSpecialValueText("not stated")
+        self.kerker_g0.setToolTip("Kerker's screening wavevector G0 (a.u.⁻¹): long-wavelength density changes are damped by "
+                                  "G²/(G²+G0²).  Kerker needs it; for Pulay it preconditions the history (not stated: Pulay on D)")
+        self.kerker_g0.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"kerker_g0": round(self.kerker_g0.value(), 4) or None}}}, "Kerker G0"))
+        f.addRow("Kerker G0", self.kerker_g0)
+        self.pulay_depth, self.pulay_start = QtWidgets.QSpinBox(), QtWidgets.QSpinBox()
+        self.pulay_depth.setRange(0, 30); self.pulay_depth.setSpecialValueText("not stated")
+        self.pulay_depth.setToolTip("How many past densities Pulay extrapolates over (Pulay needs it)")
+        self.pulay_start.setRange(0, 50); self.pulay_start.setSpecialValueText("default")
+        self.pulay_start.setToolTip("Plain-mixing iterations before the Pulay history engages")
+        for box, key, what in ((self.pulay_depth, "pulay_depth", "Pulay depth"), (self.pulay_start, "pulay_start", "Pulay start")):
+            box.editingFinished.connect(lambda b=box, k=key, w=what: self._edit({"accuracy": {"scf": {k: b.value() or None}}}, w))
+        f.addRow("Pulay depth", self.pulay_depth)
+        f.addRow("Pulay starts after", self.pulay_start)
         self._scf_form = f
         self.alpha, self.alpha_min, self.alpha_max = QtWidgets.QDoubleSpinBox(), QtWidgets.QDoubleSpinBox(), QtWidgets.QDoubleSpinBox()
         for box, key, tip in ((self.alpha, "mixing_alpha", "where linear mixing's step α starts"),
@@ -821,6 +836,13 @@ class SetupPanel(QtWidgets.QWidget):
         linear = self.mix_box.currentText() == "Linear" or (self.mix_box.currentText() == "Auto" and mol)
         for box in (self.alpha, self.alpha_min, self.alpha_max):     # linear mixing's α means nothing to Kerker / Pulay
             self._scf_form.setRowVisible(box, linear)
+        mixer = self.mix_box.currentText()
+        self.kerker_g0.setValue(float(scf.get("kerker_g0") or 0.0))
+        self.pulay_depth.setValue(int(scf.get("pulay_depth") or 0))
+        self.pulay_start.setValue(int(scf.get("pulay_start") or 0))
+        self._scf_form.setRowVisible(self.kerker_g0, mixer in ("Kerker", "Pulay"))
+        for box in (self.pulay_depth, self.pulay_start):
+            self._scf_form.setRowVisible(box, mixer == "Pulay")
         self.maxit.setValue(int(scf.get("max_iter", 100)))
         acc = self.acc_box.currentText()
         for w in (self.ladder_info, self.ladder_switch):

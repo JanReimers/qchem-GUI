@@ -60,11 +60,11 @@ def read_entry(element: str, q: int, family: str = _LDA_FAMILY) -> GTHEntry:
 
 def gth_entry(element: str) -> GTHEntry:
     """The gth-lda-valence set's entry for `element` (q from qchem's pseudopotentials.json)."""
-    return read_entry(element, pp_valence()[element])
+    return read_entry(element, pp_valence(element))
 
 
 def abinit_name(element: str) -> str:
-    return f"{element}.gth-q{pp_valence()[element]}.psp10"
+    return f"{element}.gth-q{pp_valence(element)}.psp10"
 
 
 def to_abinit_psp10(element: str, Z: int, ixc: int) -> str:
