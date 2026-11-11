@@ -301,7 +301,14 @@ class SetupPanel(QtWidgets.QWidget):
                                  "no k-block drops a function at orthoTol.  Build shows which shells went and S's min eigenvalue "
                                  "before and after")
         self.trim_box.activated.connect(self._on_trim)
-        f.addRow("Trim near-dependent shells", self.trim_box)
+        self.shells_btn = QtWidgets.QPushButton("Shells…")
+        self.shells_btn.setToolTip("The basis's shells, what switching each off does to S's lowest eigenvalue, and which shells make up "
+                                   "the near-null space (a pop-out table; the result is a stated trim)")
+        self.shells_btn.clicked.connect(self._open_shells)
+        trim_row = QtWidgets.QWidget(); tr = QtWidgets.QHBoxLayout(trim_row); tr.setContentsMargins(0, 0, 0, 0)
+        tr.addWidget(self.trim_box, 1); tr.addWidget(self.shells_btn)
+        self._trim_row = trim_row
+        f.addRow("Trim near-dependent shells", trim_row)
         self.basis_summary = QtWidgets.QLabel(); self.basis_summary.setWordWrap(True)
         self.basis_summary.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         f.addRow("Size / overlap", self.basis_summary)
@@ -785,12 +792,19 @@ class SetupPanel(QtWidgets.QWidget):
             self.eps_box.addItem(eps)
         self.eps_box.setCurrentText(eps)
         deck = code_block(s, "solid2").get("deck") or {}
+        stated = (deck.get("basis") or {}).get("trim") or []
         tol = (deck.get("solid") or {}).get("orthoTol") if (deck.get("basis") or {}).get("autoTrim") else None
-        i = self.trim_box.findData(tol)
-        if i < 0:                                     # a stated orthoTol off the presets: shown as it is
-            self.trim_box.addItem(f"stated (orthoTol {tol:g})", tol); i = self.trim_box.count() - 1
+        for k in range(self.trim_box.count() - 1, len(TRIM_PRESETS) - 1, -1):
+            self.trim_box.removeItem(k)               # a previous render's "stated" entry
+        if stated:                                    # the Shells table's choice: a stated trim
+            self.trim_box.addItem(f"stated: {len(stated)} shell(s) (Shells…)", "stated"); i = self.trim_box.count() - 1
+        else:
+            i = self.trim_box.findData(tol)
+            if i < 0:                                 # a stated orthoTol off the presets: shown as it is
+                self.trim_box.addItem(f"stated (orthoTol {tol:g})", tol); i = self.trim_box.count() - 1
         self.trim_box.setCurrentIndex(i)
-        self._bform.setRowVisible(self.trim_box, not mol)     # a molecule's basis is never trimmed here
+        self._bform.setRowVisible(self._trim_row, not mol)    # a molecule's basis is never trimmed here
+        self.shells_btn.setEnabled(not mol and self._run is None and self._qc is not None and solid2_deck.why_not(s) is None)
         self.kmesh.setText("×".join(map(str, ac.kmesh)) if ac.kmesh else ("—" if mol else "not stated"))
         start = solid2_deck.continues_from(s)
         self.start_label.setText(f"the saved state {pathlib.Path(start).name}"
@@ -1046,8 +1060,28 @@ class SetupPanel(QtWidgets.QWidget):
 
     def _on_trim(self, i: int) -> None:
         tol = self.trim_box.itemData(i)
-        self._deck_edit({"basis": {"autoTrim": True}, "solid": {"orthoTol": tol}} if tol else
-                        {"basis": {"autoTrim": None}, "solid": {"orthoTol": None}})
+        if tol == "stated":
+            return
+        self._deck_edit({"basis": {"autoTrim": True, "trim": None}, "solid": {"orthoTol": tol}} if tol else
+                        {"basis": {"autoTrim": None, "trim": None}, "solid": {"orthoTol": None}})
+
+    def _open_shells(self) -> None:
+        """The pop-out shell table for the draft's crystal (built once: the cell's untrimmed S per k)."""
+        s = self.draft.spec
+        if s is None or self._qc is None:
+            return
+        from .basis_shells import ShellDialog, ShellTable
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            table = ShellTable(self._qc, s)
+        except Exception as e:                        # noqa: BLE001 -- the library's refusal, shown
+            self.reason.setText(f"basis shells: {e}")
+            return
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        self._shell_dialog = ShellDialog(table, lambda trim: self._deck_edit(
+            {"basis": {"trim": trim or None, "autoTrim": None}}), parent=self)
+        self._shell_dialog.show()
 
     def _deck_edit(self, patch: dict) -> None:
         """A crystal's stated deck setting (representation.solid2.deck), merge-patched (None drops a key)."""

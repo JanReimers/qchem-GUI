@@ -9,7 +9,7 @@ import os
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6 import QtWidgets                                     # noqa: E402
+from PySide6 import QtCore, QtWidgets                             # noqa: E402
 
 from qviz import molecules                                        # noqa: E402
 from qviz.agent.client import OfflinePlanner                      # noqa: E402
@@ -509,3 +509,46 @@ class GridsTab(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShellWhatIf(unittest.TestCase):
+    """The Shells… pop-out reads the library's basisTrimAnalysis RECORD (the user, 2026-11-11): NiO's Cartesian valence_lowq_va is
+    near-singular untrimmed; the deck's autoTrim cuts the three diffuse Ni s shells, the table shows them off and marks them as
+    autoTrim's pick, and switching them back on turns the verdict."""
+
+    def test_the_table_shows_the_trim_autotrims_pick_and_what_toggling_does(self):
+        from qviz.backends.solid2 import _import_qchem_py
+        from qviz.basis_shells import ShellDialog, ShellTable, summary
+        from qviz.spec import RunSpec
+        qc, why = _import_qchem_py()
+        if qc is None or not hasattr(qc, "BasisShells"):
+            self.skipTest(why or "this qchem_py has no BasisShells")
+        nio = RunSpec.from_dict({"label": "NiO", "structure": {"kind": "crystal",
+                                 "lattice_bohr": [[0, 3.94, 3.94], [3.94, 0, 3.94], [3.94, 3.94, 0]],
+                                 "sites": [{"element": "Ni", "frac": [0, 0, 0]}, {"element": "O", "frac": [0.5, 0.5, 0.5]}]},
+                                 "physics": {"theory": "DFT", "functional": "LDA", "core": "pseudopotential"},
+                                 "accuracy": {"kmesh": [1, 1, 1], "representation": {"basis": "valence_lowq_va", "solid2": {"deck": {
+                                     "basis": {"autoTrim": True, "spherical": False}, "solid": {"orthoTol": 1e-6}}}}}}).validate()
+        t = ShellTable(qc, nio)
+        a = t.first
+        self.assertTrue(a["healthy"], summary(a))
+        self.assertTrue(summary(a).startswith("✓ good to go"))
+        cut = [(s["Z"], s["l"], s["exponents"][0]) for s, on in zip(t.shells, t.deck_kept) if not on]
+        self.assertEqual(sorted(e for _, _, e in cut)[0], 0.06, "the most diffuse Ni s goes first")
+        self.assertTrue(all(Z == 28 and l == 0 for Z, l, _ in cut), cut)
+        self.assertEqual(t.deck_kept, t.auto_kept, "the deck's trim IS autoTrim's pick at the same floor")
+        untrimmed = t.query([True] * len(t.shells))
+        self.assertFalse(untrimmed["healthy"])
+        self.assertLess(untrimmed["lambdaMin"], a["lambdaMin"])
+        self.assertEqual(t.stated_trim(t.deck_kept), [{"Z": 28, "l": 0, "alpha": e} for _, _, e in cut])
+        applied = []
+        dlg = ShellDialog(t, applied.append)
+        self.assertEqual(dlg.grid.rowCount(), len(t.shells))
+        self.assertEqual(sum(dlg.grid.item(r, 5).text() == "✂" for r in range(dlg.grid.rowCount())), len(cut))
+        dlg.grid.item(0, 0).setCheckState(QtCore.Qt.Checked if not dlg.kept[0] else QtCore.Qt.Unchecked)   # toggle one shell
+        self.assertNotEqual(dlg.kept, t.deck_kept)
+        self.assertEqual(dlg.record["shells"][0]["kept"], dlg.kept[0], "the shown record is the toggled query's")
+        dlg.auto_btn.click()
+        self.assertEqual(dlg.kept, t.auto_kept)
+        dlg.apply_btn.click()
+        self.assertEqual(applied, [t.stated_trim(t.auto_kept)])
