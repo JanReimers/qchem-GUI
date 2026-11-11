@@ -18,10 +18,10 @@ from .backends import solid2_deck
 from .backends.solid2 import code_block, mesh_for
 from .spec import RunSpec
 
-#: a molecule's Hartree term on the default route (the only one the GUI states): the Dunlap fit, ⟨ρ|g⟩ = Σ D_ab (ab|g) through
-#: 3-centre Coulomb integrals (IrrepCD::Project), no mesh in the iterations.  Only a stated δ or multipole Coulomb fit puts ρ on
-#: a mesh; the record says which (hamiltonian.Hartree.coulombFit, Set on those routes only).
-DUNLAP = "Hartree: analytic Dunlap fit on A1_coul (3-centre Coulomb integrals), no mesh"
+#: A COULOMB FIT HAS NO INTEGRATION GRID (the user, 2026-11-11: "any Coulomb fit (to any fit basis set) has no *integration*
+#: grid.  Sometimes the fit basis set looks like a grid (PW G ball, delta function) but that is a fit basis detail").  So the
+#: Grids tab never lists the Hartree fit: its basis -- A1_coul Gaussians, a G ball, δ points -- is reported with the fit bases
+#: on the Basis tab (coulomb_fit_details).
 
 LADDER_COLUMNS = ("Level", "FFT grid", "Ecut (Ha)", "G vectors", "Role")
 
@@ -37,8 +37,7 @@ def planned(spec: RunSpec) -> list[str]:
         mr, ma = mesh_for(ac.epsilon_Ha_per_atom)
         mr, ma = int(own.get("mesh_radial", mr)), int(own.get("mesh_angular", ma))
         why = "stated" if own else f"from ε = {ac.epsilon_Ha_per_atom:g} Ha/atom (provisional rule)"
-        return [f"XC mesh: {mr} radial × Lebedev {ma} per atom, Becke-partitioned ({why})",
-                DUNLAP]
+        return [f"XC mesh: {mr} radial × Lebedev {ma} per atom, Becke-partitioned ({why})"]
     deck = solid2_deck.to_deck(spec)
     k = deck.get("kmesh", [1, 1, 1])
     ecut = (deck.get("solid") or {}).get("densityEcut")
@@ -80,6 +79,26 @@ def fit_bases(record: Optional[dict]) -> list[dict]:
     return [f for term in ("Hartree", "Vxc_DFT") for f in (h.get(term) or {}).get("fitbasis") or []]
 
 
+def coulomb_fit_details(record: Optional[dict]) -> list[str]:
+    """The Coulomb fit as its FIT BASIS (for the Basis tab), from the term's own record: the Gaussian (Dunlap) route's
+    analytic 3-centre integrals, the δ points or multipoles a stated mesh route fits on (hamiltonian.Hartree.coulombFit), or a
+    crystal's plane-wave density fit (its G ball on a raster).  None of these is an integration grid."""
+    h = _section(record, "hamiltonian")
+    hartree = h.get("Hartree") or {}
+    out = []
+    route, aux = hartree.get("coulombFit"), hartree.get("auxiliaryFit")
+    if route:
+        out.append(f"Hartree ρ fit: {route} functions" + (f" at {_mesh_line('', aux)[2:]}" if aux and "points" in aux else ""))
+    elif hartree.get("fitbasis") and not hartree.get("densityFit"):
+        out.append("Hartree ρ fit: projected by analytic 3-centre Coulomb integrals (no grid)")
+    for what, f in (("Hartree ρ fit", hartree.get("densityFit")), ("seed's ρ fit", _section(record, "seedDensity").get("densityFit"))):
+        if f and "N" in f:
+            n = f["N"]
+            out.append(f"{what}: its plane waves sampled {f.get('kind', '')} {n[0]}×{n[1]}×{n[2]} = "
+                       f"{f.get('points', n[0] * n[1] * n[2]):,} points" + (f", spacing {f['dr'][0]:.3f} bohr" if f.get("dr") else ""))
+    return out
+
+
 def _mesh_line(what: str, m: dict) -> str:
     """One mesh as its report states it: atom-centred (radial × directions) or uniform (N)."""
     if "nDirs" in m:
@@ -98,17 +117,9 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
     h, g = _section(record, "hamiltonian"), _section(record, "grids")
     hartree, vxc = h.get("Hartree") or {}, h.get("Vxc_DFT") or {}
     q = h.get("xcQuadrature") or {}
-    # The fit basis's OWN mesh, built at its construction: on the Dunlap route the SCF never reads it -- only the seed density's
-    # one projection and the fit's normalisation do (counted in a CH4 LDA run, 2026-11-11).  Shown as the library files it.
-    fit_mesh = "Hartree fit mesh" if hartree.get("coulombFit") else "Hartree fit basis's own mesh (seed projection, normalisation)"
-    for what, m in (("XC mesh", q), ("PP mesh", h.get("ppQuadrature")), (fit_mesh, hartree.get("auxiliaryFit")),
-                    ("Vxc fit mesh", vxc.get("auxiliaryFit"))):   # each mesh's own report
-        if m and "points" in m:
+    for what, m in (("XC mesh", q), ("PP mesh", h.get("ppQuadrature")), ("Vxc fit mesh", vxc.get("auxiliaryFit"))):
+        if m and "points" in m:                 # each integration mesh's own report (a Coulomb fit has none: see the top)
             lines.append(_mesh_line(what, m))
-    if hartree.get("fitbasis"):                 # the route the Hartree term RAN, from its own record
-        route = hartree.get("coulombFit")
-        lines.append(f"Hartree: ρ on a mesh ({route} Coulomb fit)" if route else
-                     f"Hartree: analytic Dunlap fit on {hartree.get('fit', 'its fit basis')} (3-centre Coulomb integrals), no mesh")
     for build in (True, False):
         for run in _runs(record, build):
             mesh = (run.get("folds") or {}).get("XC mesh")
@@ -126,9 +137,7 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
         lines.append(f"rasters: {what}" + (f" ({RASTER_SOURCES.get(src, src)})" if src else ""))
     if q.get("kind") and "points" not in q:
         lines.append(f"XC quadrature: {q['kind']}")
-    for what, f in (("density fit", hartree.get("densityFit")), ("Vxc fit", vxc.get("vxcFitGrid")),
-                    ("seed's density fit", _section(record, "seedDensity").get("densityFit")),
-                    ("mixer's Vxc fit", _section(record, "densityMixer").get("vxcFitGrid"))):
+    for what, f in (("Vxc fit", vxc.get("vxcFitGrid")), ("mixer's Vxc fit", _section(record, "densityMixer").get("vxcFitGrid"))):
         if f and "N" in f:
             n = f["N"]
             lines.append(f"{what}: {f.get('kind', '')} {n[0]}×{n[1]}×{n[2]} = {f.get('points', n[0] * n[1] * n[2]):,} points"

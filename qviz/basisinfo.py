@@ -60,7 +60,7 @@ def fits(spec: RunSpec, record: Optional[dict]) -> list[str]:
     if not got:
         return ["fit bases (Hartree ρ fit, Vxc fit): Build (or Run) fills this from the library's record"]
     return [f"{f.get('role', 'fit')}: {f.get('name', '?')}" + (f", {f['nFunctions']} functions" if "nFunctions" in f else "")
-            for f in got]
+            for f in got] + gridinfo.coulomb_fit_details(record)
 
 
 def summary(spec: RunSpec) -> list[str]:

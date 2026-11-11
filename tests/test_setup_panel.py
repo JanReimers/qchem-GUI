@@ -343,23 +343,24 @@ class GridsTab(unittest.TestCase):
         xyz = [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107]
         lda = molecule("water", [8, 1, 1], xyz, theory="DFT", functional="LDA")
         hf = molecule("water", [8, 1, 1], xyz)
-        self.assertIn("analytic Dunlap fit on A1_coul", gridinfo.planned(lda)[1])
-        self.assertIn("no mesh", gridinfo.planned(lda)[1], "the default route projects ρ by 3-centre integrals, not on a mesh")
+        # the user, 2026-11-11: a Coulomb fit has NO integration grid -- its basis is a Basis-tab fact, never a Grids line
+        self.assertEqual(len(gridinfo.planned(lda)), 1, "the Grids tab lists the XC mesh only")
         mesh = {"kind": "Becke", "natom": 3, "nRadial": 50, "nDirs": 194, "L": 23, "points": 29100}
-        dunlap = gridinfo.built({"r": {"hamiltonian": {"Hartree": {"fit": "A1_coul", "auxiliaryFit": mesh,
-                                                                   "fitbasis": [{"role": "Hartree ρ fit", "name": "A1_coul", "nFunctions": 70}]}}}})[0]
-        self.assertIn("Hartree: analytic Dunlap fit on A1_coul (3-centre Coulomb integrals), no mesh", dunlap)
-        self.assertTrue(any(l.startswith("Hartree fit basis's own mesh (seed projection, normalisation)") for l in dunlap), dunlap)
-        delta = gridinfo.built({"r": {"hamiltonian": {"Hartree": {"coulombFit": "delta", "auxiliaryFit": mesh,
-                                                                  "fitbasis": [{"role": "Hartree ρ fit", "name": "DeltaFit", "nFunctions": 9}]}}}})[0]
-        self.assertIn("Hartree: ρ on a mesh (delta Coulomb fit)", delta)
-        self.assertTrue(any(l.startswith("Hartree fit mesh:") for l in delta), delta)
+        dunlap = {"r": {"hamiltonian": {"Hartree": {"fit": "A1_coul", "auxiliaryFit": mesh,
+                                                    "fitbasis": [{"role": "Hartree ρ fit", "name": "A1_coul", "nFunctions": 70}]}}}}
+        self.assertFalse(any("Hartree" in l for l in gridinfo.built(dunlap)[0]), gridinfo.built(dunlap)[0])
+        self.assertIn("Hartree ρ fit: projected by analytic 3-centre Coulomb integrals (no grid)", basisinfo.fits(lda, dunlap))
+        delta = {"r": {"hamiltonian": {"Hartree": {"coulombFit": "delta", "auxiliaryFit": mesh,
+                                                   "fitbasis": [{"role": "Hartree ρ fit", "name": "DeltaFit", "nFunctions": 29100}]}}}}
+        self.assertFalse(any("Hartree" in l for l in gridinfo.built(delta)[0]), "δ points are the fit basis, not a grid")
+        self.assertTrue(any(l.startswith("Hartree ρ fit: delta functions at Becke, 3 atoms") for l in basisinfo.fits(lda, delta)),
+                        basisinfo.fits(lda, delta))
         self.assertIn("Hartree: analytic", gridinfo.planned(hf)[1])
         self.assertIn("analytic", basisinfo.fits(hf, None)[0])
         self.assertIn("Build (or Run) fills this", basisinfo.fits(lda, None)[0])
         rec = {"run": {"hamiltonian": {"Vxc_DFT": {"fitbasis": [{"role": "Vxc fit", "name": "DeltaFit", "nFunctions": 900}]},
                                         "Hartree": {"fitbasis": [{"role": "Hartree ρ fit", "name": "A1_coul", "nFunctions": 70}]}}}}
-        self.assertEqual(basisinfo.fits(lda, rec), ["Hartree ρ fit: A1_coul, 70 functions", "Vxc fit: DeltaFit, 900 functions"],
+        self.assertEqual(basisinfo.fits(lda, rec)[:2], ["Hartree ρ fit: A1_coul, 70 functions", "Vxc fit: DeltaFit, 900 functions"],
                          "read by key: the record's member order is construction order")
 
     def test_build_fills_the_tabs_and_run_converges_that_build(self):
@@ -473,8 +474,9 @@ class GridsTab(unittest.TestCase):
         fit = {"kind": "uniform", "N": [8, 8, 8], "points": 512}
         rec = {"si@t": {"hamiltonian": {"Hartree": {"densityFit": fit}, "Vxc_DFT": {"vxcFitGrid": fit}},
                         "seedDensity": {"densityFit": fit}, "densityMixer": {"vxcFitGrid": fit}}}
-        self.assertEqual([l.split(":")[0] for l in gridinfo.built(rec)[0]],
-                         ["density fit", "Vxc fit", "seed's density fit", "mixer's Vxc fit"])
+        self.assertEqual([l.split(":")[0] for l in gridinfo.built(rec)[0]], ["Vxc fit", "mixer's Vxc fit"])
+        self.assertEqual([l.split(":")[0] for l in gridinfo.coulomb_fit_details(rec)], ["Hartree ρ fit", "seed's ρ fit"],
+                         "a crystal's density fit is a plane-wave fit BASIS (its G ball sampled), reported on the Basis tab")
         mixer_only = {"si@t": {"hamiltonian": {"xcQuadrature": {"kind": "Becke"}}, "densityMixer": {"vxcFitGrid": fit}}}
         self.assertFalse(any(l.startswith("Vxc fit") for l in gridinfo.built(mixer_only)[0]), "a Becke run's only raster is the mixer's")
 
