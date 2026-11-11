@@ -343,7 +343,17 @@ class GridsTab(unittest.TestCase):
         xyz = [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107]
         lda = molecule("water", [8, 1, 1], xyz, theory="DFT", functional="LDA")
         hf = molecule("water", [8, 1, 1], xyz)
-        self.assertIn("Hartree fit mesh", gridinfo.planned(lda)[1])
+        self.assertIn("analytic Dunlap fit on A1_coul", gridinfo.planned(lda)[1])
+        self.assertIn("no mesh", gridinfo.planned(lda)[1], "the default route projects ρ by 3-centre integrals, not on a mesh")
+        mesh = {"kind": "Becke", "natom": 3, "nRadial": 50, "nDirs": 194, "L": 23, "points": 29100}
+        dunlap = gridinfo.built({"r": {"hamiltonian": {"Hartree": {"fit": "A1_coul", "auxiliaryFit": mesh,
+                                                                   "fitbasis": [{"role": "Hartree ρ fit", "name": "A1_coul", "nFunctions": 70}]}}}})[0]
+        self.assertIn("Hartree: analytic Dunlap fit on A1_coul (3-centre Coulomb integrals), no mesh", dunlap)
+        self.assertTrue(any(l.startswith("Hartree fit basis's own mesh (seed projection, normalisation)") for l in dunlap), dunlap)
+        delta = gridinfo.built({"r": {"hamiltonian": {"Hartree": {"coulombFit": "delta", "auxiliaryFit": mesh,
+                                                                  "fitbasis": [{"role": "Hartree ρ fit", "name": "DeltaFit", "nFunctions": 9}]}}}})[0]
+        self.assertIn("Hartree: ρ on a mesh (delta Coulomb fit)", delta)
+        self.assertTrue(any(l.startswith("Hartree fit mesh:") for l in delta), delta)
         self.assertIn("Hartree: analytic", gridinfo.planned(hf)[1])
         self.assertIn("analytic", basisinfo.fits(hf, None)[0])
         self.assertIn("Build (or Run) fills this", basisinfo.fits(lda, None)[0])
