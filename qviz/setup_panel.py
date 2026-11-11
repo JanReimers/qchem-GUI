@@ -37,7 +37,10 @@ METHODS = {"HF": ("HF", None), "LDA": ("DFT", "LDA"), "Xalpha": ("DFT", "Xalpha"
 BASES = ("dzvp", "orb1", "dzvp2", "tzvp", "valence_lowq_vb", "sipp_sr")
 ACCELERATORS = ("Auto", "DIIS", "GDM", "Ladder", "Null")   # Auto: the facade's policy (a molecule's is DIIS)
 MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mixing; Kerker/Pulay mix in G space (crystals)
-TRIM_TOL = 1e-6                                 # the trim's orthoTol: the conditioning report's floor (OverlapConditioning)
+#: the trim presets (the user, 2026-11-11: "some crude control like {light, medium, ruthless} auto trim"): basis.autoTrim at these
+#: solid.orthoTol -- the vet stage removes the most diffuse implicated shell per pass until no k-block drops an AO at orthoTol.
+#: medium = the conditioning report's floor (OverlapConditioning); the banked NiO / MnO decks state 1e-4 (ruthless).
+TRIM_PRESETS = (("off", None), ("light", 1e-8), ("medium", 1e-6), ("ruthless", 1e-4))
 BASIS_TIP = ("orb1 is the smallest/fastest; valence_lowq_vb / sipp_sr are valence (GTH) bases -- with the pseudopotential "
              "ticked, the same spec runs on SOLID² and CP2K")
 EPSILONS = ("1e-3", "1e-4", "1e-5", "1e-6", "1e-7")
@@ -290,13 +293,15 @@ class SetupPanel(QtWidgets.QWidget):
         # THE VET-STAGE TRIM (doc/Pins.md pin 22; the user, GUI item 27): a crystal's near-dependent diffuse shells removed once, the
         # most diffuse implicated shell per pass, until no k-block drops an AO at orthoTol.  The record says what went and
         # lambda_min(S) before and after (basisTrim), shown under Size / overlap after a Build.
-        self.trim_check = QtWidgets.QCheckBox(f"remove near-dependent diffuse shells (orthoTol {TRIM_TOL:g})")
-        self.trim_check.setToolTip("basis.autoTrim with solid.orthoTol: the library removes the most diffuse shell implicated in a "
-                                   "near-dependence, from every site of that element and every k, until S is healthy at orthoTol; "
-                                   "Build shows which shells went and S's min eigenvalue before and after")
-        self.trim_check.clicked.connect(lambda on: self._deck_edit(
-            {"basis": {"autoTrim": True}, "solid": {"orthoTol": TRIM_TOL}} if on else {"basis": {"autoTrim": None}, "solid": {"orthoTol": None}}))
-        f.addRow("Conditioning", self.trim_check)
+        self.trim_box = QtWidgets.QComboBox()
+        for name, tol in TRIM_PRESETS:
+            self.trim_box.addItem(name if tol is None else f"{name} (orthoTol {tol:g})", tol)
+        self.trim_box.setToolTip("Remove near-dependent diffuse shells (basis.autoTrim at solid.orthoTol): the library removes the most "
+                                 "diffuse shell implicated in a near-dependence, from every site of that element and every k, until "
+                                 "no k-block drops a function at orthoTol.  Build shows which shells went and S's min eigenvalue "
+                                 "before and after")
+        self.trim_box.activated.connect(self._on_trim)
+        f.addRow("Trim near-dependent shells", self.trim_box)
         self.basis_summary = QtWidgets.QLabel(); self.basis_summary.setWordWrap(True)
         self.basis_summary.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         f.addRow("Size / overlap", self.basis_summary)
@@ -661,7 +666,7 @@ class SetupPanel(QtWidgets.QWidget):
 
     _rendering = False
     _EDITORS = ("mix_box", "alpha", "alpha_min", "alpha_max", "ladder_switch", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
-                "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut", "material_box", "spins_edit", "trim_check")
+                "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut", "material_box", "spins_edit", "trim_box")
 
     def _render(self) -> None:
         s = self._spec()
@@ -780,8 +785,12 @@ class SetupPanel(QtWidgets.QWidget):
             self.eps_box.addItem(eps)
         self.eps_box.setCurrentText(eps)
         deck = code_block(s, "solid2").get("deck") or {}
-        self.trim_check.setChecked(bool((deck.get("basis") or {}).get("autoTrim")))
-        self._bform.setRowVisible(self.trim_check, not mol)   # a molecule's basis is never trimmed here
+        tol = (deck.get("solid") or {}).get("orthoTol") if (deck.get("basis") or {}).get("autoTrim") else None
+        i = self.trim_box.findData(tol)
+        if i < 0:                                     # a stated orthoTol off the presets: shown as it is
+            self.trim_box.addItem(f"stated (orthoTol {tol:g})", tol); i = self.trim_box.count() - 1
+        self.trim_box.setCurrentIndex(i)
+        self._bform.setRowVisible(self.trim_box, not mol)     # a molecule's basis is never trimmed here
         self.kmesh.setText("×".join(map(str, ac.kmesh)) if ac.kmesh else ("—" if mol else "not stated"))
         start = solid2_deck.continues_from(s)
         self.start_label.setText(f"the saved state {pathlib.Path(start).name}"
@@ -1034,6 +1043,11 @@ class SetupPanel(QtWidgets.QWidget):
             mr, ma = mesh_for(s.accuracy.epsilon_Ha_per_atom)       # setting one states both: the pair is the mesh
             patch = {"mesh_radial": int(own.get("mesh_radial", mr)), "mesh_angular": int(own.get("mesh_angular", ma)), key: value}
         self._edit({"accuracy": {"representation": {"solid2": patch}}}, "XC mesh")
+
+    def _on_trim(self, i: int) -> None:
+        tol = self.trim_box.itemData(i)
+        self._deck_edit({"basis": {"autoTrim": True}, "solid": {"orthoTol": tol}} if tol else
+                        {"basis": {"autoTrim": None}, "solid": {"orthoTol": None}})
 
     def _deck_edit(self, patch: dict) -> None:
         """A crystal's stated deck setting (representation.solid2.deck), merge-patched (None drops a key)."""

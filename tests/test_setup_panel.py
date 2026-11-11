@@ -161,12 +161,15 @@ class CrystalBasis(unittest.TestCase):
         self.assertTrue(panel.build_btn.isEnabled())
         self.assertFalse(panel.build_why.isVisibleTo(panel))
         self.assertTrue(panel.be_checks["SOLID²"].isEnabled())
-        panel.trim_check.click()                       # the vet-stage trim, through the deck
+        box = panel.trim_box                           # the vet-stage trim presets, through the deck
+        self.assertEqual([box.itemText(i).split()[0] for i in range(box.count())], ["off", "light", "medium", "ruthless"])
+        box.setCurrentIndex(3); box.activated.emit(3)
         deck = draft.spec.accuracy.representation["solid2"]["deck"]
-        self.assertEqual((deck["basis"], deck["solid"]), ({"autoTrim": True}, {"orthoTol": 1e-6}))
+        self.assertEqual((deck["basis"], deck["solid"]), ({"autoTrim": True}, {"orthoTol": 1e-4}))
         from qviz.backends import solid2_deck
         self.assertTrue(solid2_deck.to_deck(draft.spec)["basis"]["autoTrim"])
-        panel.trim_check.click()
+        self.assertEqual(box.currentText(), "ruthless (orthoTol 0.0001)", "the box shows the draft's preset")
+        box.setCurrentIndex(0); box.activated.emit(0)
         self.assertFalse(solid2_deck.to_deck(draft.spec)["basis"].get("autoTrim"), "unticked: no trim stated")
 
 

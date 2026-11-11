@@ -188,7 +188,7 @@ def conditioning(record: Optional[dict]) -> list[str]:
             if out and whole:                   # the verdict the person asked for: is this basis good to go?
                 ok = whole.get("wouldDrop", 0) == 0 and whole.get("lambdaMin", 0.0) >= whole.get("floor", 0.0)
                 out.append("✓ conditioning OK: no function near-dependent at the floor" if ok else
-                           "⚠ near-singular: " + ("tick \"remove near-dependent diffuse shells\" and Build again" if not trim
+                           "⚠ near-singular: " + ("pick a trim (Basis tab: Trim near-dependent shells) and Build again" if not trim
                                                      else "still near-dependent after the trim"))
 
             if out:
