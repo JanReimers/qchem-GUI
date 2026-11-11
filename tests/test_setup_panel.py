@@ -106,6 +106,18 @@ class OneDraftTwoViews(unittest.TestCase):
         self.assertEqual(self.draft.spec, run.spec)
         self.assertTrue(self.insp.method_box.isEnabled())
 
+    def test_new_draft_starts_fresh_from_a_preset_even_while_a_run_is_shown(self):
+        ws = Workspace("t", registry=self.reg)
+        run = ws.add_run(molecules.preset_spec("Oxygen (O2, triplet)"), backend="Fake", compute=False)
+        self.insp.show_run(run)
+        self.insp._fill_new_menu()
+        mol = next(a.menu() for a in self.insp.new_menu.actions() if a.text() == "Molecule")
+        next(a for a in mol.actions() if a.text() == "Methane (CH4)").trigger()
+        self.assertIsNone(self.insp.viewing_run, "the new draft is shown, editable")
+        self.assertEqual(self.draft.spec, molecules.preset_spec("Methane (CH4)"), "the preset's default settings")
+        self.assertTrue(self.insp.method_box.isEnabled())
+        self.assertEqual(self.draft.history[-1].rationale, "new draft: preset Methane (CH4)")
+
     def test_the_codes_tab_shows_each_ticked_code_s_translation(self):
         self.assertEqual([self.insp.codes.horizontalHeaderItem(j).text() for j in range(self.insp.codes.columnCount())], ["Fake"])
         self.assertEqual(self.insp.code_pick.currentText(), "Fake")
@@ -114,6 +126,41 @@ class OneDraftTwoViews(unittest.TestCase):
     def test_the_structure_tab_lists_the_sites_and_says_detection_needs_the_extension(self):
         self.assertEqual(self.insp.sites.rowCount(), 3)
         self.assertIn("qchem_py", self.insp.sym_detected.text(), "no extension handed in: the readout says so")
+
+
+class CrystalBasis(unittest.TestCase):
+    """A picked crystal states no basis (no ε -> periodic basis rule is banked): the Basis box offers the periodic bases that
+    cover its elements, and picking one unlocks Build and SOLID² -- the way out of item 26 (2026-11-11)."""
+
+    def test_a_crystal_picks_a_periodic_basis_covering_its_elements_and_build_says_why_until_then(self):
+        from qviz.backends.solid2 import Solid2Backend
+        from qviz.spec import RunSpec
+        nio = RunSpec.from_dict({"label": "NiO", "structure": {"kind": "crystal",
+                                 "lattice_bohr": [[0, 3.94, 3.94], [3.94, 0, 3.94], [3.94, 3.94, 0]],
+                                 "sites": [{"element": "Ni", "frac": [0, 0, 0]}, {"element": "O", "frac": [0.5, 0.5, 0.5]}]},
+                                 "physics": {"theory": "DFT", "functional": "LDA", "core": "pseudopotential"},
+                                 "accuracy": {"kmesh": [1, 1, 1]}}).validate()
+        draft = SpecDraft(nio)
+        be = Solid2Backend()
+        panel = SetupPanel(draft, BackendRegistry([FakeBackend(), be]))
+        box = panel.basis_box
+        self.assertTrue(box.isEnabled())
+        items = [box.itemText(i) for i in range(box.count())]
+        self.assertEqual(items[0], "— choose a basis —")
+        self.assertIn("valence_lowq_va", items)
+        self.assertNotIn("dzvp", items, "a molecular basis has no pseudopotential valence block")
+        self.assertNotIn("sipp_sr", items, "sipp_sr covers Si and O, not Ni")
+        self.assertFalse(panel.method_box.isEnabled())
+        self.assertIn("periodic facade", panel.method_box.toolTip(), "a disabled control says why")
+        if be.why_no_build(nio) != "choose a basis on the Basis tab (no ε -> periodic basis rule is banked yet)":
+            self.skipTest(be.why_no_build(nio))       # SOLID² not built here
+        self.assertFalse(panel.build_btn.isEnabled())
+        self.assertIn("choose a basis on the Basis tab", panel.build_why.text(), "the reason in plain sight, not a tooltip")
+        box.setCurrentIndex(items.index("valence_lowq_va")); box.activated.emit(0)
+        self.assertEqual(draft.spec.accuracy.representation, {"basis": "valence_lowq_va"})
+        self.assertTrue(panel.build_btn.isEnabled())
+        self.assertFalse(panel.build_why.isVisibleTo(panel))
+        self.assertTrue(panel.be_checks["SOLID²"].isEnabled())
 
 
 class DetectedSymmetry(unittest.TestCase):

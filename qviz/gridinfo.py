@@ -33,7 +33,8 @@ def planned(spec: RunSpec) -> list[str]:
         mr, ma = int(own.get("mesh_radial", mr)), int(own.get("mesh_angular", ma))
         why = "stated" if own else f"from ε = {ac.epsilon_Ha_per_atom:g} Ha/atom (provisional rule)"
         return [f"XC mesh: {mr} radial × Lebedev {ma} per atom, Becke-partitioned ({why})",
-                "Hartree fit mesh: the Coulomb fit basis's own mesh, built with the XC mesh's parameters"]
+                "Hartree fit mesh: the Coulomb fit basis's own mesh (the XC mesh's parameters): ρ is projected onto the fit "
+                "basis on it, ⟨g|ρ⟩, each iteration"]
     deck = solid2_deck.to_deck(spec)
     k = deck.get("kmesh", [1, 1, 1])
     ecut = (deck.get("solid") or {}).get("densityEcut")

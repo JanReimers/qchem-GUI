@@ -99,7 +99,7 @@ class TheLibraryTranslates(unittest.TestCase):
         with self.assertRaisesRegex(materials.MaterialsError, "site Na1 has occupancy 0.5"):
             materials.import_file(str(p))
 
-    def test_save_to_my_materials_lists_it_as_mine_and_never_takes_a_shipped_name(self):
+    def test_save_to_my_materials_lists_it_as_mine(self):
         spec = materials.spec_of("MnO mine", ROCKSALT, ROCKSALT["lattice"]["vectors_bohr"], {"import": ROCKSALT["provenance"]})
         path = materials.save("MnO_mine_test", spec, replace=True)
         self.assertEqual(path, materials.USER_LIBRARY)
@@ -110,10 +110,29 @@ class TheLibraryTranslates(unittest.TestCase):
         back = materials.pick(mine[0])
         self.assertEqual(back.physics.spin.site_moments, (1.0, 0.0))
         self.assertIsInstance(solid2_deck.structure_entry(back), dict, "a user material goes INLINE: the deck does not depend on ~")
-        with self.assertRaisesRegex(materials.MaterialsError, "already in the shipped materials"):
-            materials.save("Si_diamond", spec)
         with self.assertRaisesRegex(materials.MaterialsError, "replace it"):
             materials.save("MnO_mine_test", spec)
+
+    def test_my_materials_may_reuse_a_shipped_name_and_shadow_it(self):
+        """The user, 2026-11-11: "I am saving to MY materials so I should be allowed to reuse the shipped name"."""
+        shared = materials.USER_LIBRARY                       # a library of its own: the shadow must not leak into other tests
+        materials.USER_LIBRARY = os.path.join(_tempfile.mkdtemp(prefix="qchem-gui-shadow-"), "materials.json")
+        self.addCleanup(setattr, materials, "USER_LIBRARY", shared)
+        spec = materials.spec_of("NaF mine", ROCKSALT, ROCKSALT["lattice"]["vectors_bohr"], {"import": ROCKSALT["provenance"]})
+        materials.save("NaF_rocksalt", spec, replace=True)
+        both = [m for m in materials.listing() if m["name"] == "NaF_rocksalt"]
+        self.assertEqual([(m["layer"], m["shadowed"]) for m in both], [("shipped", True), ("user", False)])
+        mine = materials.pick(both[1])
+        self.assertIsInstance(solid2_deck.structure_entry(mine), dict, "yours goes INLINE: a deck names shipped cells only")
+        self.assertEqual(solid2_deck.structure_entry(materials.pick(both[0])), "NaF_rocksalt", "the shipped one is still named")
+        panel = SetupPanel(SpecDraft(), BackendRegistry([FakeBackend()]))
+        panel.refresh_materials()
+        self.assertGreater(panel.material_box.findText("NaF_rocksalt  (shadowed)"), 0)
+        self.assertGreater(panel.material_box.findText("NaF_rocksalt  (mine)"), 0)
+        panel._pick_material(panel.material_box.findText("NaF_rocksalt  (mine)"))
+        self.assertEqual(panel.material_box.currentText(), "NaF_rocksalt  (mine)", "the picker shows the layer it came from")
+        with self.assertRaisesRegex(materials.MaterialsError, "shipped molecule name"):
+            materials.save("H2O", spec)
 
 
 @unittest.skipUnless(live(), "qchem_py with the materials face not built (QCHEM_BUILD)")
@@ -144,7 +163,7 @@ class TheSetupPanel(unittest.TestCase):
 @unittest.skipUnless(live(), "qchem_py with the materials face not built (QCHEM_BUILD)")
 class TheWorkspaceLibrary(unittest.TestCase):
     """A workspace may add its own materials library on top of the user's (OpenWork §2, ruled 2026-11-09): listed after it,
-    saved into on request, stored with the workspace, and one name is one structure across them."""
+    saved into on request, stored with the workspace, and a later layer shadows an earlier one of the same name."""
 
     def setUp(self):
         self.ws_lib = os.path.join(_tempfile.mkdtemp(prefix="qchem-gui-ws-materials-"), "materials.json")
@@ -157,8 +176,9 @@ class TheWorkspaceLibrary(unittest.TestCase):
         self.assertEqual(ms[-1]["layer"], "workspace")
         self.assertNotIn("InTheWorkspace", [m["name"] for m in materials.listing()], "without the workspace it is not listed")
         materials.save("MineToo", self.spec, replace=True, workspace=self.ws_lib)        # the default target is the user's library
-        with self.assertRaisesRegex(materials.MaterialsError, "already in"):
-            materials.save("MineToo", self.spec, workspace=self.ws_lib, into_workspace=True)   # one name, one structure
+        materials.save("MineToo", self.spec, workspace=self.ws_lib, into_workspace=True, replace=True)   # the workspace shadows it
+        too = [m for m in materials.listing(self.ws_lib) if m["name"] == "MineToo"]
+        self.assertEqual([(m["layer"], m["shadowed"]) for m in too], [("user", True), ("workspace", False)])
         with self.assertRaisesRegex(materials.MaterialsError, "no materials library"):
             materials.save("X", self.spec, into_workspace=True)
 

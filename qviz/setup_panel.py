@@ -37,8 +37,13 @@ METHODS = {"HF": ("HF", None), "LDA": ("DFT", "LDA"), "Xalpha": ("DFT", "Xalpha"
 BASES = ("dzvp", "orb1", "dzvp2", "tzvp", "valence_lowq_vb", "sipp_sr")
 ACCELERATORS = ("Auto", "DIIS", "GDM", "Ladder", "Null")   # Auto: the facade's policy (a molecule's is DIIS)
 MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mixing; Kerker/Pulay mix in G space (crystals)
+BASIS_TIP = ("orb1 is the smallest/fastest; valence_lowq_vb / sipp_sr are valence (GTH) bases -- with the pseudopotential "
+             "ticked, the same spec runs on SOLID² and CP2K")
 EPSILONS = ("1e-3", "1e-4", "1e-5", "1e-6", "1e-7")
 _NOT_PRESET = "— draft —"
+_CHOOSE_BASIS = "— choose a basis —"           # a crystal with no basis stated (no ε -> periodic basis rule is banked)
+CRYSTAL_PHYSICS = ("A crystal runs LDA with GTH pseudopotentials: the periodic facade's one pseudopotential set is "
+                   "gth-lda-valence (HF and Xα are molecular here)")
 _SOLID2 = "SOLID²"
 SV_TOLS = ("default", "1e-10", "1e-9", "1e-8", "1e-7", "1e-6", "1e-5")
 ENGAGE_FDS = ("default", "10", "1", "0.1", "0.01", "0.001")
@@ -122,7 +127,14 @@ class SetupPanel(QtWidgets.QWidget):
         self.mode_label = QtWidgets.QLabel(); self.mode_label.setWordWrap(True)
         self.copy_btn = QtWidgets.QPushButton("Copy to new draft")
         self.draft_btn = QtWidgets.QPushButton("Back to draft")
-        head.addWidget(self.mode_label, 1); head.addWidget(self.copy_btn); head.addWidget(self.draft_btn)
+        # NEW DRAFT (the user, 2026-11-11): start fresh from a structure with its default settings, without copying a run
+        self.new_btn = QtWidgets.QToolButton(); self.new_btn.setText("New draft ▾")
+        self.new_btn.setToolTip("Start a new draft from a molecule preset or a material, with its default settings (the draft's "
+                                "edits stay on its undo stack; File ▸ Import crystal starts one from a CIF / POSCAR / xyz file)")
+        self.new_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.new_menu = QtWidgets.QMenu(self.new_btn); self.new_btn.setMenu(self.new_menu)
+        self.new_menu.aboutToShow.connect(self._fill_new_menu)
+        head.addWidget(self.mode_label, 1); head.addWidget(self.new_btn); head.addWidget(self.copy_btn); head.addWidget(self.draft_btn)
         outer.addLayout(head)
         # the library's policies, as the record states them: refusals and warnings shown, automatic choices one click away
         self.policy_loud = QtWidgets.QLabel(); self.policy_loud.setWordWrap(True)
@@ -159,6 +171,9 @@ class SetupPanel(QtWidgets.QWidget):
         self.build_btn.setStyleSheet("padding: 4px 12px")
         buttons = QtWidgets.QHBoxLayout(); buttons.addWidget(self.build_btn); buttons.addWidget(self.add_btn, 1)
         foot.addRow(buttons)
+        self.build_why = QtWidgets.QLabel(); self.build_why.setWordWrap(True)     # why Build (and SOLID²) cannot run: in plain sight
+        self.build_why.setStyleSheet("color: palette(mid)")
+        foot.addRow(self.build_why)
         self._foot = QtWidgets.QWidget(); self._foot.setLayout(foot)
         outer.addWidget(self._foot)
 
@@ -255,8 +270,7 @@ class SetupPanel(QtWidgets.QWidget):
     def _build_basis(self):
         f = self._page("Basis")
         self.basis_box = QtWidgets.QComboBox(); self.basis_box.addItems(BASES)
-        self.basis_box.setToolTip("orb1 is the smallest/fastest; valence_lowq_vb / sipp_sr are valence (GTH) bases -- "
-                                  "with the pseudopotential ticked, the same spec runs on SOLID² and CP2K")
+        self.basis_box.setToolTip(BASIS_TIP)
         self.basis_box.activated.connect(self._on_basis_pick)
         f.addRow("Basis", self.basis_box)
         self.bse_btn = QtWidgets.QPushButton("Basis Set Exchange…")
@@ -476,6 +490,32 @@ class SetupPanel(QtWidgets.QWidget):
     def _on_mult(self, v: int) -> None:
         self._edit({"physics": {"spin": {"multiplicity": v or None, "polarized": v > 1}}}, "multiplicity")
 
+    def _fill_new_menu(self) -> None:
+        """New draft's menu, rebuilt on each show (the materials library may have grown)."""
+        self.new_menu.clear()
+        mol, cry = QtWidgets.QMenu("Molecule", self.new_menu), QtWidgets.QMenu("Crystal", self.new_menu)
+        self._new_submenus = (mol, cry)              # held: PySide frees a submenu whose wrapper goes out of scope
+        self.new_menu.addMenu(mol); self.new_menu.addMenu(cry)
+        for name in molecules.MOLECULES:
+            mol.addAction(name, lambda n=name: self.new_draft(molecules.preset_spec(n), f"new draft: preset {n}"))
+        if not self._materials:
+            self.refresh_materials()
+        for k, m in enumerate(self._materials):
+            cry.addAction(self.material_box.itemText(k + 1), lambda m=m: self._new_material(m))
+        cry.setEnabled(bool(self._materials))
+
+    def _new_material(self, m: dict) -> None:
+        try:
+            self.new_draft(materials.pick(m), f"new draft: material {m['name']}")
+        except Exception as e:                       # noqa: BLE001 -- a malformed user entry: say so, keep the draft
+            self.reason.setText(f"{m['name']}: {e}")
+
+    def new_draft(self, spec: RunSpec, why: str) -> None:
+        """The draft becomes `spec` (a structure with its default settings), shown editable on the Structure tab."""
+        self.show_run(None)
+        self.draft.set(spec, "user", why)
+        self.tabs.setCurrentIndex(0)
+
     def _pick_preset(self, name: str) -> None:
         if self._run is None and name in molecules.MOLECULES:
             self.draft.set(molecules.preset_spec(name), "user", f"Setup: preset {name}")
@@ -512,13 +552,15 @@ class SetupPanel(QtWidgets.QWidget):
         self.material_box.clear()
         self.material_box.addItem(_NOT_PRESET)
         for m in self._materials:
-            self.material_box.addItem(m["name"] + ("" if m["layer"] == "shipped" else f"  ({'mine' if m['layer'] == 'user' else 'workspace'})"))
+            where = {"shipped": [], "user": ["mine"], "workspace": ["workspace"]}[m["layer"]] + (["shadowed"] if m.get("shadowed") else [])
+            self.material_box.addItem(m["name"] + (f"  ({', '.join(where)})" if where else ""))
         self.material_box.blockSignals(False)
         self._render_material(self._spec())
 
     def _render_material(self, s) -> None:
-        name = ((s.structure.source or {}).get("materials") if s is not None and s.structure.kind == "crystal" else None)
-        i = next((k + 1 for k, m in enumerate(self._materials) if m["name"] == name), 0)
+        src = (s.structure.source or {}) if s is not None and s.structure.kind == "crystal" else {}
+        name, layer = src.get("materials"), src.get("layer", "shipped")
+        i = next((k + 1 for k, m in enumerate(self._materials) if m["name"] == name and m["layer"] == layer), 0)
         self.material_box.blockSignals(True)
         self.material_box.setCurrentIndex(i if i < self.material_box.count() else 0)
         self.material_box.blockSignals(False)
@@ -554,7 +596,7 @@ class SetupPanel(QtWidgets.QWidget):
         s = self._spec()
         if s is None or s.structure.kind != "crystal":
             return
-        name, ok = QtWidgets.QInputDialog.getText(self, "Save to my materials", "Name (a new name; the shipped ones are taken):",
+        name, ok = QtWidgets.QInputDialog.getText(self, "Save to my materials", "Name (a shipped one is fine: yours shadows it):",
                                                   text=s.label.replace(" ", "_"))
         if not ok or not name.strip():
             return
@@ -576,8 +618,11 @@ class SetupPanel(QtWidgets.QWidget):
                     != QtWidgets.QMessageBox.Yes:
                 return
             path = save(True)
-        self.reason.setText(f"saved {name} to {path}")
         self.refresh_materials()
+        if self._run is None:                         # the draft IS that entry now: the picker shows it
+            self._edit({"label": name, "structure": {"source": {"materials": name, "layer": "workspace" if into_ws else "user"}}},
+                       f"saved as {name}")
+        self.reason.setText(f"saved {name} to {path}")
 
     def _apply_json(self) -> None:
         try:
@@ -634,8 +679,11 @@ class SetupPanel(QtWidgets.QWidget):
                 w.setEnabled(not ro and s is not None)
             self.material_box.setEnabled(not ro)        # a material starts a draft, even from an empty one
             self.mol_box.setEnabled(not ro)
-            for w in (self.method_box, self.pp_check, self.mult_spin, self.sym_check, self.basis_box):
-                w.setEnabled(not ro and mol)          # a crystal's are stated through its deck (Spec / representation)
+            for w in (self.method_box, self.pp_check, self.mult_spin, self.sym_check):
+                w.setEnabled(not ro and mol)          # a crystal's are fixed by the periodic facade (CRYSTAL_PHYSICS)
+            self.basis_box.setEnabled(not ro and s is not None)
+            for w in (self.method_box, self.pp_check):
+                w.setToolTip(CRYSTAL_PHYSICS if crystal else "")
             self.mult_spin.setVisible(s is None or mol)
             if s is not None:
                 self._render_values(s, mol)
@@ -772,22 +820,36 @@ class SetupPanel(QtWidgets.QWidget):
     # -- back ends ----------------------------------------------------------------
     # -- the basis: shipped files and the downloaded ones (qviz.bse) ------------------------------------------
     def _fill_basis_box(self, s: RunSpec) -> None:
-        """The Basis box: the shipped bases, then every downloaded set (its path as item data), the spec's choice selected."""
+        """The Basis box: a molecule's shipped bases, then every downloaded set (its path as item data); a crystal's periodic
+        bases that cover its elements.  The spec's choice selected (a crystal with none: "choose a basis" first)."""
         basis, file = (s.accuracy.representation or {}).get("basis"), basisinfo.basis_file(s)
         self.basis_box.blockSignals(True)
         self.basis_box.clear()
-        self.basis_box.addItems(BASES)
-        for side in bse.installed():
-            self.basis_box.addItem(f"{side['name']} v{side['version']} (downloaded)", side["path"])
-        if file:
-            i = self.basis_box.findData(file)
-            if i < 0:                                  # the spec names a file this machine does not have
-                self.basis_box.addItem(f"{basis} (missing: {file})", file); i = self.basis_box.count() - 1
-            self.basis_box.setCurrentIndex(i)
-        elif basis:
-            if self.basis_box.findText(basis) < 0:
-                self.basis_box.addItem(basis)
-            self.basis_box.setCurrentText(basis)
+        if s.structure.kind == "crystal":
+            names = solid2_deck.periodic_bases({site.element for site in s.structure.sites})
+            self.basis_box.addItems(names)
+            if not basis:
+                self.basis_box.insertItem(0, _CHOOSE_BASIS); self.basis_box.setCurrentIndex(0)
+            else:
+                if self.basis_box.findText(basis) < 0:
+                    self.basis_box.addItem(basis)
+                self.basis_box.setCurrentText(basis)
+            self.basis_box.setToolTip("The periodic (pseudopotential valence) bases that cover " + ", ".join(
+                sorted({site.element for site in s.structure.sites})) + (": " + ", ".join(names) if names else ": none"))
+        else:
+            self.basis_box.addItems(BASES)
+            for side in bse.installed():
+                self.basis_box.addItem(f"{side['name']} v{side['version']} (downloaded)", side["path"])
+            if file:
+                i = self.basis_box.findData(file)
+                if i < 0:                              # the spec names a file this machine does not have
+                    self.basis_box.addItem(f"{basis} (missing: {file})", file); i = self.basis_box.count() - 1
+                self.basis_box.setCurrentIndex(i)
+            elif basis:
+                if self.basis_box.findText(basis) < 0:
+                    self.basis_box.addItem(basis)
+                self.basis_box.setCurrentText(basis)
+            self.basis_box.setToolTip(BASIS_TIP)
         self.basis_box.blockSignals(False)
         side = next((x for x in bse.installed() if x["path"] == file), None) if file else None
         self.bse_btn.setEnabled(s.structure.kind == "molecule")
@@ -802,6 +864,11 @@ class SetupPanel(QtWidgets.QWidget):
     def _on_basis_pick(self, _i: int) -> None:
         i = self.basis_box.currentIndex()             # the box's own selection (what the person sees picked)
         file = self.basis_box.itemData(i)
+        if self.basis_box.itemText(i) == _CHOOSE_BASIS:
+            return
+        if self.draft.spec is not None and self.draft.spec.structure.kind == "crystal":
+            self._edit({"accuracy": {"representation": {"basis": self.basis_box.itemText(i)}}}, "basis")
+            return
         if file:
             side = next((x for x in bse.installed() if x["path"] == file), None)
             key = side["key"] if side else (self.draft.spec.accuracy.representation or {}).get("basis")
@@ -1022,6 +1089,8 @@ class SetupPanel(QtWidgets.QWidget):
         why = self._why_no_build(s) if s is not None else "the draft is empty"
         pending = s is not None and self._builds.get(s.to_json()) == "pending"
         self.build_btn.setEnabled(why is None and not pending)
+        self.build_why.setText(f"Build and SOLID²: {why}" if why and s is not None else "")
+        self.build_why.setVisible(bool(why) and s is not None)
         self.build_btn.setToolTip(why or "Every pre-SCF step on SOLID² (basis, grids, pseudopotentials), no SCF: the Basis "
                                          "and Grids tabs then show what the library built.  Run reuses it while the spec is unchanged")
 

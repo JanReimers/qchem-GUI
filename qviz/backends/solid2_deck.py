@@ -36,6 +36,22 @@ from .base import code_block, shared_representation
 _PP_SET = {"LDA": "gth-lda-valence"}                 # functional -> the pp set generated for it (pseudopotentials.json)
 _BASES = ("SIPP", "SIPP_SR", "VALENCE_LOWQ", "VALENCE_LOWQ_SR", "VALENCE_LOWQ_SR2", "VALENCE_LOWQ_SPH",
           "VALENCE_LOWQ_VA", "VALENCE_LOWQ_VB")       # BasisSetData values with a pseudopotential valence block
+
+
+def periodic_bases(elements) -> list[str]:
+    """The periodic (pseudopotential valence) bases that cover every one of `elements`, as the Basis box spells them."""
+    from . import gaussian_basis
+    want = {e.upper() for e in elements}
+    out = []
+    for b in _BASES:
+        try:
+            if want <= set(gaussian_basis.read_bsd(b.lower())):
+                out.append(b.lower())
+        except (OSError, ValueError):                 # a basis file this checkout lacks: not offered
+            pass
+    return out
+
+
 _PROJECTOR = {"ortho-atomic": {"orthoAtomic": True}, "pseudo-atomic": {"projector": "pseudoAtomic"},
               "lowdin": {"projector": "siteShells"}}
 _SOLID2_KEYS = {"deck"}                               # representation["solid2"] keys a crystal reads
@@ -93,7 +109,7 @@ def why_not(spec: RunSpec) -> Optional[str]:
     if set(rep) - {"basis"}:
         return f"representation {sorted(set(rep) - {'basis'})} not read by the periodic facade"
     if "basis" not in rep:
-        return "state representation.basis (no ε -> periodic basis rule is banked yet)"
+        return "choose a basis on the Basis tab (no ε -> periodic basis rule is banked yet)"
     if rep["basis"].upper() not in _BASES:
         return f"basis {rep['basis']} has no pseudopotential valence block (periodic bases: {', '.join(b.lower() for b in _BASES)})"
     if set(code_block(spec, "solid2")) - _SOLID2_KEYS:
@@ -131,7 +147,8 @@ def _sign(m: float) -> int:
 def structure_entry(spec: RunSpec) -> str | dict:
     """The deck's `structure`: a materials.json name when the spec is that entry, else the inline entry."""
     src = (spec.structure.source or {}).get("materials")
-    if src and _material_mismatch(spec, src) is None:
+    shipped = (spec.structure.source or {}).get("layer", "shipped") == "shipped"   # a deck names SHIPPED cells only (yours may shadow one)
+    if src and shipped and _material_mismatch(spec, src) is None:
         return src
     entry: dict = {"lattice": {"vectors_bohr": [list(r) for r in spec.structure.lattice_bohr]},
                    "atoms": [{"el": s.element, "frac": list(s.frac)} for s in spec.structure.sites]}

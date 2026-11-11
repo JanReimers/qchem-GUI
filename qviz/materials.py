@@ -66,7 +66,8 @@ def available() -> bool:
 
 def listing(workspace: Optional[str] = None) -> list[dict]:
     """Every material over the shipped file, the user's library and the workspace's (when it has one), in that order:
-    [{name, layer, file, entry, lattice_bohr}].  One name lives in one layer: a collision is the library's refusal."""
+    [{name, layer, file, shadowed, entry, lattice_bohr}].  A later layer SHADOWS an earlier one of the same name (the user,
+    2026-11-11): both are listed, the hidden one `shadowed`."""
     return ask("list", libraries=_layers(workspace))["materials"]
 
 
@@ -132,12 +133,12 @@ def export_text(spec: RunSpec, fmt: str) -> str:
 
 def save(name: str, spec: RunSpec, replace: bool = False, workspace: Optional[str] = None, into_workspace: bool = False) -> str:
     """Save the crystal to the user's library, or (`into_workspace`) to the workspace's -- never the shipped file; returns the
-    file's path.  A shipped name, another layer's name, or an existing one without `replace` is refused by the library."""
+    file's path.  A name already in that library without `replace` (or a shipped molecule's) is refused by the library; a
+    shipped or another layer's name is fine -- the later layer shadows."""
     if into_workspace and not workspace:
         raise MaterialsError("this workspace has no materials library: choose one first")
     into = {"layer": "workspace", "path": workspace} if into_workspace else {"layer": "user", "path": user_library()}
-    others = [l for l in _layers(workspace) if l["path"] != into["path"]]
-    return ask("save", into=into, name=name, entry=entry_of(spec), replace=replace, libraries=others)["path"]
+    return ask("save", into=into, name=name, entry=entry_of(spec), replace=replace)["path"]
 
 
 def parse_spins(text: str, n_sites: int) -> Optional[tuple[float, ...]]:
