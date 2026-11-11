@@ -322,10 +322,35 @@ class Conditioning(unittest.TestCase):
         from qviz import gridinfo
         rows = [{"irrep": "A1 ", "nFunctions": 12, "lambdaMin": 5e-4, "cond": 9e3}, {"irrep": "B1", "nFunctions": 5, "lambdaMin": 0.05, "cond": 48.0}]
         whole = {"lambdaMin": 5e-4, "lambdaMinAt": "A1 ", "cond": 9e3, "condAt": "A1 ", "floor": 1e-3, "wouldDrop": 2}
-        worst, a1, b1 = gridinfo.conditioning({"m@1": {"basis": {"perIrrep": rows, "conditioning": whole}}})
+        worst, a1, b1, verdict = gridinfo.conditioning({"m@1": {"basis": {"perIrrep": rows, "conditioning": whole}}})
+        self.assertEqual(verdict, '⚠ near-singular: tick "remove near-dependent diffuse shells" and Build again')
         self.assertEqual(worst, "worst: S min eigenvalue 5.000e-04 at A1, condition number 9e+03 at A1; 2 function(s) would drop at floor 0.001")
         self.assertIn("⚠", a1, "under the library's floor, whatever that floor is")
         self.assertNotIn("⚠", b1)
+
+
+class TheTrimIsReported(unittest.TestCase):
+    """GUI item 27 (2026-11-11): "what was removed?  What is min eigenvalue, condition after the removal?  I can't tell if I am good
+    to go" -- the vet stage's own record (basisTrim) and the redundant functions a pivoted Cholesky would drop (basis.redundant)."""
+
+    def test_the_trim_says_what_went_and_s_before_and_after_and_the_verdict(self):
+        from qviz import gridinfo
+        whole = {"lambdaMin": 1.09e-6, "lambdaMinAt": "(0,0,0)", "cond": 9.8e6, "condAt": "(0,0,0)", "floor": 1e-6, "wouldDrop": 0}
+        trim = {"orthoTol": 1e-6, "lambdaMinBefore": -5.13e-8, "lambdaMinAfter": 1.09e-6, "nShellsRemoved": 2,
+                "passes": [{"removes": "Ni l=0 {0.06}"}, {"removes": "Ni l=0 {0.167104}"}]}
+        lines = gridinfo.conditioning({"nio build@1": {"basisTrim": trim, "basis": {"nFunctions": 98, "conditioning": whole,
+                                       "perIrrep": [{"irrep": "(0,0,0)", "nFunctions": 98, "lambdaMin": 1.09e-6, "cond": 9.8e6}]}}})
+        self.assertIn("trimmed at orthoTol 1e-06: Ni l=0 {0.06}; Ni l=0 {0.167104} -- S min eigenvalue -5.130e-08 → 1.090e-06", lines)
+        self.assertEqual(lines[-1], "✓ conditioning OK: no function near-dependent at the floor")
+
+    def test_redundant_functions_are_a_report_never_called_removed(self):
+        from qviz import gridinfo
+        whole = {"lambdaMin": -5e-8, "lambdaMinAt": "(0,0,0)", "cond": 4e8, "condAt": "(0,0,0)", "floor": 1e-6, "wouldDrop": 5}
+        lines = gridinfo.conditioning({"nio build@1": {"basis": {"conditioning": whole, "redundant": [{"irrep": "(0,0,0)", "index": 7}],
+                                       "perIrrep": [{"irrep": "(0,0,0)", "nFunctions": 104, "lambdaMin": -5e-8, "cond": 4e8}]}}})
+        self.assertTrue(any("redundant (a pivoted Cholesky would drop them; nothing removed): (0,0,0) #7" in l for l in lines), lines)
+        self.assertFalse(any("removed" in l and "nothing removed" not in l for l in lines), lines)
+        self.assertTrue(lines[-1].startswith("⚠ near-singular: tick"))
 
 
 class TheBridgeRunsThem(unittest.TestCase):

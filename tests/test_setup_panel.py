@@ -161,6 +161,13 @@ class CrystalBasis(unittest.TestCase):
         self.assertTrue(panel.build_btn.isEnabled())
         self.assertFalse(panel.build_why.isVisibleTo(panel))
         self.assertTrue(panel.be_checks["SOLID²"].isEnabled())
+        panel.trim_check.click()                       # the vet-stage trim, through the deck
+        deck = draft.spec.accuracy.representation["solid2"]["deck"]
+        self.assertEqual((deck["basis"], deck["solid"]), ({"autoTrim": True}, {"orthoTol": 1e-6}))
+        from qviz.backends import solid2_deck
+        self.assertTrue(solid2_deck.to_deck(draft.spec)["basis"]["autoTrim"])
+        panel.trim_check.click()
+        self.assertFalse(solid2_deck.to_deck(draft.spec)["basis"].get("autoTrim"), "unticked: no trim stated")
 
 
 class DetectedSymmetry(unittest.TestCase):
@@ -468,6 +475,14 @@ class GridsTab(unittest.TestCase):
         self.assertRegex(res.resolved["SCF gates"], r"^run: \[F,D\] 1e-05, density change 0.0001; at most \d+ iterations$",
                          "the gates the record says the SCF used; off (1e30) gates are not listed")
         self.assertTrue(be.translate(w).resolved["SCF gates"].startswith("planned:"))
+
+    def test_a_build_says_the_pilot_has_not_sized_its_rasters_yet(self):
+        from qviz import gridinfo
+        g = {"raster": {"x": 0, "vlocX": 0, "xcX": 0}, "rasterSource": "pilot"}
+        built = gridinfo.built({"nio build@1": {"grids": g}})[0]
+        self.assertIn("rasters: the ball's own for now -- ε sizes them in the raster pilot at the start of Run (Build stops before it)", built)
+        ran = gridinfo.built({"nio@2": {"grids": g, "rasterPilot": {"settled": True}}})[0]
+        self.assertIn("rasters: the ball's own (sized by the pilot)", ran)
 
     def test_a_fit_grid_is_named_for_whose_it_is(self):
         from qviz import gridinfo

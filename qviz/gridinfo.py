@@ -134,7 +134,11 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
         r, src = g["raster"], g.get("rasterSource")
         xs = (r.get("x", 0), r.get("vlocX", 0), r.get("xcX", 0))
         what = "the ball's own" if not any(xs) else "x(density, V_long, XC) = (" + ", ".join(f"{x:.3g}" if x else "ball" for x in xs) + ")"
-        lines.append(f"rasters: {what}" + (f" ({RASTER_SOURCES.get(src, src)})" if src else ""))
+        piloted = any(run.get("rasterPilot") for b in (False, True) for run in _runs(record, b))
+        if src == "pilot" and not piloted:      # a Build stops before the pilot: ε has not sized these yet (GUI item 28)
+            lines.append(f"rasters: {what} for now -- ε sizes them in the raster pilot at the start of Run (Build stops before it)")
+        else:
+            lines.append(f"rasters: {what}" + (f" ({RASTER_SOURCES.get(src, src)})" if src else ""))
     if q.get("kind") and "points" not in q:
         lines.append(f"XC quadrature: {q['kind']}")
     for what, f in (("Vxc fit", vxc.get("vxcFitGrid")), ("mixer's Vxc fit", _section(record, "densityMixer").get("vxcFitGrid"))):
@@ -153,7 +157,9 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
 
 def conditioning(record: Optional[dict]) -> list[str]:
     """Overlap conditioning from a record's basis section, one row per block (S has no spin; a crystal's blocks are per k), under
-    the library's verdict on the whole: the [basis trim] facts.  Below the library's floor is a run to look at, not a wrong one."""
+    a verdict line (OK / near-singular) and the library's facts on the whole: the vet-stage trim (basisTrim: the shells it removed,
+    S's min eigenvalue before -> after) and the redundant functions a pivoted Cholesky would drop (basis.redundant: a report,
+    nothing removed).  Below the library's floor is a run to look at, not a wrong one."""
     out = []
     for build in (True, False):
         for run in _runs(record, build):
@@ -170,9 +176,21 @@ def conditioning(record: Optional[dict]) -> list[str]:
                               f"at floor {whole['floor']:g}")
             if out and "nFunctions" in basis:
                 out.insert(0, f"{basis['nFunctions']} functions" + (f" ({basis['name']})" if basis.get("name") else ""))
-            removed = (run.get("basis") or {}).get("removed")
-            if removed:
-                out.append(f"[basis trim] removed {len(removed)} near-dependent combination(s)")
+            trim = run.get("basisTrim") or {}
+            if trim:                            # the vet stage REMOVED shells: which, and S before -> after (its own record)
+                gone = [p["removes"] for p in trim.get("passes") or []]
+                out.append(f"trimmed at orthoTol {trim['orthoTol']:g}: " + ("; ".join(gone) if gone else "nothing to remove")
+                           + f" -- S min eigenvalue {trim['lambdaMinBefore']:.3e} → {trim['lambdaMinAfter']:.3e}")
+            redundant = basis.get("redundant")
+            if redundant:                       # a REPORT: what a pivoted Cholesky would drop; nothing was removed
+                out.append(f"⚠ {len(redundant)} function(s) redundant (a pivoted Cholesky would drop them; nothing removed): "
+                           + ", ".join(f"{r['irrep'].strip()} #{r['index']}" for r in redundant[:8]) + (" …" if len(redundant) > 8 else ""))
+            if out and whole:                   # the verdict the person asked for: is this basis good to go?
+                ok = whole.get("wouldDrop", 0) == 0 and whole.get("lambdaMin", 0.0) >= whole.get("floor", 0.0)
+                out.append("✓ conditioning OK: no function near-dependent at the floor" if ok else
+                           "⚠ near-singular: " + ("tick \"remove near-dependent diffuse shells\" and Build again" if not trim
+                                                     else "still near-dependent after the trim"))
+
             if out:
                 return out
     return out
