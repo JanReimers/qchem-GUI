@@ -83,6 +83,18 @@ def _shared_basis_problem(s: RunSpec) -> Optional[str]:
     return gaussian_basis.why_not_cp2k(name, [st.element for st in s.structure.sites])
 
 
+def _unstated_basis(s: RunSpec) -> Optional[str]:
+    """Why CP2K has no basis for `s` (None: it has one).  NO DEFAULT (the user, 2026-11-11): a CP2K-only fallback basis made one
+    draft run on CP2K while SOLID² refused it, on a basis the spec never named -- the basis is chosen once, in the spec."""
+    if _shared_basis(s):
+        return None
+    kinds = _cp2k_rep(s).get("kinds") or {}
+    bare = sorted({st.element for st in s.structure.sites
+                   if "basis" not in (kinds.get(st.tag or "") or kinds.get(st.element) or {})})
+    return ("choose a basis on the Basis tab (CP2K is handed the same basis), or state representation['cp2k'] kinds' basis for "
+            + ", ".join(bare)) if bare else None
+
+
 class Cp2kBackend:
     name = NAME
 
@@ -116,6 +128,7 @@ class Cp2kBackend:
                        "a stated representation is a shared basis, or CP2K settings under representation['cp2k'] with known keys"),
             Capability("accuracy.representation.basis converts", lambda s: _shared_basis_problem(s) is None,
                        lambda s: _shared_basis_problem(s)),
+            Capability("a basis is stated", lambda s: _unstated_basis(s) is None, lambda s: _unstated_basis(s)),
         ])
 
     # -- translate ----------------------------------------------------------
@@ -218,7 +231,7 @@ class Cp2kBackend:
             w(f"    &KIND {k['name']}")
             if k["name"] != k["element"]:
                 w(f"      ELEMENT {k['element']}")
-            w(f"      BASIS_SET {stated_basis if shared else sk.get('basis', 'DZVP-MOLOPT-SR-GTH')}")
+            w(f"      BASIS_SET {stated_basis if shared else sk['basis']}")   # stated: the capability refuses an unstated one
             w(f"      POTENTIAL {sk.get('potential') or default_pp(k['element'])}")
             for h in ph.hubbard:
                 if k["tag"] in h.sites:
@@ -244,7 +257,7 @@ class Cp2kBackend:
             "spin": f"UKS, multiplicity {mult}" if polarized else "RKS",
             "smearing": (f"Fermi-Dirac kT {ph.occupations.kT_Ha:.1E} Ha, ADDED_MOS {added_mos}"
                          + (" stated" if "added_mos" in rep else " (8 per site)")) if ph.occupations.smearing == "fermi-dirac" else "none",
-            "kinds": ", ".join(f"{k['name']}: {stated_basis + ' (SOLID² ' + shared + '.bsd, converted)' if shared else (stated_kinds.get(k['name']) or stated_kinds.get(k['element']) or {}).get('basis', 'DZVP-MOLOPT-SR-GTH')}"
+            "kinds": ", ".join(f"{k['name']}: {stated_basis + ' (SOLID² ' + shared + '.bsd, converted)' if shared else (stated_kinds.get(k['name']) or stated_kinds.get(k['element']) or {})['basis']}"
                                f" / {(stated_kinds.get(k['name']) or stated_kinds.get(k['element']) or {}).get('potential') or default_pp(k['element'])}"
                                for k in kinds),
             "k-points": "MP " + "x".join(map(str, ac.kmesh)) if ac.kmesh and tuple(ac.kmesh) != (1, 1, 1) else "Γ",

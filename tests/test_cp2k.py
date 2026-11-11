@@ -132,6 +132,24 @@ class TranslateMatchesTheBankedDecks(unittest.TestCase):
         ours = self.compare(mno_oracle(), "mno_afm2_gpw_va_plusU.inp")
         self.assertIn(("NEL", "-5"), ours["FORCE_EVAL/SUBSYS/KIND Mn2/BS/ALPHA"], "the -m sublattice flips")
 
+    def test_no_basis_stated_is_refused_never_defaulted(self):
+        """The user, 2026-11-11: a CP2K-only fallback (DZVP-MOLOPT-SR-GTH) let a picked crystal run on CP2K while SOLID² refused
+        it, on a basis the spec never named.  The basis is chosen once, in the spec; CP2K says so like SOLID² does."""
+        from qviz.spec import RunSpec
+        nio = RunSpec.from_dict({"label": "NiO", "structure": {"kind": "crystal",
+                                 "lattice_bohr": [[0, 3.94, 3.94], [3.94, 0, 3.94], [3.94, 3.94, 0]],
+                                 "sites": [{"element": "Ni", "frac": [0, 0, 0]}, {"element": "O", "frac": [0.5, 0.5, 0.5]}]},
+                                 "physics": {"theory": "DFT", "functional": "LDA", "core": "pseudopotential"},
+                                 "accuracy": {"kmesh": [1, 1, 1]}}).validate()
+        why = "; ".join(CP2K.capabilities().can_run(nio).reasons)
+        if not CP2K.capabilities().installed:
+            self.skipTest(why)
+        self.assertIn("choose a basis on the Basis tab", why)
+        self.assertIn("Ni, O", why)
+        stated = RunSpec.from_dict({**nio.to_dict(), "accuracy": {"kmesh": [1, 1, 1], "representation": {"cp2k": {
+            "kinds": {"Ni": {"basis": "DZVP-MOLOPT-SR-GTH"}, "O": {"basis": "DZVP-MOLOPT-SR-GTH"}}}}}}).validate()
+        self.assertNotIn("choose a basis", "; ".join(CP2K.capabilities().can_run(stated).reasons), "a CP2K kinds basis is a stated one")
+
     def test_the_launch_is_always_mpirun(self):
         job = CP2K.translate(si_oracle())
         argv = CP2K.runner.argv(job.command + ("-i", "x.inp"))
