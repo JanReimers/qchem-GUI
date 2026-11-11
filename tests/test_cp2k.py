@@ -144,11 +144,10 @@ class TranslateMatchesTheBankedDecks(unittest.TestCase):
         why = "; ".join(CP2K.capabilities().can_run(nio).reasons)
         if not CP2K.capabilities().installed:
             self.skipTest(why)
-        self.assertIn("choose a basis on the Basis tab", why)
-        self.assertIn("Ni, O", why)
+        self.assertIn("Orbital basis must be user selected", why)
         stated = RunSpec.from_dict({**nio.to_dict(), "accuracy": {"kmesh": [1, 1, 1], "representation": {"cp2k": {
             "kinds": {"Ni": {"basis": "DZVP-MOLOPT-SR-GTH"}, "O": {"basis": "DZVP-MOLOPT-SR-GTH"}}}}}}).validate()
-        self.assertNotIn("choose a basis", "; ".join(CP2K.capabilities().can_run(stated).reasons), "a CP2K kinds basis is a stated one")
+        self.assertNotIn("Orbital basis must be user selected", "; ".join(CP2K.capabilities().can_run(stated).reasons), "a CP2K kinds basis is a stated one")
 
     def test_the_launch_is_always_mpirun(self):
         job = CP2K.translate(si_oracle())

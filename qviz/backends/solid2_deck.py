@@ -109,7 +109,7 @@ def why_not(spec: RunSpec) -> Optional[str]:
     if set(rep) - {"basis"}:
         return f"representation {sorted(set(rep) - {'basis'})} not read by the periodic facade"
     if "basis" not in rep:
-        return "choose a basis on the Basis tab (no ε -> periodic basis rule is banked yet)"
+        return "Orbital basis must be user selected"
     if rep["basis"].upper() not in _BASES:
         return f"basis {rep['basis']} has no pseudopotential valence block (periodic bases: {', '.join(b.lower() for b in _BASES)})"
     if set(code_block(spec, "solid2")) - _SOLID2_KEYS:

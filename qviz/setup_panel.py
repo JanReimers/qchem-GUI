@@ -41,7 +41,7 @@ BASIS_TIP = ("orb1 is the smallest/fastest; valence_lowq_vb / sipp_sr are valenc
              "ticked, the same spec runs on SOLID² and CP2K")
 EPSILONS = ("1e-3", "1e-4", "1e-5", "1e-6", "1e-7")
 _NOT_PRESET = "— draft —"
-_CHOOSE_BASIS = "— choose a basis —"           # a crystal with no basis stated (no ε -> periodic basis rule is banked)
+_CHOOSE_BASIS = "— choose a basis —"           # a crystal with no basis stated: the orbital basis is user selected
 CRYSTAL_PHYSICS = ("A crystal runs LDA with GTH pseudopotentials: the periodic facade's one pseudopotential set is "
                    "gth-lda-valence (HF and Xα are molecular here)")
 _SOLID2 = "SOLID²"

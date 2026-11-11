@@ -129,7 +129,7 @@ class OneDraftTwoViews(unittest.TestCase):
 
 
 class CrystalBasis(unittest.TestCase):
-    """A picked crystal states no basis (no ε -> periodic basis rule is banked): the Basis box offers the periodic bases that
+    """A picked crystal states no basis (the orbital basis is user selected): the Basis box offers the periodic bases that
     cover its elements, and picking one unlocks Build and SOLID² -- the way out of item 26 (2026-11-11)."""
 
     def test_a_crystal_picks_a_periodic_basis_covering_its_elements_and_build_says_why_until_then(self):
@@ -152,10 +152,10 @@ class CrystalBasis(unittest.TestCase):
         self.assertNotIn("sipp_sr", items, "sipp_sr covers Si and O, not Ni")
         self.assertFalse(panel.method_box.isEnabled())
         self.assertIn("periodic facade", panel.method_box.toolTip(), "a disabled control says why")
-        if be.why_no_build(nio) != "choose a basis on the Basis tab (no ε -> periodic basis rule is banked yet)":
+        if be.why_no_build(nio) != "Orbital basis must be user selected":
             self.skipTest(be.why_no_build(nio))       # SOLID² not built here
         self.assertFalse(panel.build_btn.isEnabled())
-        self.assertIn("choose a basis on the Basis tab", panel.build_why.text(), "the reason in plain sight, not a tooltip")
+        self.assertIn("Orbital basis must be user selected", panel.build_why.text(), "the reason in plain sight, not a tooltip")
         box.setCurrentIndex(items.index("valence_lowq_va")); box.activated.emit(0)
         self.assertEqual(draft.spec.accuracy.representation, {"basis": "valence_lowq_va"})
         self.assertTrue(panel.build_btn.isEnabled())

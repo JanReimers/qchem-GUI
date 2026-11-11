@@ -91,8 +91,7 @@ def _unstated_basis(s: RunSpec) -> Optional[str]:
     kinds = _cp2k_rep(s).get("kinds") or {}
     bare = sorted({st.element for st in s.structure.sites
                    if "basis" not in (kinds.get(st.tag or "") or kinds.get(st.element) or {})})
-    return ("choose a basis on the Basis tab (CP2K is handed the same basis), or state representation['cp2k'] kinds' basis for "
-            + ", ".join(bare)) if bare else None
+    return "Orbital basis must be user selected" if bare else None
 
 
 class Cp2kBackend:
