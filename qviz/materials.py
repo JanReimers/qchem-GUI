@@ -71,6 +71,11 @@ def listing(workspace: Optional[str] = None) -> list[dict]:
     return ask("list", libraries=_layers(workspace))["materials"]
 
 
+#: A new draft's linear mixing step α, STATED (the user, 2026-11-12: "make the alpha_start default 0.2 rather than 1.0.  I keep forgetting
+#: and run into trouble every time").  Stated in the draft, not hidden in a translation: the Spec tab shows it and a deck states it.
+DRAFT_ALPHA = 0.2
+
+
 def spec_of(label: str, entry: dict, lattice_bohr, source: dict) -> RunSpec:
     """The crystal spec an entry denotes: its cell (rows a, b, c, bohr -- the library resolved a Bravais entry) and its sites,
     with the default physics a picked crystal starts from (LDA with the pseudopotentials; the user edits the draft).  The
@@ -82,7 +87,7 @@ def spec_of(label: str, entry: dict, lattice_bohr, source: dict) -> RunSpec:
         "structure": {"kind": "crystal", "lattice_bohr": [list(r) for r in lattice_bohr],
                       "sites": [{"element": a["el"], "frac": list(a["frac"])} for a in entry["atoms"]], "source": source},
         "physics": {"theory": "DFT", "functional": "LDA", "core": "pseudopotential", "spin": spin},
-        "accuracy": {"kmesh": [1, 1, 1]}}).validate()
+        "accuracy": {"kmesh": [1, 1, 1], "scf": {"mixing_alpha": DRAFT_ALPHA}}}).validate()
 
 
 def pick(material: dict) -> RunSpec:

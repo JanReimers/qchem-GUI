@@ -404,6 +404,34 @@ class TheBridgeRunsThem(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("KerkerG0 > 0", r.stderr + r.stdout)
 
+    def test_a_stated_seed_and_spherical_gaussians_reach_a_deck_the_library_takes(self):
+        import dataclasses
+        for seed in ("SAD", "IonicSAD", "CoreGuess", "Uniform"):
+            with self.subTest(seed):
+                deck = json.loads(solid2().translate(si_inline(seed=seed)).native["deck"])
+                self.assertEqual(deck["solid"]["seed"], seed)
+                r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
+                self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        s = si_inline()
+        s = dataclasses.replace(s, accuracy=dataclasses.replace(s.accuracy, representation={**s.accuracy.representation, "spherical": True}))
+        deck = json.loads(solid2().translate(s).native["deck"])
+        self.assertIs(deck["basis"]["spherical"], True)
+        r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
+    def test_a_molecule_runs_the_seed_and_gaussians_it_states(self):
+        from qviz import molecules
+        import dataclasses
+        be = solid2()
+        spec = molecules.preset_spec("Methane (CH4)")
+        sc = {**spec.accuracy.scf, "seed": "SAD", "impose_symmetry": False}
+        spec = dataclasses.replace(spec, accuracy=dataclasses.replace(spec.accuracy, scf=sc,
+                                                                      representation={**spec.accuracy.representation, "spherical": True}))
+        job = be.translate(spec)
+        self.assertEqual((job.native["seed"], job.native["spherical"]), ("SAD", True))
+        res = be.run(job)
+        self.assertTrue(res.converged, res.failure)
+
     def test_the_linear_alphas_reach_the_deck(self):
         deck = json.loads(solid2().translate(si_inline(mixer="Linear", mixing_alpha=0.3, mixing_alpha_max=0.5)).native["deck"])
         self.assertEqual((deck["scf"]["startingRelaxRo"], deck["scf"]["maxRelaxRo"]), (0.3, 0.5))

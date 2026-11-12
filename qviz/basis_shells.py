@@ -86,6 +86,24 @@ class ShellDialog(QtWidgets.QDialog):
 
     COLUMNS = ("on", "element", "l", "exponent(s)", "functions", "autoTrim", "λ_min if toggled", "cond if toggled",
                "drops if toggled", "near-null share")
+    #: what each column says, for a reader who has not met it (the header tooltips; the user, 2026-11-12: "explain the near null share")
+    TIPS = ("Tick to keep the shell, untick to switch it off (from every site of its element, at every k).  A contracted shell "
+            "cannot be switched off here",
+            "The element whose sites carry the shell",
+            "The shell's angular momentum: s, p, d, f, ...",
+            "The Gaussian exponent(s) α in a.u.: a SMALL α is a DIFFUSE function, the usual cause of near-dependence in a crystal",
+            "Functions per site this shell adds (2l+1 spherical; Cartesian d has 6, f 10)",
+            "✂: the vet stage's own trim (autoTrim at the floor) would remove this shell",
+            "The overlap matrix S's lowest eigenvalue, at the worst k, if this ONE shell were switched (off if on, on if off).  "
+            "Near 0 means the basis is nearly linearly dependent; bigger is healthier",
+            "S's condition number (largest / smallest eigenvalue) at the worst k if this ONE shell were switched.  Smaller is healthier",
+            "How many functions would still fall under the floor (summed over k) if this ONE shell were switched.  0 = good to go "
+            "(green: switching this shell alone fixes the basis)",
+            "NEAR-NULL SHARE.  When the basis is near-singular, S has eigenvectors with eigenvalues under the floor: directions in "
+            "which some combination of functions almost cancels (a function nearly equal to a sum of its neighbours).  This column "
+            "is the fraction of those vectors' weight (at the worst k) that sits on this shell's functions.  The shares add up to 1, "
+            "so the shell with the largest share is the one most responsible for the near-dependence: switching it off usually "
+            "helps most.  0 when the basis is healthy (there are no such vectors)")
 
     def __init__(self, table: ShellTable, apply: Callable[[list[dict]], None], parent=None):
         super().__init__(parent)
@@ -100,12 +118,17 @@ class ShellDialog(QtWidgets.QDialog):
         note = QtWidgets.QLabel("A shell goes from every site of its element and every k.  'if toggled': S with that ONE shell "
                                 "switched off (or back on) -- lowest eigenvalue and condition number at the worst k, and the "
                                 "functions that would still drop at the floor (0 = good to go).  'autoTrim': ✂ where the vet "
-                                "stage's own trim at the floor removes the shell.  'near-null share': its weight in the "
-                                "eigenvectors under the floor at the worst k.  Sort by any column.")
+                                "stage's own trim at the floor removes the shell.  'near-null share': how much of the basis's "
+                                "near-dependence sits on this shell -- the share of S's eigenvectors under the floor (the "
+                                "nearly cancelling combinations of functions) carried by its functions at the worst k; the "
+                                "shares add up to 1, and the largest is the likeliest culprit.  Hover a column header for more.  "
+                                "Sort by any column.")
         note.setWordWrap(True); note.setStyleSheet("color: palette(mid)")
         lay.addWidget(note)
         self.grid = QtWidgets.QTableWidget(len(table.shells), len(self.COLUMNS))
         self.grid.setHorizontalHeaderLabels(self.COLUMNS)
+        for c, tip in enumerate(self.TIPS):
+            self.grid.horizontalHeaderItem(c).setToolTip(tip)
         self.grid.verticalHeader().setVisible(False)
         self.grid.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.grid.itemChanged.connect(self._on_item)

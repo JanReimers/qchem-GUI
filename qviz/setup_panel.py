@@ -199,16 +199,17 @@ class SetupPanel(QtWidgets.QWidget):
 
     def _build_structure(self):
         f = self._page("Structure"); self._sform = f
-        self.mol_box = QtWidgets.QComboBox(); self.mol_box.addItems(molecules.MOLECULES.keys())
-        self.mol_box.activated.connect(lambda _i: self._pick_preset(self.mol_box.currentText()))
-        f.addRow("Preset", self.mol_box)
-        # THE MATERIALS PICKER (OpenWork §2, 2026-11-09): the library's layers -- the shipped materials, then "mine" (the user's
-        # ~/.solid2/materials.json, where Save to my materials writes).  Filled from the library on first show and after a save.
-        self.material_box = QtWidgets.QComboBox()
-        self.material_box.setToolTip("A crystal from the library's materials: the shipped ones, then yours (Save to my materials)")
-        self.material_box.activated.connect(self._pick_material)
+        # ONE STRUCTURE PICKER (the user, 2026-11-12: "How are Preset and Material supposed to interact.  Do we need both?"): the
+        # molecule presets, then the library's crystals by layer -- the shipped materials, "mine" (~/.solid2/materials.json, where
+        # Save to my materials writes) and this workspace's.  Either replaces the draft; the first row names the draft when it is
+        # neither (edited, imported, or empty).
+        self.structure_box = QtWidgets.QComboBox()
+        self.structure_box.setToolTip("Start the draft from a molecule preset or a crystal from the materials library (the shipped "
+                                      "ones, then yours, then this workspace's); either replaces the draft's structure and settings")
+        self.structure_box.activated.connect(self._pick_structure)
         self._materials: list[dict] = []
-        f.addRow("Material", self.material_box)
+        f.addRow("Structure", self.structure_box)
+        self._fill_structure_box()
         self._ws_library: Optional[str] = None
         wsl = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(wsl); h.setContentsMargins(0, 0, 0, 0)
         self.ws_library_label = QtWidgets.QLabel("none"); self.ws_library_label.setWordWrap(True)
@@ -277,6 +278,12 @@ class SetupPanel(QtWidgets.QWidget):
         self.basis_box.setToolTip(BASIS_TIP)
         self.basis_box.activated.connect(self._on_basis_pick)
         f.addRow("Basis", self.basis_box)
+        self.angular_box = QtWidgets.QComboBox(); self.angular_box.addItems(("Cartesian", "Spherical"))
+        self.angular_box.setToolTip("The Gaussians' angular form.  Cartesian (the default): 6 d and 10 f functions per shell, which carry "
+                                    "an s (d) or p (f) contaminant.  Spherical: real solid harmonics, 5 d and 7 f, no contaminant.  "
+                                    "A molecule with point-group blocking is Cartesian only (the SALC builder needs Cartesian shells)")
+        self.angular_box.activated.connect(lambda i: self._edit({"accuracy": {"representation": {"spherical": True if i == 1 else None}}}, "Gaussians"))
+        f.addRow("Gaussians", self.angular_box)
         self.bse_btn = QtWidgets.QPushButton("Basis Set Exchange…")
         self.bse_btn.setToolTip("Download an orbital basis for this molecule's elements from basissetexchange.org; it is saved with "
                                 "its version and citations under ~/.solid2/bases and listed in the Basis box")
@@ -328,6 +335,11 @@ class SetupPanel(QtWidgets.QWidget):
         self.fresh_btn.clicked.connect(lambda: self._continue_with(None, "Setup: start from scratch"))
         sl.addWidget(self.start_label, 1); sl.addWidget(self.fresh_btn)
         f.addRow("Starts from", start)
+        self.seed_box = QtWidgets.QComboBox()
+        self.seed_box.setToolTip("The density the first iteration starts from (a fresh run; a saved state replaces it).  Auto: the "
+                                 "code's own choice, named here")
+        self.seed_box.activated.connect(lambda _i: self._edit({"accuracy": {"scf": {"seed": self.seed_box.currentData()}}}, "seed"))
+        f.addRow("Starting ρ", self.seed_box)
         self.acc_box = QtWidgets.QComboBox(); self.acc_box.addItems(ACCELERATORS)
         self.acc_box.activated.connect(lambda _i: self._edit({"accuracy": {"scf": {"accelerator": self.acc_box.currentText()}}}, "accelerator"))
         f.addRow("Accelerator", self.acc_box)
@@ -356,7 +368,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.mix_box = QtWidgets.QComboBox(); self.mix_box.addItems(MIXERS)
         self.mix_box.setToolTip("The density mixer.  Auto: Pulay on D for a crystal without a Fock history, else linear; "
                                 "Kerker and Pulay mix in G space, so a molecule takes Auto or Linear")
-        self.mix_box.activated.connect(lambda _i: self._edit({"accuracy": {"scf": {"mixer": self.mix_box.currentText()}}}, "mixer"))
+        self.mix_box.activated.connect(lambda i: self._edit({"accuracy": {"scf": {"mixer": MIXERS[i]}}}, "mixer"))
         f.addRow("ρ mixer", self.mix_box)
         self.kerker_g0 = QtWidgets.QDoubleSpinBox(); self.kerker_g0.setRange(0.0, 5.0); self.kerker_g0.setDecimals(2)
         self.kerker_g0.setSingleStep(0.1); self.kerker_g0.setSpecialValueText("not stated")
@@ -539,7 +551,7 @@ class SetupPanel(QtWidgets.QWidget):
         if not self._materials:
             self.refresh_materials()
         for k, m in enumerate(self._materials):
-            cry.addAction(self.material_box.itemText(k + 1), lambda m=m: self._new_material(m))
+            cry.addAction(self.structure_box.itemText(self.structure_box.findData(f"material:{k}")), lambda m=m: self._new_material(m))
         cry.setEnabled(bool(self._materials))
 
     def _new_material(self, m: dict) -> None:
@@ -557,6 +569,58 @@ class SetupPanel(QtWidgets.QWidget):
     def _pick_preset(self, name: str) -> None:
         if self._run is None and name in molecules.MOLECULES:
             self.draft.set(molecules.preset_spec(name), "user", f"Setup: preset {name}")
+
+    def _pick_structure(self, index: int) -> None:
+        """A row of the structure picker: a molecule preset or a library crystal (headers and the draft row do nothing)."""
+        what = self.structure_box.itemData(index)
+        if self._run is not None or not what:
+            return
+        kind, key = what.split(":", 1)
+        if kind == "molecule":
+            self._pick_preset(key)
+            return
+        m = self._materials[int(key)]
+        try:
+            self.draft.set(materials.pick(m), "user", f"Setup: material {m['name']}")
+        except Exception as e:                       # noqa: BLE001 -- a malformed user entry: say so, keep the draft
+            self.reason.setText(f"{m['name']}: {e}")
+
+    def _fill_structure_box(self) -> None:
+        """The picker's rows: the draft row, 'Molecules' and its presets, 'Crystals' and the library's materials by layer."""
+        box = self.structure_box
+        box.blockSignals(True)
+        box.clear()
+        box.addItem(_NOT_PRESET, None)
+
+        def header(text: str) -> None:
+            box.addItem(text, None)
+            it = box.model().item(box.count() - 1)
+            it.setEnabled(False); f = it.font(); f.setBold(True); it.setFont(f)
+        header("Molecules")
+        for name in molecules.MOLECULES:
+            box.addItem(name, f"molecule:{name}")
+        header("Crystals")
+        for k, m in enumerate(self._materials):
+            where = {"shipped": [], "user": ["mine"], "workspace": ["workspace"]}[m["layer"]] + (["shadowed"] if m.get("shadowed") else [])
+            box.addItem(m["name"] + (f"  ({', '.join(where)})" if where else ""), f"material:{k}")
+        box.blockSignals(False)
+
+    def _render_structure(self, s) -> None:
+        """Select the row the draft IS (its preset, or its library crystal), else the draft row naming it."""
+        want = None
+        if s is not None and s.structure.kind == "crystal":
+            src = s.structure.source or {}
+            k = next((k for k, m in enumerate(self._materials) if m["name"] == src.get("materials") and m["layer"] == src.get("layer", "shipped")), None)
+            want = None if k is None else f"material:{k}"
+        elif s is not None:
+            preset = molecules.preset_of(s)
+            want = None if preset is None else f"molecule:{preset}"
+        box = self.structure_box
+        box.blockSignals(True)
+        i = box.findData(want) if want else -1
+        box.setItemText(0, _NOT_PRESET if s is None else f"draft: {s.label}")
+        box.setCurrentIndex(i if i > 0 else 0)
+        box.blockSignals(False)
 
     # -- the materials picker, site spins, Save to my materials ------------------------------------------------------------
     def set_workspace_library(self, path: Optional[str]) -> None:
@@ -581,36 +645,11 @@ class SetupPanel(QtWidgets.QWidget):
         """The picker's list, from the library's layers: shipped, then the user's, then this workspace's."""
         try:
             self._materials = materials.listing(self._ws_library)
-            self.material_box.setToolTip("A crystal from the library's materials: the shipped ones, then yours, then this workspace's")
         except materials.MaterialsError as e:
             self._materials = []
-            self.material_box.setToolTip(f"no materials: {e}")
             self.reason.setText(f"materials: {e}")
-        self.material_box.blockSignals(True)
-        self.material_box.clear()
-        self.material_box.addItem(_NOT_PRESET)
-        for m in self._materials:
-            where = {"shipped": [], "user": ["mine"], "workspace": ["workspace"]}[m["layer"]] + (["shadowed"] if m.get("shadowed") else [])
-            self.material_box.addItem(m["name"] + (f"  ({', '.join(where)})" if where else ""))
-        self.material_box.blockSignals(False)
-        self._render_material(self._spec())
-
-    def _render_material(self, s) -> None:
-        src = (s.structure.source or {}) if s is not None and s.structure.kind == "crystal" else {}
-        name, layer = src.get("materials"), src.get("layer", "shipped")
-        i = next((k + 1 for k, m in enumerate(self._materials) if m["name"] == name and m["layer"] == layer), 0)
-        self.material_box.blockSignals(True)
-        self.material_box.setCurrentIndex(i if i < self.material_box.count() else 0)
-        self.material_box.blockSignals(False)
-
-    def _pick_material(self, index: int) -> None:
-        if self._run is not None or index <= 0 or index > len(self._materials):
-            return
-        m = self._materials[index - 1]
-        try:
-            self.draft.set(materials.pick(m), "user", f"Setup: material {m['name']}")
-        except Exception as e:                       # noqa: BLE001 -- a malformed user entry: say so, keep the draft
-            self.reason.setText(f"{m['name']}: {e}")
+        self._fill_structure_box()
+        self._render_structure(self._spec())
 
     def set_crystal(self, spec: RunSpec, what: str) -> None:
         """A crystal from outside (File > Import crystal) into the draft: the structure and its default physics."""
@@ -687,8 +726,8 @@ class SetupPanel(QtWidgets.QWidget):
             self._render()
 
     _rendering = False
-    _EDITORS = ("mix_box", "alpha", "alpha_min", "alpha_max", "ladder_switch", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "mol_box", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
-                "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut", "material_box", "spins_edit", "trim_box")
+    _EDITORS = ("mix_box", "alpha", "alpha_min", "alpha_max", "ladder_switch", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
+                "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut", "spins_edit", "trim_box", "angular_box", "seed_box")
 
     def _render(self) -> None:
         s = self._spec()
@@ -705,18 +744,17 @@ class SetupPanel(QtWidgets.QWidget):
             self.spec_view.setReadOnly(ro); self.apply_btn.setVisible(not ro)
             self.spec_view.setPlainText(s.to_json(indent=1) if s else "")
             mol = s is not None and s.structure.kind == "molecule"
-            self._render_preset(s, mol)
-            if not self._materials and self.material_box.count() == 0:
+            self._render_structure(s)
+            if not getattr(self, "_materials_listed", False):   # the library's crystals, listed on first show
+                self._materials_listed = True
                 self.refresh_materials()
-            self._render_material(s)
             crystal = s is not None and not mol
             self.spins_edit.setText(materials.spins_text(s) if crystal else "")
             self._sform.setRowVisible(self.spins_edit, crystal)
             self._sform.setRowVisible(self.save_material_btn, crystal and not ro)
             for w in editors:
                 w.setEnabled(not ro and s is not None)
-            self.material_box.setEnabled(not ro)        # a material starts a draft, even from an empty one
-            self.mol_box.setEnabled(not ro)
+            self.structure_box.setEnabled(not ro)       # a preset or a material starts a draft, even from an empty one
             for w in (self.method_box, self.pp_check, self.mult_spin, self.sym_check):
                 w.setEnabled(not ro and mol)          # a crystal's are fixed by the periodic facade (CRYSTAL_PHYSICS)
             self.basis_box.setEnabled(not ro and s is not None)
@@ -747,19 +785,6 @@ class SetupPanel(QtWidgets.QWidget):
     def _policy_arrow(self) -> None:
         n = getattr(self, "_n_chosen", 0)
         self.policy_more.setText(f"{'▾' if self.policy_more.isChecked() else '▸'} {n} automatic choice{'s' if n != 1 else ''} by policy")
-
-    def _render_preset(self, s, mol: bool) -> None:
-        preset = molecules.preset_of(s) if mol else None
-        i = self.mol_box.findText(_NOT_PRESET)
-        if preset:
-            if i >= 0:
-                self.mol_box.removeItem(i)
-            self.mol_box.setCurrentText(preset)
-            return
-        if i < 0:
-            self.mol_box.addItem(_NOT_PRESET); i = self.mol_box.count() - 1
-        self.mol_box.setItemText(i, _NOT_PRESET if s is None else f"draft: {s.label}")
-        self.mol_box.setCurrentIndex(i)
 
     def _render_values(self, s: RunSpec, mol: bool) -> None:
         p, ac = s.physics, s.accuracy
@@ -824,19 +849,33 @@ class SetupPanel(QtWidgets.QWidget):
         start = solid2_deck.continues_from(s)
         self.start_label.setText(f"the saved state {pathlib.Path(start).name}"
                                  + ("" if os.path.exists(start) else "  <b>(the file is gone: the run will refuse)</b>")
-                                 if start else "scratch (the code's own seed)")
+                                 if start else "scratch: a new density (Starting ρ)")
         self.start_label.setToolTip(start or "")
         self.fresh_btn.setVisible(bool(start) and self._run is None)
+        self.seed_box.clear()
+        self.seed_box.addItem(f"Auto: {solid2_deck.seed_auto(s)}", None)
+        for name, text, crystal_ok, molecule_ok in solid2_deck.SEEDS:
+            if (molecule_ok if mol else crystal_ok):
+                self.seed_box.addItem(text, name)
+        stated_seed = (ac.scf or {}).get("seed")
+        i = self.seed_box.findData(stated_seed) if stated_seed else 0
+        if i < 0:                                     # a stated seed this structure does not offer: shown as it is (the code judges it)
+            self.seed_box.addItem(stated_seed, stated_seed); i = self.seed_box.count() - 1
+        self.seed_box.setCurrentIndex(i)
+        self.seed_box.setEnabled(not start and self._run is None)
+        self.angular_box.setCurrentIndex(1 if (ac.representation or {}).get("spherical") else 0)
         scf = ac.scf or {}
         self.acc_box.setCurrentText(str(scf.get("accelerator", "Auto")))
-        self.mix_box.setCurrentText(str(scf.get("mixer", "Auto")))
+        auto_mix = solid2_deck.mixer_auto(s)
+        self.mix_box.setItemText(0, f"Auto: {auto_mix}")             # what Auto resolves to, said where it is chosen
+        self.mix_box.setCurrentIndex(MIXERS.index(str(scf.get("mixer", "Auto"))) if scf.get("mixer", "Auto") in MIXERS else 0)
         self.alpha.setValue(float(scf.get("mixing_alpha", 1.0)))
         self.alpha_max.setValue(float(scf.get("mixing_alpha_max", 1.0)))
         self.alpha_min.setValue(float(scf.get("mixing_alpha_min") or 0.0))
-        linear = self.mix_box.currentText() == "Linear" or (self.mix_box.currentText() == "Auto" and mol)
+        mixer = MIXERS[self.mix_box.currentIndex()]
+        linear = mixer == "Linear" or (mixer == "Auto" and auto_mix == "Linear")
         for box in (self.alpha, self.alpha_min, self.alpha_max):     # linear mixing's α means nothing to Kerker / Pulay
             self._scf_form.setRowVisible(box, linear)
-        mixer = self.mix_box.currentText()
         self.kerker_g0.setValue(float(scf.get("kerker_g0") or 0.0))
         self.pulay_depth.setValue(int(scf.get("pulay_depth") or 0))
         self.pulay_start.setValue(int(scf.get("pulay_start") or 0))

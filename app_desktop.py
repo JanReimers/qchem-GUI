@@ -708,6 +708,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._split:
             self._refresh_compare(sel, partner); return
 
+        snap = getattr(self, "_snapshot", None)
+        if snap is not None and snap[0] is self.ws.selected and not snap[0].is_ready:
+            self._render_field(snap[1], snap[2]); return     # the live run's snapshot: Mesh / Surface / slice re-draw IT (feedback 29)
+        self._snapshot = None
         run, key, sampler, struct = self._field_spec()
         if run is None:
             self._render_field(None, None); return
@@ -885,7 +889,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_snapshot(self, run, iteration, f, err):
         if err:
             self.statusBar().showMessage(f"snapshot failed: {err}"); return
-        self._render_field(f, data_structure(run.spec))
+        self._snapshot = (run, f, data_structure(run.spec))   # kept: a representation change redraws IT, not the empty live run
+        self._render_field(f, self._snapshot[2])
         self.statusBar().showMessage(f"{run.summary}: {f.name} (a live snapshot; the run goes on -- select a run to leave it)")
 
     def _stop_live_run(self):

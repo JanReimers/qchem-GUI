@@ -102,12 +102,13 @@ def preset_spec(name: str):
     """The spec a preset starts as -- ONE rule for every view that offers presets (the Setup panel, the agent): the preset's
     basis and multiplicity; a valence (GTH) basis is LDA + pseudopotential (the only model both codes' GTH routes share),
     an all-electron one HF; point-group blocking on (the orbital table then carries irrep labels)."""
+    from .materials import DRAFT_ALPHA
     from .spec import Accuracy, molecule
     Z, pos, basis, _n, mult = MOLECULES[name]
     pp = basis.startswith(("valence", "sipp"))
     return molecule(name.split(" (")[0], Z, pos, theory="DFT" if pp else "HF", functional="LDA" if pp else None,
                     multiplicity=mult or None, core="pseudopotential" if pp else "all-electron",
-                    accuracy=Accuracy(representation={"basis": basis}, scf={"impose_symmetry": True}))
+                    accuracy=Accuracy(representation={"basis": basis}, scf={"impose_symmetry": True, "mixing_alpha": DRAFT_ALPHA}))
 
 
 def preset_of(spec) -> str | None:

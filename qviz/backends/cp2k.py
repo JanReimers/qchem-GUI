@@ -122,9 +122,10 @@ class Cp2kBackend:
                        "smearing translated: none, fermi-dirac"),
             Capability("task.kind=energy", lambda s: s.task.kind == "energy",
                        "single points only so far (GEO_OPT / CELL_OPT next; CP2K cannot compute U)"),
-            Capability("accuracy.representation", lambda s: set(shared_representation(s)) <= {"basis"}
-                       and set(_cp2k_rep(s)) <= _REP_KEYS,
-                       "a stated representation is a shared basis, or CP2K settings under representation['cp2k'] with known keys"),
+            Capability("accuracy.representation", lambda s: set(shared_representation(s)) <= {"basis", "spherical"}
+                       and shared_representation(s).get("spherical", True) is True and set(_cp2k_rep(s)) <= _REP_KEYS,
+                       "a stated representation is a shared basis (CP2K's Gaussians are always spherical), or CP2K settings under "
+                       "representation['cp2k'] with known keys"),
             Capability("accuracy.representation.basis converts", lambda s: _shared_basis_problem(s) is None,
                        lambda s: _shared_basis_problem(s)),
             Capability("a basis is stated", lambda s: _unstated_basis(s) is None, lambda s: _unstated_basis(s)),

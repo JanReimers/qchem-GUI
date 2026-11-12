@@ -106,8 +106,8 @@ def why_not(spec: RunSpec) -> Optional[str]:
     if ac.kmesh is None:
         return "state accuracy.kmesh (no ε -> k-mesh rule is banked yet)"
     rep = shared_representation(spec)
-    if set(rep) - {"basis"}:
-        return f"representation {sorted(set(rep) - {'basis'})} not read by the periodic facade"
+    if set(rep) - {"basis", "spherical"}:
+        return f"representation {sorted(set(rep) - {'basis', 'spherical'})} not read by the periodic facade"
     if "basis" not in rep:
         return "Orbital basis must be user selected"
     if rep["basis"].upper() not in _BASES:
@@ -166,6 +166,8 @@ def to_deck(spec: RunSpec) -> dict:
     tags = {s.tag: i for i, s in enumerate(spec.structure.sites) if s.tag}
     deck: dict = {"structure": structure_entry(spec), "kmesh": list(ac.kmesh),
                   "basis": {"data": shared_representation(spec)["basis"].upper()}}
+    if (ac.representation or {}).get("spherical"):
+        deck["basis"]["spherical"] = True                 # real solid-harmonic Gaussians (5 d, 7 f); unstated: Cartesian (6 d, 10 f)
     if ac.epsilon_Ha_per_atom != LIB_EPS:                 # the run's ONE accuracy target (V-FACADE-ACCURACY), stated off its default
         deck["accuracy"] = ac.epsilon_Ha_per_atom
     solid: dict = {}
@@ -178,6 +180,8 @@ def to_deck(spec: RunSpec) -> dict:
             solid["siteSpins"] = [_sign(x) for x in m]
     if (ac.scf or {}).get("accelerator"):
         solid["accelerator"] = ac.scf["accelerator"]      # SolidCalcOptions::accelerator by name: Auto | DIIS | GDM | Ladder | Null
+    if (ac.scf or {}).get("seed"):
+        solid["seed"] = ac.scf["seed"]                    # SolidCalcOptions::seed by name: IonicSAD (the facade's) | SAD | CoreGuess | Uniform
     if ph.hubbard:
         solid["hubbard"] = [{"site": tags[t], "l": h.l, "U_eV": h.U_eV, **_PROJECTOR[h.projector]}
                             for h in ph.hubbard for t in h.sites]
@@ -229,6 +233,39 @@ def to_deck(spec: RunSpec) -> dict:
 MIXER_KNOBS = (("kerker_g0", "kerkerG0", float), ("pulay_depth", "pulayDepth", int), ("pulay_start", "pulayStart", int))
 
 
+#: The SCF seeds a user may state (accuracy.scf["seed"]): (name, menu text, a crystal may, a molecule may).  Unstated = Auto, the
+#: facade's own choice (seed_auto says which).  The library's SeedStrategy names (ChargeDensity/Seed.C).
+SEEDS = (("SAD", "SAD: superposed neutral-atom densities", True, True),
+         ("IonicSAD", "Ionic SAD: superposed ionic densities", True, False),
+         ("CoreGuess", "Core guess: ρ = 0, so the first orbitals are the bare nuclei's (hydrogen-like)", True, True),
+         ("Uniform", "Uniform ρ over the cell", True, False))
+
+
+def seed_auto(spec: RunSpec) -> str:
+    """What an unstated seed resolves to (SolidCalcOptions::seed's default; MoleculeSetup's AutoSeed)."""
+    if spec.structure.kind == "crystal":
+        return "Ionic SAD"
+    if spec.physics.theory == "DFT" or spec.physics.core == "pseudopotential":
+        return "SAD (the core guess if an element has no atomic density)"
+    return "Core guess (ρ = 0)"
+
+
+def mixer_auto(spec: RunSpec) -> str:
+    """What the Auto mixer resolves to (SCFParams ResolveMixing at a cold start): a molecule mixes linearly; a crystal beside a
+    stated DIIS / Ladder mixes linearly (two histories fight); else a crystal runs Pulay on D (theAutoMixing: α 0.45, depth 8,
+    from iteration 5)."""
+    sc = spec.accuracy.scf or {}
+    if spec.structure.kind != "crystal":
+        return "Linear"
+    if sc.get("accelerator") in ("DIIS", "Ladder"):
+        return "Linear"
+    if sc.get("pulay_depth"):
+        return "Pulay"
+    if sc.get("kerker_g0"):
+        return "Kerker"
+    return "Pulay on D (α 0.45, depth 8, from iteration 5)"
+
+
 def continues_from(spec: RunSpec) -> Optional[str]:
     """The saved state `spec` starts from (its deck's state.restartFrom), None for a fresh start."""
     return ((code_block(spec, "solid2").get("deck") or {}).get("state") or {}).get("restartFrom")
@@ -265,6 +302,9 @@ def resolved(spec: RunSpec) -> list[tuple[str, str]]:
     return [("structure", st if isinstance(st, str) else "inline (lattice + sites)"),
             ("k-mesh", "×".join(map(str, d["kmesh"]))),
             ("basis", d["basis"]["data"]),
-            ("ε", "not mapped: the deck's own defaults (the anchors' recipe)"),
+            ("Gaussians", "spherical" if d["basis"].get("spherical") else "Cartesian"),
+            ("ε", f"{d['accuracy']:g} Ha/atom, stated: it sizes the grids (rasters, mesh)" if "accuracy" in d
+                  else f"{LIB_EPS:g} Ha/atom, the library's default: it sizes the grids (rasters, mesh)"),
             ("accelerator", d.get("solid", {}).get("accelerator", "Auto (the facade's policy)")),
-            ("starts from", continues_from(spec) or "scratch (the deck's seed)")]
+            ("ρ mixer", (d.get("scf") or {}).get("mixer") or f"Auto: {mixer_auto(spec)}"),
+            ("starts from", continues_from(spec) or f"scratch, seeded by {d.get('solid', {}).get('seed') or 'Auto: ' + seed_auto(spec)}")]

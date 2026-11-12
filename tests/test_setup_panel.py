@@ -42,7 +42,7 @@ class OneDraftTwoViews(unittest.TestCase):
 
     def test_an_agent_edit_shows_in_the_setup_and_a_setup_edit_in_the_agents_draft(self):
         self.say("molecule F2")
-        self.assertEqual(self.insp.mol_box.currentText(), "Fluorine (F2)")
+        self.assertEqual(self.insp.structure_box.currentText(), "Fluorine (F2)")
         self.assertTrue(self.insp.pp_check.isChecked())
         self.assertEqual(self.insp.method_box.currentText(), "LDA")
         self.insp.basis_box.setCurrentText("sipp_sr"); self.insp.basis_box.activated.emit(0)
@@ -63,8 +63,24 @@ class OneDraftTwoViews(unittest.TestCase):
         self.assertTrue(all(form.isRowVisible(b) for b in rows), "a molecule's Auto mixer is linear")
         self.insp.alpha_max.setValue(0.3); self.insp.alpha_max.editingFinished.emit()
         self.assertEqual(self.draft.spec.accuracy.scf["mixing_alpha_max"], 0.3)
-        self.insp.mix_box.setCurrentText("Kerker"); self.insp.mix_box.activated.emit(0)
+        self.assertEqual(self.insp.mix_box.itemText(0), "Auto: Linear", "Auto says what it resolves to")
+        k = self.insp.mix_box.findText("Kerker"); self.insp.mix_box.setCurrentIndex(k); self.insp.mix_box.activated.emit(k)
         self.assertFalse(any(form.isRowVisible(b) for b in rows), "α means nothing to Kerker")
+        self.assertTrue(form.isRowVisible(self.insp.kerker_g0), "Kerker reads its G0")
+
+    def test_a_new_draft_states_alpha_0_2_and_names_its_seed_and_gaussians(self):
+        self.say("molecule F2")
+        s = self.draft.spec
+        self.assertEqual(s.accuracy.scf["mixing_alpha"], 0.2, "the user's default linear start")
+        self.assertAlmostEqual(self.insp.alpha.value(), 0.2)
+        self.assertTrue(self.insp.seed_box.itemText(0).startswith("Auto: SAD"), "a valence (LDA + PP) preset seeds from SAD")
+        self.insp.seed_box.setCurrentIndex(self.insp.seed_box.findData("CoreGuess")); self.insp.seed_box.activated.emit(self.insp.seed_box.currentIndex())
+        self.assertEqual(self.draft.spec.accuracy.scf["seed"], "CoreGuess")
+        self.assertEqual(self.insp.angular_box.currentText(), "Cartesian")
+        self.insp.angular_box.setCurrentIndex(1); self.insp.angular_box.activated.emit(1)
+        self.assertIs(self.draft.spec.accuracy.representation["spherical"], True)
+        self.insp.angular_box.setCurrentIndex(0); self.insp.angular_box.activated.emit(0)
+        self.assertNotIn("spherical", self.draft.spec.accuracy.representation, "Cartesian is the unstated default")
 
     def test_one_undo_stack(self):
         self.say("set accuracy.epsilon_Ha_per_atom=1e-6")
@@ -82,7 +98,7 @@ class OneDraftTwoViews(unittest.TestCase):
         Toolset(self.draft, BackendRegistry([FakeBackend()])).call(
             "build_structure", {"kind": "crystal", "prototype": "rocksalt", "elements": ["Na", "F"], "a_bohr": 8.73})
         self.assertFalse(self.insp.method_box.isEnabled())
-        self.assertTrue(self.insp.mol_box.currentText().startswith("draft:"))
+        self.assertTrue(self.insp.structure_box.currentText().startswith("draft:"))
 
     def test_the_spec_tab_applies_through_the_draft_and_refuses_in_the_panel(self):
         text = self.insp.spec_view.toPlainText().replace('"epsilon_Ha_per_atom": 1e-05', '"epsilon_Ha_per_atom": 1e-07')

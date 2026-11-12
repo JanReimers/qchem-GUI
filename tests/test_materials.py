@@ -127,10 +127,10 @@ class TheLibraryTranslates(unittest.TestCase):
         self.assertEqual(solid2_deck.structure_entry(materials.pick(both[0])), "NaF_rocksalt", "the shipped one is still named")
         panel = SetupPanel(SpecDraft(), BackendRegistry([FakeBackend()]))
         panel.refresh_materials()
-        self.assertGreater(panel.material_box.findText("NaF_rocksalt  (shadowed)"), 0)
-        self.assertGreater(panel.material_box.findText("NaF_rocksalt  (mine)"), 0)
-        panel._pick_material(panel.material_box.findText("NaF_rocksalt  (mine)"))
-        self.assertEqual(panel.material_box.currentText(), "NaF_rocksalt  (mine)", "the picker shows the layer it came from")
+        self.assertGreater(panel.structure_box.findText("NaF_rocksalt  (shadowed)"), 0)
+        self.assertGreater(panel.structure_box.findText("NaF_rocksalt  (mine)"), 0)
+        panel._pick_structure(panel.structure_box.findText("NaF_rocksalt  (mine)"))
+        self.assertEqual(panel.structure_box.currentText(), "NaF_rocksalt  (mine)", "the picker shows the layer it came from")
         with self.assertRaisesRegex(materials.MaterialsError, "shipped molecule name"):
             materials.save("H2O", spec)
 
@@ -144,12 +144,12 @@ class TheSetupPanel(unittest.TestCase):
 
     def test_picking_a_material_makes_the_draft_that_crystal_and_spins_are_stated_after(self):
         self.panel.refresh_materials()
-        i = self.panel.material_box.findText("NaF_rocksalt")
+        i = self.panel.structure_box.findText("NaF_rocksalt")
         self.assertGreater(i, 0)
-        self.panel._pick_material(i)
+        self.panel._pick_structure(i)
         s = self.draft.spec
         self.assertEqual(s.structure.source["materials"], "NaF_rocksalt")
-        self.assertEqual(self.panel.material_box.currentText(), "NaF_rocksalt")
+        self.assertEqual(self.panel.structure_box.currentText(), "NaF_rocksalt")
         self.panel.spins_edit.setText("+ -")
         self.panel._on_spins()
         self.assertEqual(self.draft.spec.physics.spin.site_moments, (1.0, -1.0))
@@ -198,7 +198,7 @@ class TheWorkspaceLibrary(unittest.TestCase):
         panel.workspace_library_changed.connect(seen.append)
         panel._set_ws_library(self.ws_lib)
         self.assertEqual(seen, [self.ws_lib], "the app hears the choice, to store it with the workspace")
-        self.assertGreater(panel.material_box.findText("PanelWs  (workspace)"), 0)
+        self.assertGreater(panel.structure_box.findText("PanelWs  (workspace)"), 0)
         panel._set_ws_library(None)
-        self.assertLess(panel.material_box.findText("PanelWs  (workspace)"), 0)
+        self.assertLess(panel.structure_box.findText("PanelWs  (workspace)"), 0)
         self.assertEqual(panel.ws_library_label.text(), "none")
