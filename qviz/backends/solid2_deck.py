@@ -180,6 +180,8 @@ def to_deck(spec: RunSpec) -> dict:
             solid["siteSpins"] = [_sign(x) for x in m]
     if (ac.scf or {}).get("accelerator"):
         solid["accelerator"] = ac.scf["accelerator"]      # SolidCalcOptions::accelerator by name: Auto | DIIS | GDM | Ladder | Null
+    if (ac.scf or {}).get("impose_symmetry"):
+        solid["imposeSymmetry"] = True                    # the SHUBNIKOV group of the stated siteSpins (a polarized crystal), else the space group
     if (ac.scf or {}).get("seed"):
         solid["seed"] = ac.scf["seed"]                    # SolidCalcOptions::seed by name: IonicSAD (the facade's) | SAD | CoreGuess | Uniform
     if ph.hubbard:
@@ -239,6 +241,15 @@ SEEDS = (("SAD", "SAD: superposed neutral-atom densities", True, True),
          ("IonicSAD", "Ionic SAD: superposed ionic densities", True, False),
          ("CoreGuess", "Core guess: ρ = 0, so the first orbitals are the bare nuclei's (hydrogen-like)", True, True),
          ("Uniform", "Uniform ρ over the cell", True, False))
+
+
+def imposed_text(spec: RunSpec) -> str:
+    """What an imposed crystal imposes: the magnetic (Shubnikov, black-white) space group of its site spins when it carries an
+    ordering -- the AFM order is then a SYMMETRY of the run, its sublattices never averaged together -- else the space group."""
+    m = spec.physics.spin.site_moments
+    if spec.physics.spin.polarized and m and any(m):
+        return "IMPOSED: the Shubnikov (magnetic) group of the site spins " + " ".join("+" if x > 0 else "-" if x < 0 else "0" for x in m)
+    return "IMPOSED: the space group"
 
 
 def seed_auto(spec: RunSpec) -> str:
@@ -305,6 +316,7 @@ def resolved(spec: RunSpec) -> list[tuple[str, str]]:
             ("Gaussians", "spherical" if d["basis"].get("spherical") else "Cartesian"),
             ("ε", f"{d['accuracy']:g} Ha/atom, stated: it sizes the grids (rasters, mesh)" if "accuracy" in d
                   else f"{LIB_EPS:g} Ha/atom, the library's default: it sizes the grids (rasters, mesh)"),
+            ("symmetry", imposed_text(spec) if d.get("solid", {}).get("imposeSymmetry") else "free (not imposed)"),
             ("accelerator", d.get("solid", {}).get("accelerator", "Auto (the facade's policy)")),
             ("ρ mixer", (d.get("scf") or {}).get("mixer") or f"Auto: {mixer_auto(spec)}"),
             ("starts from", continues_from(spec) or f"scratch, seeded by {d.get('solid', {}).get('seed') or 'Auto: ' + seed_auto(spec)}")]

@@ -754,7 +754,7 @@ class SetupPanel(QtWidgets.QWidget):
             for w in editors:
                 w.setEnabled(not ro and s is not None)
             self.structure_box.setEnabled(not ro)       # a preset or a material starts a draft, even from an empty one
-            for w in (self.method_box, self.pp_check, self.mult_spin, self.sym_check):
+            for w in (self.method_box, self.pp_check, self.mult_spin):
                 w.setEnabled(not ro and mol)          # a crystal's are fixed by the periodic facade (CRYSTAL_PHYSICS)
             self.basis_box.setEnabled(not ro and s is not None)
             for w in (self.method_box, self.pp_check):
@@ -808,6 +808,18 @@ class SetupPanel(QtWidgets.QWidget):
         self._render_grids(s)
         self._render_grid_knobs(s)
         self.sym_check.setChecked(bool((ac.scf or {}).get("impose_symmetry")))
+        if mol:
+            self.sym_check.setText("impose: block the SCF by irreps (SALC → irrep labels)")
+            self.sym_check.setToolTip("")
+        else:
+            magnetic = p.spin.polarized and any(p.spin.site_moments or ())
+            self.sym_check.setText("impose the magnetic (Shubnikov) space group of the site spins" if magnetic
+                                   else "impose the space group")
+            self.sym_check.setToolTip(
+                "Imposed: the SCF is kept symmetric under the group at every iteration.  With site spins (a polarized crystal) it is "
+                "the BLACK-WHITE (Shubnikov) group of that ordering: the up and down sublattices are related by an operation times "
+                "spin flip, so the order can never be averaged away into a different one.  It does not by itself stop a moment "
+                "shrinking: a zero moment is symmetric too")
         try:
             self.geom.setPlainText(geometry.report(data_structure(s)))
         except Exception as e:                        # noqa: BLE001 -- a readout

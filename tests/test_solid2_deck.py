@@ -428,6 +428,13 @@ class TheBridgeRunsThem(unittest.TestCase):
             with self.subTest(ac):
                 self.assertFalse(be.capabilities().can_run(dataclasses.replace(spec, accuracy=ac)))
 
+    def test_an_imposed_crystal_states_it_and_the_library_takes_it(self):
+        deck = json.loads(solid2().translate(si_inline(impose_symmetry=True)).native["deck"])
+        self.assertIs(deck["solid"]["imposeSymmetry"], True, "a stated imposition reaches the deck (it was silently dropped)")
+        r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertNotIn("imposeSymmetry", json.loads(solid2().translate(si_inline()).native["deck"]).get("solid", {}))
+
     def test_the_linear_alphas_reach_the_deck(self):
         deck = json.loads(solid2().translate(si_inline(mixer="Linear", mixing_alpha=0.3, mixing_alpha_max=0.5)).native["deck"])
         self.assertEqual((deck["scf"]["startingRelaxRo"], deck["scf"]["maxRelaxRo"]), (0.3, 0.5))
