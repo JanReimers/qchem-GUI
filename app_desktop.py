@@ -716,8 +716,8 @@ class MainWindow(QtWidgets.QMainWindow):
             # Mesh / Surface / slice redraw THAT snapshot (feedback 29); another field is not it, so it is not drawn as if it were.
             want = "spin" if self.field_box.currentText().startswith("Spin density") else \
                    "density" if self.field_box.currentText() == "Electron density" else "orbital"
-            if snap is not None and snap[0] is sel_run and snap[3] == want:
-                self._render_field(snap[1], snap[2]); return
+            if snap is not None and snap[0] is sel_run and want in snap[3]:
+                self._render_field(snap[3][want], snap[2]); return
             self._render_field(None, data_structure(sel_run.spec))
             self.statusBar().showMessage("the run is still going: ⧉ Snapshot ρ samples the selected density or spin density at its "
                                          "next iteration; orbitals come when it finishes" if want != "orbital"
@@ -937,15 +937,31 @@ class MainWindow(QtWidgets.QMainWindow):
         run = getattr(self, "_live_run", None)
         if run is None:
             return
-        spin = self.field_box.currentText().startswith("Spin density")
-        why = run.snapshot(lambda it, f, err, r=run: self._snap_bridge.got.emit(r, it, f, err), spin=spin, n=64)
-        self.statusBar().showMessage(why or f"snapshot of {run.summary}'s {'spin ' if spin else ''}density at its next iteration …")
+        # BOTH fields at the SAME iteration (the user, 2026-11-12: "almost everyone will press snapshot and only *then* decide 'Oh I
+        # would like to see the spin density'"): the density, and the spin density when the run is polarized; the Field list then
+        # switches between them.
+        kinds = (False, True) if run.spec.physics.spin.polarized else (False,)
+        self._snapshot = None
+        why = None
+        for spin in kinds:
+            why = run.snapshot(lambda it, f, err, r=run: self._snap_bridge.got.emit(r, it, f, err), spin=spin, n=64) or why
+        self.statusBar().showMessage(why or f"snapshot of {run.summary}'s density{' and spin density' if len(kinds) > 1 else ''} "
+                                            "at its next iteration …")
 
     def _on_snapshot(self, run, iteration, f, err):
         if err:
             self.statusBar().showMessage(f"snapshot failed: {err}"); return
         kind = "spin" if f.signed else "density"
-        self._snapshot = (run, f, data_structure(run.spec), kind)   # kept: a representation change redraws IT, not the empty live run
+        prev = getattr(self, "_snapshot", None)
+        fields = dict(prev[3]) if prev is not None and prev[0] is run else {}
+        fields[kind] = f                                    # one snapshot = the fields of one iteration, by kind
+        self._snapshot = (run, None, data_structure(run.spec), fields)   # kept: a representation / field change redraws from IT
+        want = "spin" if self.field_box.currentText().startswith("Spin density") else "density"
+        if kind != want and want in fields:
+            return                                          # the selected field's sample is already drawn
+        if kind != want:
+            self.statusBar().showMessage(f"{run.summary}: {f.name} (a live snapshot; select it in Field)")
+            return
         self._render_field(f, self._snapshot[2])
         self.statusBar().showMessage(f"{run.summary}: {f.name} (a live snapshot; the run goes on -- select a run to leave it)")
 
