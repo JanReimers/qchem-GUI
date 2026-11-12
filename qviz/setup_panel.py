@@ -122,6 +122,7 @@ class SetupPanel(QtWidgets.QWidget):
         the draft's Basis and Grids tabs read the newest run of the SAME spec when it has no Build of its own."""
         super().__init__(parent)
         self.draft, self.registry, self._qc, self._legs = draft, registry, qc, legs
+        self._pp_fitted_cache: dict = {}                  # elements -> the library's pseudopotentials answer (the set is fixed)
         self._serial = serial or (lambda fn: fn())
         self._runs = runs or (lambda: [])
         self._builds: dict[str, object] = {}           # spec JSON -> its Build's record, "pending", or the exception it raised
@@ -254,7 +255,7 @@ class SetupPanel(QtWidgets.QWidget):
         f.addRow("Geometry", self.geom)
 
     def _build_hamiltonian(self):
-        f = self._page("Hamiltonian")
+        f = self._page("Hamiltonian"); self._hform = f
         self.method_box = QtWidgets.QComboBox(); self.method_box.addItems(METHODS)
         self.method_box.activated.connect(lambda _i: self._edit({"physics": dict(zip(("theory", "functional"),
                                                                 METHODS[self.method_box.currentText()]))}, "method"))
@@ -262,6 +263,13 @@ class SetupPanel(QtWidgets.QWidget):
         self.pp_check = QtWidgets.QCheckBox("pseudopotential (GTH; LDA + a valence basis)")
         self.pp_check.clicked.connect(lambda on: self._edit({"physics": {"core": "pseudopotential" if on else "all-electron"}}, "core"))
         f.addRow("Core", self.pp_check)
+        # THE PSEUDOPOTENTIALS' OWN FUNCTIONAL (the user, 2026-11-12: "Most users (like me) will not know PPs well enough to be aware
+        # they are tuned for a particular exchange-correlation functional ... track this, warn and guide").  Read from the library
+        # (qchem_py.pseudopotentials 'fitted', PseudopotentialSet::FittedFunctional): a label to show, never compared here.
+        self.pp_fitted = QtWidgets.QLabel(); self.pp_fitted.setWordWrap(True)
+        self.pp_fitted.setToolTip("A pseudopotential is generated (fitted) with one exchange-correlation functional; a run is most "
+                                  "faithful to it with the same one.  The library names it per element")
+        f.addRow("PPs fitted with", self.pp_fitted)
         self.pol_check = QtWidgets.QCheckBox("spin-polarized (two channels)")
         self.pol_check.clicked.connect(lambda on: self._edit({"physics": {"spin": {"polarized": on}}}, "spin"))
         f.addRow("Spin", self.pol_check)
@@ -334,6 +342,13 @@ class SetupPanel(QtWidgets.QWidget):
         self.fresh_btn.clicked.connect(lambda: self._continue_with(None, "Setup: start from scratch"))
         sl.addWidget(self.start_label, 1); sl.addWidget(self.fresh_btn)
         f.addRow("Starts from", start)
+        self.threads_box = QtWidgets.QSpinBox(); self.threads_box.setRange(0, os.cpu_count() or 1)
+        self.threads_box.setSpecialValueText("default (QCHEM_OPENMP_THREADS; unset = serial)")
+        self.threads_box.setToolTip("OpenMP threads for THIS run (the library restores the process's count after it).  A resource, not "
+                                    "physics: the energy agrees to 1e-12 across counts (the order of a threaded sum differs)")
+        self.threads_box.editingFinished.connect(lambda: self._edit(
+            {"accuracy": {"representation": {"solid2": {"threads": self.threads_box.value() or None}}}}, "threads"))
+        f.addRow("Threads", self.threads_box)
         self.seed_box = QtWidgets.QComboBox()
         self.seed_box.setToolTip("The density the first iteration starts from (a fresh run; a saved state replaces it).  Auto: the "
                                  "code's own choice, named here")
@@ -565,6 +580,26 @@ class SetupPanel(QtWidgets.QWidget):
         self.draft.set(spec, "user", why)
         self.tabs.setCurrentIndex(0)
 
+    def _pp_fitted_text(self, s: RunSpec) -> str:
+        """'GTH PPs fitted with PADE' (or per element when they differ), asked of the library; why not, when it cannot say."""
+        els = sorted({site.element for site in s.structure.sites})
+        if self._qc is None or not hasattr(self._qc, "pseudopotentials"):
+            return "— (qchem_py is not loaded)"
+        key = tuple(els)
+        if key not in self._pp_fitted_cache:
+            out = json.loads(self._qc.pseudopotentials(json.dumps({"set": "gth-lda-valence", "elements": els})))
+            self._pp_fitted_cache[key] = out
+        out = self._pp_fitted_cache[key]
+        if "error" in out:
+            return out["error"]
+        fitted = out.get("fitted") or {}
+        if not fitted:
+            return "— (this qchem_py does not name the fitted functional)"
+        labels = sorted(set(fitted.values()))
+        if len(labels) == 1:
+            return f"GTH PPs ({out['set']}) fitted with {labels[0]}"
+        return f"GTH PPs ({out['set']}) fitted with " + ", ".join(f"{e}: {f}" for e, f in fitted.items())
+
     def _pick_preset(self, name: str) -> None:
         if self._run is None and name in molecules.MOLECULES:
             self.draft.set(molecules.preset_spec(name), "user", f"Setup: preset {name}")
@@ -726,7 +761,7 @@ class SetupPanel(QtWidgets.QWidget):
 
     _rendering = False
     _EDITORS = ("mix_box", "alpha", "alpha_min", "alpha_max", "ladder_switch", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
-                "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut", "spins_edit", "trim_box", "angular_box", "seed_box")
+                "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut", "spins_edit", "trim_box", "angular_box", "seed_box", "threads_box")
 
     def _render(self) -> None:
         s = self._spec()
@@ -828,6 +863,8 @@ class SetupPanel(QtWidgets.QWidget):
         if name:
             self.method_box.setCurrentText(name)
         self.pp_check.setChecked(p.core == "pseudopotential")
+        self.pp_fitted.setText(self._pp_fitted_text(s) if p.core == "pseudopotential" else "")
+        self._hform.setRowVisible(self.pp_fitted, p.core == "pseudopotential")
         self.pol_check.setChecked(p.spin.polarized)
         if mol:
             self.mult_spin.setSpecialValueText(auto_multiplicity(s))
@@ -874,6 +911,7 @@ class SetupPanel(QtWidgets.QWidget):
             self.seed_box.addItem(stated_seed, stated_seed); i = self.seed_box.count() - 1
         self.seed_box.setCurrentIndex(i)
         self.seed_box.setEnabled(not start and self._run is None and not mol)
+        self.threads_box.setValue(int(((ac.representation or {}).get("solid2") or {}).get("threads") or 0))
         self.angular_box.setCurrentIndex(1 if (ac.representation or {}).get("spherical") else 0)
         self.angular_box.setEnabled(self._run is None and not mol)
         why = ("A molecule takes the code's own choice for now: the seed and the Gaussians' form become options a molecule "

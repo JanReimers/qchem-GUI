@@ -435,6 +435,23 @@ class TheBridgeRunsThem(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertNotIn("imposeSymmetry", json.loads(solid2().translate(si_inline()).native["deck"]).get("solid", {}))
 
+    def test_a_runs_threads_reach_the_deck_and_a_molecule_runs_inside_its_scope(self):
+        import dataclasses
+        from qviz import molecules
+        s = si_inline()
+        s = dataclasses.replace(s, accuracy=dataclasses.replace(s.accuracy, representation={**s.accuracy.representation,
+                                "solid2": {**s.accuracy.representation["solid2"], "threads": 2}}))
+        deck = json.loads(solid2().translate(s).native["deck"])
+        self.assertEqual(deck["threads"], {"openmp": 2})
+        r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        be, m = solid2(), molecules.preset_spec("Methane (CH4)")
+        m = dataclasses.replace(m, accuracy=dataclasses.replace(m.accuracy, representation={**m.accuracy.representation, "solid2": {"threads": 2}}))
+        res = be.run(be.translate(m))
+        self.assertTrue(res.converged, res.failure)
+        thr = next(r["scf"]["advanced"]["threads"] for r in res.record.values() if (r.get("scf") or {}).get("advanced"))
+        self.assertEqual(thr["openmp"], 2, "the run's report files the count it ran on")
+
     def test_the_linear_alphas_reach_the_deck(self):
         deck = json.loads(solid2().translate(si_inline(mixer="Linear", mixing_alpha=0.3, mixing_alpha_max=0.5)).native["deck"])
         self.assertEqual((deck["scf"]["startingRelaxRo"], deck["scf"]["maxRelaxRo"]), (0.3, 0.5))

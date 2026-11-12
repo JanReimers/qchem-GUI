@@ -79,6 +79,15 @@ class OneDraftTwoViews(unittest.TestCase):
         self.assertFalse(self.insp.angular_box.isEnabled())
         self.assertEqual(self.insp.angular_box.currentText(), "Cartesian")
 
+    def test_a_pseudopotential_run_names_the_functional_its_pps_were_fitted_with(self):
+        from qviz.backends.solid2 import _import_qchem_py
+        qc, why = _import_qchem_py()
+        if qc is None:
+            self.skipTest(why)
+        panel = SetupPanel(self.draft, BackendRegistry([FakeBackend()]), qc=qc)
+        self.say("molecule F2")                                 # a valence preset: LDA + GTH pseudopotentials
+        self.assertEqual(panel.pp_fitted.text(), "GTH PPs (gth-lda-valence) fitted with PADE")
+
     def test_one_undo_stack(self):
         self.say("set accuracy.epsilon_Ha_per_atom=1e-6")
         self.insp.sym_check.click()

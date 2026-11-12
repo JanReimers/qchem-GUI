@@ -34,6 +34,7 @@ SCF); a crystal's density and spin density are sampled (SolidRun.field, over the
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pathlib
@@ -60,7 +61,7 @@ BASES = ("dzvp", "dzvp2", "tzvp", "orb", "orb1", "sipp", "sipp_sr", "valence_low
          "valence_lowq_sr", "valence_lowq_sr2", "valence_lowq_va", "valence_lowq_vb")
 
 
-_REP_KEYS = {"mesh_radial", "mesh_angular", "basis_file"}   # representation["solid2"]: the molecular XC mesh, a downloaded basis
+_REP_KEYS = {"mesh_radial", "mesh_angular", "basis_file", "threads"}   # representation["solid2"]: the molecular XC mesh, a downloaded basis
 #: console columns that are STATE, not a convergence trace -- the mixer ("Lin 0.50"), the accelerator ("DIIS:3") and the
 #: configuration-changed flag: their numbers plot as nonsense, so they stay table-only (their printed text is kept)
 _TABLE_ONLY = {"ρ_mix", "accel", "cfg"}
@@ -191,6 +192,11 @@ class Solid2Backend:
         self._prior: dict = {}      # the reused build's record, for the live snapshot of the run it feeds
 
     # -- build: every pre-SCF step, no SCF -----------------------------------
+    def _threads(self, n: dict):
+        """A molecule run's thread scope (qchem_py.Threads: OpenMP and BLAS restored when it ends); none when unstated."""
+        t = int(n.get("threads") or 0)
+        return self._qc.Threads(openmp=t) if t else contextlib.nullcontext()
+
     def why_no_snapshot(self, spec: RunSpec) -> Optional[str]:
         """Why a RUNNING job of `spec` cannot hand out its current iterate's density (None: it can)."""
         return self._why_absent if self._qc is None else None   # a molecule's iterate_density, a crystal's field(iterate=True)
@@ -213,8 +219,11 @@ class Solid2Backend:
         self._qc.clear_report()
         self._prior = {}
         try:
-            built = (self._qc.SolidRun(job.native["deck"]) if "deck" in job.native
-                     else self._qc.Calculator(**_calculator_args(job.native), build_only=True))
+            if "deck" in job.native:
+                built = self._qc.SolidRun(job.native["deck"])             # the deck's `threads` scope the library's calls
+            else:
+                with self._threads(job.native):
+                    built = self._qc.Calculator(**_calculator_args(job.native), build_only=True)
         except Exception as e:                                   # noqa: BLE001 -- the library's refusal, in its own words
             raise Refused(str(e), self._filed()) from e
         record = json.loads(self._qc.report())
@@ -312,18 +321,20 @@ class Solid2Backend:
             "mixer": str(scf.get("mixer", "Auto")),          # the facade refuses what a molecule cannot mix (Kerker: G space)
             "smearing_kT": float(ph.occupations.kT_Ha) if ph.occupations.smearing == "fermi-dirac" else 0.0,
             "basis_file": str(own.get("basis_file") or ""),
+            "threads": int(own.get("threads") or 0),          # the run's OpenMP threads, 0 = the process's (qchem_py.Threads)
             "restart_from": solid2_deck.continues_from(spec) or "",
             **{key: -1.0 if scf.get(key) is None else 0.0 if scf[key] == "off" else float(scf[key])   # < 0: default, 0: off
                for key, _ in solid2_deck.DECK_GATES},
         }
         # the state this run SAVES: named for its arguments (where it starts from excluded: a continuation of the same
         # settings overwrites its own file, as a crystal deck's does)
-        native["state_save"] = states.path_for(spec.label, json.dumps({k: v for k, v in native.items() if k != "restart_from"},
-                                                                      sort_keys=True))
+        native["state_save"] = states.path_for(spec.label, json.dumps({k: v for k, v in native.items() if k not in ("restart_from", "threads")},
+                                                                      sort_keys=True))   # threads are a resource: the same state
         resolved = {
             "starts from": (f"the saved state {native['restart_from']} (judged when it runs)" if native["restart_from"]
                             else f"scratch, seeded by Auto: {solid2_deck.seed_auto(spec)}"),
             "Gaussians": "Cartesian",
+            "threads": f"{native['threads']} (OpenMP)" if native["threads"] else "the process's (QCHEM_OPENMP_THREADS; unset = serial)",
             "basis": (f"{basis} (downloaded: {native['basis_file']})" if native["basis_file"] else
                       f"{basis} ({'stated' if rep.get('basis') else 'from ε, provisional'})"),
             "model": native["model"],
@@ -406,12 +417,13 @@ class Solid2Backend:
 
         self._qc.clear_report()
         kept = self._kept_build(n)
-        if kept is not None:                          # this job's Build: converge its graph, do not rebuild
-            calc, self._prior = kept
-        else:                                         # Prepare, then the SCF: a handle exists while it runs (live snapshots)
-            calc = self._qc.Calculator(**_calculator_args(n), build_only=True)
-        live["sample"] = lambda npts, pad, spin: calc.iterate_density(npts, pad, spin)
-        calc.run_scf(step, n["max_iter"])
+        with self._threads(n):                        # the run's threads, for its build and its SCF (snapshots sample inside it)
+            if kept is not None:                      # this job's Build: converge its graph, do not rebuild
+                calc, self._prior = kept
+            else:                                     # Prepare, then the SCF: a handle exists while it runs (live snapshots)
+                calc = self._qc.Calculator(**_calculator_args(n), build_only=True)
+            live["sample"] = lambda npts, pad, spin: calc.iterate_density(npts, pad, spin)
+            calc.run_scf(step, n["max_iter"])
         saved = n.get("state_save")
         if saved:                                     # converged or not: a later run continues from it (the file says which)
             states.state_dir().mkdir(parents=True, exist_ok=True)

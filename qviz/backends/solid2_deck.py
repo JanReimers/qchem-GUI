@@ -54,7 +54,7 @@ def periodic_bases(elements) -> list[str]:
 
 _PROJECTOR = {"ortho-atomic": {"orthoAtomic": True}, "pseudo-atomic": {"projector": "pseudoAtomic"},
               "lowdin": {"projector": "siteShells"}}
-_SOLID2_KEYS = {"deck"}                               # representation["solid2"] keys a crystal reads
+_SOLID2_KEYS = {"deck", "threads"}                    # representation["solid2"] keys a crystal reads
 _VOLUME = {"CubicP": lambda l: l["a"] ** 3, "CubicF": lambda l: l["a"] ** 3 / 4, "TetragonalP": lambda l: l["a"] ** 2 * l["c"]}
 
 
@@ -227,6 +227,8 @@ def to_deck(spec: RunSpec) -> dict:
         lr = cu.method == "linear-response"
         deck["postSCF"] = [{"hubbardLoop": {"estimator": "linearResponse"} if lr else {}} if cu.self_consistent
                            else {"hubbardLinearResponse" if lr else "estimateHubbardU": {}}]
+    if code_block(spec, "solid2").get("threads"):         # the run's OpenMP threads (deck `threads`; a resource, not physics)
+        deck["threads"] = {"openmp": int(code_block(spec, "solid2")["threads"])}
     return _merge(deck, code_block(spec, "solid2").get("deck") or {})
 
 
@@ -317,6 +319,7 @@ def resolved(spec: RunSpec) -> list[tuple[str, str]]:
             ("ε", f"{d['accuracy']:g} Ha/atom, stated: it sizes the grids (rasters, mesh)" if "accuracy" in d
                   else f"{LIB_EPS:g} Ha/atom, the library's default: it sizes the grids (rasters, mesh)"),
             ("symmetry", imposed_text(spec) if d.get("solid", {}).get("imposeSymmetry") else "free (not imposed)"),
+            ("threads", f"{d['threads']['openmp']} (OpenMP)" if "threads" in d else "the process's (QCHEM_OPENMP_THREADS; unset = serial)"),
             ("accelerator", d.get("solid", {}).get("accelerator", "Auto (the facade's policy)")),
             ("ρ mixer", (d.get("scf") or {}).get("mixer") or f"Auto: {mixer_auto(spec)}"),
             ("starts from", continues_from(spec) or f"scratch, seeded by {d.get('solid', {}).get('seed') or 'Auto: ' + seed_auto(spec)}")]
