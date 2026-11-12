@@ -724,6 +724,9 @@ class MainWindow(QtWidgets.QMainWindow):
                                          else "the run is still going: its orbitals come when it finishes")
             return
         self._snapshot = None
+        if sel_run is not None and self.field_box.currentText() == "— no field —":
+            self._render_field(None, data_structure(sel_run.spec))
+            self.statusBar().showMessage(self.field_box.toolTip()); return
         run, key, sampler, struct = self._field_spec()
         if run is None:
             self._render_field(None, None); return
@@ -894,7 +897,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Each field entry -> None (it can be shown) or why not, for the selected run (the user, 2026-11-12: grey out what cannot
         be shown, with a hover note saying why).  A RUNNING job shows a snapshot (density or spin density); a finished one what its
         code sampled: a crystal gives density and, polarized, spin density, once converged, and no orbitals yet."""
-        names = [self.field_box.itemText(i) for i in range(self.field_box.count())]
+        names = list(self.FIELDS)
         if run is None:
             return {n: None for n in names}
         polarized = bool(run.spec.physics.spin.polarized)
@@ -920,18 +923,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 out[n] = None if orbitals else f"{run.backend_name} does not sample orbitals for this run (crystal orbitals are not offered yet)"
         return out
 
+    FIELDS = ("Electron density", "Spin density (ρ↑−ρ↓)", "HOMO", "HOMO-1", "HOMO-2", "HOMO-3", "LUMO", "LUMO+1", "LUMO+2")
+
     def _sync_field_items(self, run) -> None:
-        """Grey out the field entries the selected run cannot show, each with its reason on hover; keep the selection on one it can."""
+        """The Field list IS what the selected run can show (the user, 2026-11-12: "Just populate the drop down with what you have"):
+        a running job its snapshot's fields, a finished one what its code sampled.  The selection stays when it is still listed."""
         avail = self._field_availability(run)
-        model = self.field_box.model()
-        for i in range(self.field_box.count()):
-            why = avail.get(self.field_box.itemText(i))
-            model.item(i).setEnabled(why is None)
-            self.field_box.setItemData(i, why or "", QtCore.Qt.ToolTipRole)
-        if avail.get(self.field_box.currentText()) is not None:
-            ok = next((i for i in range(self.field_box.count()) if avail.get(self.field_box.itemText(i)) is None), None)
-            if ok is not None:
-                self.field_box.blockSignals(True); self.field_box.setCurrentIndex(ok); self.field_box.blockSignals(False)
+        names = [n for n in self.FIELDS if avail.get(n) is None]
+        current = [self.field_box.itemText(i) for i in range(self.field_box.count())]
+        if names == current:
+            return
+        keep = self.field_box.currentText()
+        self.field_box.blockSignals(True)
+        self.field_box.clear()
+        if names:
+            self.field_box.addItems(names)
+            self.field_box.setCurrentText(keep if keep in names else names[0])
+            self.field_box.setToolTip("")
+        else:                                    # nothing to show yet: say why, in the list itself
+            why = next(iter(avail.values()), "") or ""
+            self.field_box.addItem("— no field —"); self.field_box.setToolTip(why)
+        self.field_box.blockSignals(False)
 
     def _snapshot_live_run(self):
         run = getattr(self, "_live_run", None)
