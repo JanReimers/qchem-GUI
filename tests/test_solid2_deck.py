@@ -419,18 +419,14 @@ class TheBridgeRunsThem(unittest.TestCase):
         r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
-    def test_a_molecule_runs_the_seed_and_gaussians_it_states(self):
+    def test_a_molecule_that_states_a_seed_or_spherical_gaussians_is_refused_not_substituted(self):
         from qviz import molecules
         import dataclasses
-        be = solid2()
-        spec = molecules.preset_spec("Methane (CH4)")
-        sc = {**spec.accuracy.scf, "seed": "SAD", "impose_symmetry": False}
-        spec = dataclasses.replace(spec, accuracy=dataclasses.replace(spec.accuracy, scf=sc,
-                                                                      representation={**spec.accuracy.representation, "spherical": True}))
-        job = be.translate(spec)
-        self.assertEqual((job.native["seed"], job.native["spherical"]), ("SAD", True))
-        res = be.run(job)
-        self.assertTrue(res.converged, res.failure)
+        be, spec = solid2(), molecules.preset_spec("Methane (CH4)")
+        for ac in (dataclasses.replace(spec.accuracy, scf={**spec.accuracy.scf, "seed": "SAD"}),
+                   dataclasses.replace(spec.accuracy, representation={**spec.accuracy.representation, "spherical": True})):
+            with self.subTest(ac):
+                self.assertFalse(be.capabilities().can_run(dataclasses.replace(spec, accuracy=ac)))
 
     def test_the_linear_alphas_reach_the_deck(self):
         deck = json.loads(solid2().translate(si_inline(mixer="Linear", mixing_alpha=0.3, mixing_alpha_max=0.5)).native["deck"])

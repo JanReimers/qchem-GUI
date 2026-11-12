@@ -45,6 +45,8 @@ BASIS_TIP = ("orb1 is the smallest/fastest; valence_lowq_vb / sipp_sr are valenc
              "ticked, the same spec runs on SOLID² and CP2K")
 EPSILONS = ("1e-3", "1e-4", "1e-5", "1e-6", "1e-7")
 _NOT_PRESET = "— draft —"
+ANGULAR_TIP = ("The Gaussians' angular form.  Cartesian (the default): 6 d and 10 f functions per shell, which carry an s (d) or p (f) "
+               "contaminant.  Spherical: real solid harmonics, 5 d and 7 f, no contaminant")
 _CHOOSE_BASIS = "— choose a basis —"           # a crystal with no basis stated: the orbital basis is user selected
 CRYSTAL_PHYSICS = ("A crystal runs LDA with GTH pseudopotentials: the periodic facade's one pseudopotential set is "
                    "gth-lda-valence (HF and Xα are molecular here)")
@@ -279,9 +281,6 @@ class SetupPanel(QtWidgets.QWidget):
         self.basis_box.activated.connect(self._on_basis_pick)
         f.addRow("Basis", self.basis_box)
         self.angular_box = QtWidgets.QComboBox(); self.angular_box.addItems(("Cartesian", "Spherical"))
-        self.angular_box.setToolTip("The Gaussians' angular form.  Cartesian (the default): 6 d and 10 f functions per shell, which carry "
-                                    "an s (d) or p (f) contaminant.  Spherical: real solid harmonics, 5 d and 7 f, no contaminant.  "
-                                    "A molecule with point-group blocking is Cartesian only (the SALC builder needs Cartesian shells)")
         self.angular_box.activated.connect(lambda i: self._edit({"accuracy": {"representation": {"spherical": True if i == 1 else None}}}, "Gaussians"))
         f.addRow("Gaussians", self.angular_box)
         self.bse_btn = QtWidgets.QPushButton("Basis Set Exchange…")
@@ -862,8 +861,14 @@ class SetupPanel(QtWidgets.QWidget):
         if i < 0:                                     # a stated seed this structure does not offer: shown as it is (the code judges it)
             self.seed_box.addItem(stated_seed, stated_seed); i = self.seed_box.count() - 1
         self.seed_box.setCurrentIndex(i)
-        self.seed_box.setEnabled(not start and self._run is None)
+        self.seed_box.setEnabled(not start and self._run is None and not mol)
         self.angular_box.setCurrentIndex(1 if (ac.representation or {}).get("spherical") else 0)
+        self.angular_box.setEnabled(self._run is None and not mol)
+        why = ("A molecule takes the code's own choice for now: the seed and the Gaussians' form become options a molecule "
+               "and a crystal share (the user, 2026-11-12), and the molecular run gets them then") if mol else ""
+        self.seed_box.setToolTip(why or "The density the first iteration starts from (a fresh run; a saved state replaces it).  "
+                                        "Auto: the code's own choice, named here")
+        self.angular_box.setToolTip(why or ANGULAR_TIP)
         scf = ac.scf or {}
         self.acc_box.setCurrentText(str(scf.get("accelerator", "Auto")))
         auto_mix = solid2_deck.mixer_auto(s)

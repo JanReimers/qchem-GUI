@@ -74,13 +74,9 @@ class OneDraftTwoViews(unittest.TestCase):
         self.assertEqual(s.accuracy.scf["mixing_alpha"], 0.2, "the user's default linear start")
         self.assertAlmostEqual(self.insp.alpha.value(), 0.2)
         self.assertTrue(self.insp.seed_box.itemText(0).startswith("Auto: SAD"), "a valence (LDA + PP) preset seeds from SAD")
-        self.insp.seed_box.setCurrentIndex(self.insp.seed_box.findData("CoreGuess")); self.insp.seed_box.activated.emit(self.insp.seed_box.currentIndex())
-        self.assertEqual(self.draft.spec.accuracy.scf["seed"], "CoreGuess")
+        self.assertFalse(self.insp.seed_box.isEnabled(), "a molecule's seed waits for the structure-neutral option")
+        self.assertFalse(self.insp.angular_box.isEnabled())
         self.assertEqual(self.insp.angular_box.currentText(), "Cartesian")
-        self.insp.angular_box.setCurrentIndex(1); self.insp.angular_box.activated.emit(1)
-        self.assertIs(self.draft.spec.accuracy.representation["spherical"], True)
-        self.insp.angular_box.setCurrentIndex(0); self.insp.angular_box.activated.emit(0)
-        self.assertNotIn("spherical", self.draft.spec.accuracy.representation, "Cartesian is the unstated default")
 
     def test_one_undo_stack(self):
         self.say("set accuracy.epsilon_Ha_per_atom=1e-6")
