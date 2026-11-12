@@ -708,6 +708,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._split:
             self._refresh_compare(sel, partner); return
 
+        self._sync_field_items(self.ws.selected)
         snap = getattr(self, "_snapshot", None)
         sel_run = self.ws.selected
         if sel_run is not None and not sel_run.is_ready and getattr(sel_run, "status", None) is not None and self._live_run is sel_run:
@@ -888,6 +889,49 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_scf_step(self, s):
         self.scf_view.add_row(s)                          # runs on the GUI thread (queued from the worker)
         self.statusBar().showMessage(f"iter {s.iteration}  E = {s.energy:.6f} Ha")
+
+    def _field_availability(self, run) -> dict:
+        """Each field entry -> None (it can be shown) or why not, for the selected run (the user, 2026-11-12: grey out what cannot
+        be shown, with a hover note saying why).  A RUNNING job shows a snapshot (density or spin density); a finished one what its
+        code sampled: a crystal gives density and, polarized, spin density, once converged, and no orbitals yet."""
+        names = [self.field_box.itemText(i) for i in range(self.field_box.count())]
+        if run is None:
+            return {n: None for n in names}
+        polarized = bool(run.spec.physics.spin.polarized)
+        out = {}
+        if not run.is_ready:
+            for n in names:
+                if n == "Electron density":
+                    out[n] = None
+                elif n.startswith("Spin density"):
+                    out[n] = None if polarized else "an unpolarized run has no spin density"
+                else:
+                    out[n] = "orbitals come when the run finishes; while it runs, ⧉ Snapshot ρ shows the density or spin density"
+            return out
+        fields = getattr(run.result, "fields", {}) or {}
+        orbitals = getattr(run.result, "orbital", None) is not None
+        for n in names:
+            if n == "Electron density":
+                out[n] = None if "density" in fields else f"{run.backend_name} gave no density for this run (a crystal's fields need a converged SCF)"
+            elif n.startswith("Spin density"):
+                out[n] = None if "spin_density" in fields else ("an unpolarized run has no spin density" if not polarized
+                                                                 else f"{run.backend_name} gave no spin density for this run (a crystal's fields need a converged SCF)")
+            else:
+                out[n] = None if orbitals else f"{run.backend_name} does not sample orbitals for this run (crystal orbitals are not offered yet)"
+        return out
+
+    def _sync_field_items(self, run) -> None:
+        """Grey out the field entries the selected run cannot show, each with its reason on hover; keep the selection on one it can."""
+        avail = self._field_availability(run)
+        model = self.field_box.model()
+        for i in range(self.field_box.count()):
+            why = avail.get(self.field_box.itemText(i))
+            model.item(i).setEnabled(why is None)
+            self.field_box.setItemData(i, why or "", QtCore.Qt.ToolTipRole)
+        if avail.get(self.field_box.currentText()) is not None:
+            ok = next((i for i in range(self.field_box.count()) if avail.get(self.field_box.itemText(i)) is None), None)
+            if ok is not None:
+                self.field_box.blockSignals(True); self.field_box.setCurrentIndex(ok); self.field_box.blockSignals(False)
 
     def _snapshot_live_run(self):
         run = getattr(self, "_live_run", None)
