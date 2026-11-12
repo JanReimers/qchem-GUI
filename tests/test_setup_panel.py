@@ -65,7 +65,8 @@ class OneDraftTwoViews(unittest.TestCase):
         self.assertEqual(self.draft.spec.accuracy.scf["mixing_alpha_max"], 0.3)
         self.assertEqual(self.insp.mix_box.itemText(0), "Auto: Linear", "Auto says what it resolves to")
         k = self.insp.mix_box.findText("Kerker"); self.insp.mix_box.setCurrentIndex(k); self.insp.mix_box.activated.emit(k)
-        self.assertFalse(any(form.isRowVisible(b) for b in rows), "α means nothing to Kerker")
+        self.assertTrue(form.isRowVisible(self.insp.alpha), "Kerker mixes at α start")
+        self.assertFalse(form.isRowVisible(self.insp.alpha_max), "the adaptive bounds are linear mixing's only")
         self.assertTrue(form.isRowVisible(self.insp.kerker_g0), "Kerker reads its G0")
 
     def test_a_new_draft_states_alpha_0_2_and_names_its_seed_and_gaussians(self):

@@ -891,7 +891,10 @@ class SetupPanel(QtWidgets.QWidget):
         self.alpha_min.setValue(float(scf.get("mixing_alpha_min") or 0.0))
         mixer = MIXERS[self.mix_box.currentIndex()]
         linear = mixer == "Linear" or (mixer == "Auto" and auto_mix == "Linear")
-        for box in (self.alpha, self.alpha_min, self.alpha_max):     # linear mixing's α means nothing to Kerker / Pulay
+        # α start is the mixing step of Linear, Kerker AND a stated Pulay (SCFIterator's mixer factories read StartingRelaxRo); min / max
+        # bound linear mixing's ADAPTIVE step only.  An Auto Pulay runs its own recipe's α (0.45), so the box would not be read there.
+        self._scf_form.setRowVisible(self.alpha, linear or mixer in ("Kerker", "Pulay"))
+        for box in (self.alpha_min, self.alpha_max):
             self._scf_form.setRowVisible(box, linear)
         self.kerker_g0.setValue(float(scf.get("kerker_g0") or 0.0))
         self.pulay_depth.setValue(int(scf.get("pulay_depth") or 0))
