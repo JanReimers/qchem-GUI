@@ -452,6 +452,16 @@ class TheBridgeRunsThem(unittest.TestCase):
         thr = next(r["scf"]["advanced"]["threads"] for r in res.record.values() if (r.get("scf") or {}).get("advanced"))
         self.assertEqual(thr["openmp"], 2, "the run's report files the count it ran on")
 
+    def test_an_inline_cell_carries_each_atoms_spin_so_the_seed_is_magnetic(self):
+        """The library's seed reads the magnetic decoration from the structure's atoms; an inline AFM cell without them seeded
+        non-magnetic (the user's NiO from 'mine', 2026-11-12: m_site 0 at iteration 1 vs 2.48 by name)."""
+        import dataclasses
+        s = si_inline()
+        s = dataclasses.replace(s, physics=dataclasses.replace(s.physics, spin=dataclasses.replace(s.physics.spin, polarized=True,
+                                                                                                    site_moments=(1.0, -1.0))))
+        atoms = D.to_deck(s)["structure"]["atoms"]
+        self.assertEqual([a.get("spin") for a in atoms], [1, -1])
+
     def test_the_linear_alphas_reach_the_deck(self):
         deck = json.loads(solid2().translate(si_inline(mixer="Linear", mixing_alpha=0.3, mixing_alpha_max=0.5)).native["deck"])
         self.assertEqual((deck["scf"]["startingRelaxRo"], deck["scf"]["maxRelaxRo"]), (0.3, 0.5))

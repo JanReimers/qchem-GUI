@@ -150,8 +150,13 @@ def structure_entry(spec: RunSpec) -> str | dict:
     shipped = (spec.structure.source or {}).get("layer", "shipped") == "shipped"   # a deck names SHIPPED cells only (yours may shadow one)
     if src and shipped and _material_mismatch(spec, src) is None:
         return src
+    # each atom's `spin` rides the entry as it does in materials.json: the library's SEED reads its magnetic decoration from the
+    # structure's atoms (solid.siteSpins drives the imposition); without it an inline AFM cell seeded NON-magnetic (the user's NiO,
+    # 2026-11-12: m_site 0.000000 at iteration 1 vs 2.48 for the same cell by name)
+    moments = spec.physics.spin.site_moments or ()
     entry: dict = {"lattice": {"vectors_bohr": [list(r) for r in spec.structure.lattice_bohr]},
-                   "atoms": [{"el": s.element, "frac": list(s.frac)} for s in spec.structure.sites]}
+                   "atoms": [{"el": s.element, "frac": list(s.frac), **({"spin": _sign(moments[i])} if i < len(moments) and moments[i] else {})}
+                             for i, s in enumerate(spec.structure.sites)]}
     prov = (spec.structure.source or {}).get("import") or (spec.structure.source or {}).get("provenance")
     if prov:                              # an imported (or saved-import) cell: the deck keeps where it came from (Inline takes it)
         entry["provenance"] = prov
