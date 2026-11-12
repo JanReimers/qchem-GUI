@@ -48,11 +48,6 @@ QCHEM_BUILD=~/Code/qchem-lane-g/build/Release .venv/bin/python -m unittest disco
 python scripts/make_artifacts.py     # headless: render all plot types -> out/
 ```
 
-**Known red** (2026-11-11, against qchem main fa324a0b): `test_workspace.Solid2EndToEnd.test_alpha_max_caps_the_linear_mixing_step`.
-It fails on lane A's (a′) library change, qchem bfb995513, which stops the linear mixer stepping down while DIIS extrapolates.  With
-that change, water LDA at a stated α 0.2..0.3 oscillates to the 100-iteration cap.  It converged on 993e70f2.  The test stays as written;
-the fix belongs to lane A.  Remove this note when the test is green again.
-
 ## Layout
 
 - `qviz/spec.py` — the back-end-neutral `RunSpec` (structure, physics, task, ONE accuracy target ε); imports no back end.
