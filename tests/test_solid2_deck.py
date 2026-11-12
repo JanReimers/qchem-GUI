@@ -461,7 +461,7 @@ class TheBridgeRunsThem(unittest.TestCase):
         spec = molecules.preset_spec("Methane (CH4)")                      # HF all-electron: the Z-scaled engage gate
         rec = next(iter(be.run(be.translate(spec)).record.values()))["accelerators"][0]
         d = accelerator_defaults(spec, mol=True)
-        self.assertEqual((rec["nProj"], rec["svTol"]), (d["depth"], d["sv"]))
+        self.assertEqual((rec["nProj"], rec["svTol"], rec["svTolRel"]), (d["depth"], d["sv"], d["sv_rel"]))
         self.assertEqual(f"{rec['engageBelowFD']:.3g}, Z-scaled", d["engage"])
 
     def test_levels_are_numbered_within_their_irrep(self):

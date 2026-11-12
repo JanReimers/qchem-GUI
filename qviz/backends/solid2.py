@@ -338,7 +338,7 @@ class Solid2Backend:
                                 f"max {native['relax_max'] or 'default (1.0)'}"),
             "Ladder → GDM": ("default (|ΔE/E| < 1e-6)" if native["ladder_switch_at"] < 0 else "on stall only"
                              if native["ladder_switch_at"] == 0 else f"|ΔE/E| < {native['ladder_switch_at']:g}"),
-            "DIIS": (f"depth {native['diis_depth'] or 'default (4)'}, SV floor {native['diis_sv_tol'] or 'default (5e-9)'}, "
+            "DIIS": (f"depth {native['diis_depth'] or 'default (4)'}, SV floor {native['diis_sv_tol'] or 'default (off; relative 1e-4)'}, "
                      f"engages below [F,D] {native['diis_engage_fd'] or 'default (Z-scaled)'}"),
             "MOM": (f"on, reference captured at iteration {native['mom_start'] or 'default (10)'}" if native["mom"] else "off"),
         }

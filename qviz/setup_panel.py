@@ -96,7 +96,7 @@ def accelerator_defaults(s: RunSpec, mol: bool) -> dict:
         engage = "from the start"
     else:
         engage = f"{s.num_electrons ** 2 * 0.08 / 32:.3g}, Z-scaled"
-    return {"depth": 4, "sv": 5e-9, "engage": engage}
+    return {"depth": 4, "sv": 0.0, "sv_rel": 1e-4, "engage": engage}   # the absolute SV floor is OFF; the prune is RELATIVE (qchem bfb995513)
 
 
 def _mono() -> QtGui.QFont:
@@ -854,7 +854,7 @@ class SetupPanel(QtWidgets.QWidget):
             self._scf_form.setRowVisible(w, acc in ("DIIS", "Ladder") or (acc == "Auto" and mol))
         dflt = accelerator_defaults(s, mol)
         self.diis_depth.setSpecialValueText(f"default ({dflt['depth']})")
-        self.diis_sv.setItemText(0, f"default ({_sci(dflt['sv'])})")
+        self.diis_sv.setItemText(0, f"default ({_sci(dflt['sv'])})" if dflt["sv"] else f"default (off; relative {_sci(dflt['sv_rel'])})")
         self.diis_engage.setItemText(0, f"default ({dflt['engage']})")
         self.diis_depth.setValue(int(scf.get("diis_depth") or 0))
         for box, key in ((self.diis_sv, "diis_sv_tol"), (self.diis_engage, "diis_engage_fd")):

@@ -267,7 +267,7 @@ class ScfKnobs(unittest.TestCase):
         p = self.panel                                                     # the fixture's draft: water, HF, all-electron
         self.assertEqual(p.mult_spin.text(), "auto: 1, singlet, unpolarized")
         self.assertEqual((p.diis_depth.text(), p.diis_sv.itemText(0), p.diis_engage.itemText(0)),
-                         ("default (4)", "default (5e-9)", "default (0.25, Z-scaled)"))
+                         ("default (4)", "default (off; relative 1e-4)", "default (0.25, Z-scaled)"))
         self.draft.patch({"physics": {"theory": "DFT", "functional": "LDA"}}, "test")
         self.assertEqual(p.diis_engage.itemText(0), "default (from the start)")
 
