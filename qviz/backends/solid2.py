@@ -183,6 +183,27 @@ def _as_run(resolved: dict, record: dict, restarted: Optional[dict] = None) -> d
     return out
 
 
+
+def _levels(raw: list[dict]) -> list[dict]:
+    """The library's levels (Calculation::MakeLevels, either door), with the label split into its count and irrep.
+
+    The lib's label is "<n><irrep>" -- n counts WITHIN the irrep (methane C2v: 1A1 2A1 1B2 3A1 1B1), the Mulliken numbering;
+    with no symmetry there is one irrep and n is the global count ("5No Symmetry").  k (fractional) and weight ride along."""
+    out = []
+    for i, L in enumerate(raw):
+        text = L["label"].strip()
+        lab = text.lstrip("0123456789")
+        out.append(dict(L, n=int(text[:len(text) - len(lab)] or i + 1), label=lab))
+    return out
+
+
+def _crystal_levels(run) -> list[dict]:
+    """A crystal's levels, or none when it has no converged state to ask (a refused or unconverged-before-any-iteration run)."""
+    try:
+        return _levels(run.levels())
+    except RuntimeError:
+        return []
+
 class Solid2Backend:
     name = NAME
 
@@ -429,10 +450,7 @@ class Solid2Backend:
             states.state_dir().mkdir(parents=True, exist_ok=True)
             calc.save_state(saved)
         restarted = calc.restarted_from()
-        # the lib's label is "<n><irrep>" -- n counts WITHIN the irrep (methane C2v: 1A1 2A1 1B2 3A1 1B1), the Mulliken
-        # numbering; with no symmetry there is one irrep and n is the global count ("5No Symmetry")
-        levels = [dict(L, n=int(L["label"].strip()[:len(L["label"].strip()) - len(lab)] or i + 1), label=lab)
-                  for i, L in enumerate(calc.levels()) for lab in [L["label"].strip().lstrip("0123456789")]]
+        levels = _levels(calc.levels())
         polarized = any(L["spin"] for L in levels)
 
         def scalar(d, name, signed) -> ScalarField:
@@ -489,7 +507,7 @@ class Solid2Backend:
             if polarized:
                 fields["spin_density"] = FieldRef("Spin density (ρ↑−ρ↓)", True, scalar("Spin density (ρ↑−ρ↓)", True))
         return Result(converged=converged, energy_Ha=run.total_energy(), failure=run.failure(),
-                      structure=struct, scf=steps, fields=fields, polarized=polarized,
+                      structure=struct, scf=steps, fields=fields, polarized=polarized, levels=_crystal_levels(run),
                       resolved=_as_run(job.resolved, record, restarted),
                       provenance={"code": NAME, "iterations": run.iterations(), "deck": json.loads(run.resolved()),
                                   "restartedFrom": restarted},

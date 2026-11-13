@@ -64,6 +64,21 @@ _STATUS_ICON = {RunStatus.PENDING: "…", RunStatus.RUNNING: "⏳",
                 RunStatus.READY: "●", RunStatus.FAILED: "✗"}
 
 
+
+def one_k(levels: list[dict]) -> tuple[list[dict], str]:
+    """The levels an MO list and diagram can show: a molecule's, an atom's, a Γ-only crystal's -- all of them; a multi-k crystal's,
+    the Γ block (else the first k listed), with a line saying so.  The whole mesh needs a band-dispersion plot (OpenWork §2)."""
+    ks = []
+    for L in levels:
+        k = tuple(round(float(x), 9) for x in L.get("k", (0.0, 0.0, 0.0)))
+        if k not in ks: ks.append(k)
+    if len(ks) <= 1:
+        return levels, ""
+    pick = (0.0, 0.0, 0.0) if (0.0, 0.0, 0.0) in ks else ks[0]
+    shown = [L for L in levels if tuple(round(float(x), 9) for x in L.get("k", (0.0, 0.0, 0.0))) == pick]
+    name = "Γ" if pick == (0.0, 0.0, 0.0) else "k = (" + ", ".join(f"{x:g}" for x in pick) + ")"
+    return shown, f"{name} only, of {len(ks)} k-points (the full mesh needs a band-dispersion plot)"
+
 class _WsBridge(QtCore.QObject):
     """Marshals the (Qt-agnostic) Workspace observer onto the GUI thread: the model
     may notify from a compute worker, so we bounce it through a signal (auto-queued
@@ -578,10 +593,10 @@ class MainWindow(QtWidgets.QMainWindow):
         rep = run.report("orbitals")
         if not rep or "levels" not in rep:
             self.orb_view.setPlainText("(orbital report unavailable)"); self.mo_plot.clear(); return
-        levels = rep["levels"]
+        levels, kline = one_k(rep["levels"])
         n_occ = sum(1 for L in levels if L["occ"] > 0.5)
         n_show = min(len(levels), n_occ + 3)         # occupied + LUMO..LUMO+2 (high virtuals are noise)
-        lines = [f"{run.summary}   E = {rep.get('energy', 0):.6f} Ha", "",
+        lines = [f"{run.summary}   E = {rep.get('energy', 0):.6f} Ha"] + ([kline] if kline else []) + ["",
                  f"{'e (Ha)':>10} {'occ':>4}  MO"]
         for i, L in enumerate(levels[:n_show]):
             tag = f"{L['n']}{L['label']}" if L['label'] != "No Symmetry" else str(L['n'])

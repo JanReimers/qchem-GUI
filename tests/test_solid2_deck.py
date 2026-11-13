@@ -216,6 +216,25 @@ class SavedStates(unittest.TestCase):
         self.assertTrue(then.resolved["starts from"].startswith("exact resume"), then.resolved["starts from"])
         self.assertIsNone(first.provenance["restartedFrom"], "a fresh run restarted from nothing")
 
+    def test_a_crystal_lists_its_levels_at_their_k(self):
+        res = solid2().run(solid2().translate(si_inline()))
+        self.assertTrue(res.converged, res.failure)
+        self.assertTrue(res.levels, "a crystal answers the structure-neutral levels (Calculation::MakeLevels)")
+        es = [L["e"] for L in res.levels]
+        self.assertEqual(es, sorted(es))
+        self.assertAlmostEqual(sum(L["weight"] * L["occ"] for L in res.levels), 8.0, places=8, msg="two Si, 4 valence each")
+        import app_desktop
+        shown, line = app_desktop.one_k(res.levels)
+        ks = {tuple(L["k"]) for L in res.levels}
+        if len(ks) > 1:
+            self.assertTrue(all(tuple(L["k"]) == (0.0, 0.0, 0.0) for L in shown) and line.startswith("Γ only"), line)
+        else:
+            self.assertEqual((shown, line), (res.levels, ""), "a Γ-only crystal shows every level")
+        mesh = [{"e": -1.0, "occ": 2, "k": [0, 0, 0]}, {"e": -0.9, "occ": 2, "k": [0.5, 0, 0]}, {"e": 0.1, "occ": 0, "k": [0, 0, 0]}]
+        shown, line = app_desktop.one_k(mesh)
+        self.assertEqual([L["e"] for L in shown], [-1.0, 0.1])
+        self.assertEqual(line, "Γ only, of 2 k-points (the full mesh needs a band-dispersion plot)")
+
 
 def water(xyz=(0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107), basis="dzvp", **scf):
     from qviz.spec import Accuracy, molecule
