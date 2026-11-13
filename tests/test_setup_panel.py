@@ -69,6 +69,20 @@ class OneDraftTwoViews(unittest.TestCase):
         self.assertFalse(form.isRowVisible(self.insp.alpha_max), "the adaptive bounds are linear mixing's only")
         self.assertTrue(form.isRowVisible(self.insp.kerker_g0), "Kerker reads its G0")
 
+    def test_kerker_on_a_polarized_run_shows_the_open_defect(self):
+        from qviz.setup_panel import KERKER_SPIN_DEFECT
+        self.say("molecule F2")
+        form, warn = self.insp._scf_form, self.insp.kerker_warn
+        k = self.insp.mix_box.findText("Pulay"); self.insp.mix_box.setCurrentIndex(k); self.insp.mix_box.activated.emit(k)
+        self.insp.kerker_g0.setValue(1.0); self.insp.kerker_g0.editingFinished.emit()
+        self.assertFalse(form.isRowVisible(warn), "an unpolarized run has no moment to drain")
+        self.insp._edit({"physics": {"spin": {"polarized": True}}}, "spin")
+        self.assertTrue(self.draft.spec.physics.spin.polarized)
+        self.assertTrue(form.isRowVisible(warn), "Kerker-preconditioned Pulay on a polarized run warns")
+        self.assertEqual(warn.text(), KERKER_SPIN_DEFECT)
+        self.insp.kerker_g0.setValue(0.0); self.insp.kerker_g0.editingFinished.emit()
+        self.assertFalse(form.isRowVisible(warn), "Pulay on D does not")
+
     def test_a_new_draft_states_alpha_0_2_and_names_its_seed_and_gaussians(self):
         self.say("molecule F2")
         s = self.draft.spec
