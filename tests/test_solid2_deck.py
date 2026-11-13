@@ -604,3 +604,63 @@ class TheBridgeRunsThem(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(solid2()._qc is not None, "qchem_py not built (QCHEM_BUILD)")
+class ReopenedRunsDraw(unittest.TestCase):
+    """A run reopened from a workspace file draws its 3D fields from its SAVED STATE (qchem_py.StateView: the basis and the
+    saved D / C, no SCF) -- the same fields the live run drew -- and says so when the state is gone."""
+
+    def reopened(self, spec):
+        """`spec` computed in a workspace, saved, and reopened: (the live run, the reopened run)."""
+        import numpy as np  # noqa: F401
+        from qviz import project
+        from qviz.backends.base import BackendRegistry
+        from qviz.workspace import Workspace
+        ws = Workspace("t", registry=BackendRegistry([solid2()]))
+        live = ws.add_run(spec)
+        self.assertTrue(live.is_ready, live.error)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "w.qproj.h5")
+            project.save_workspace(path, ws)
+            back = project.load_workspace(path, ws.registry, compute=False)
+        return live, back.runs[0]
+
+    def test_a_reopened_molecule_draws_its_density_and_orbitals_from_its_saved_state(self):
+        import numpy as np
+        live, back = self.reopened(water())
+        self.assertTrue(back.restored)
+        self.assertIsNone(back.fields_why_not, back.fields_why_not)
+        self.assertTrue(back.offers("density"))
+        a, b = live.density(n=24), back.density(n=24)
+        self.assertEqual((a.origin, a.spacing), (b.origin, b.spacing))
+        np.testing.assert_allclose(b.values, a.values, rtol=1e-11, atol=1e-13)
+        homo = back.report("orbitals")["num_occupied"] - 1
+        np.testing.assert_allclose(back.orbital(homo, n=16).values, live.orbital(homo, n=16).values, rtol=1e-10, atol=1e-12)
+
+    def test_a_reopened_crystal_draws_its_density_from_its_saved_state(self):
+        import numpy as np
+        live, back = self.reopened(si_inline())
+        self.assertIsNone(back.fields_why_not, back.fields_why_not)
+        np.testing.assert_allclose(back.density(n=16).values, live.density(n=16).values, rtol=1e-11, atol=1e-13)
+
+    def test_a_reopened_run_whose_state_is_gone_says_so(self):
+        from qviz import project
+        from qviz.backends.base import BackendRegistry
+        from qviz.workspace import Workspace
+        ws = Workspace("t", registry=BackendRegistry([solid2()]))
+        run = ws.add_run(water())
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "w.qproj.h5")
+            project.save_workspace(path, ws)
+            os.remove(run.result.state_file)
+            back = project.load_workspace(path, ws.registry, compute=False).runs[0]
+        self.assertEqual(back.fields_why_not, "its saved state is gone")
+        self.assertFalse(back.offers("density"), "no live calculation and no state: nothing to draw")
+
+    def test_a_state_that_is_not_the_spec_s_is_refused_in_the_library_s_words(self):
+        be = solid2()
+        first = be.run(be.translate(water()))
+        n = be.translate(water(xyz=(0, 0, 0, 0, 1.431, 1.171, 0, -1.431, 1.107))).native      # one H moved 0.064 bohr
+        with self.assertRaisesRegex(RuntimeError, "view refused \\(mismatch\\).*reopen the run's own spec"):
+            be._qc.StateView.molecule(n["numbers"], n["positions"], basis="dzvp", model=n["model"], path=first.state_file)

@@ -96,7 +96,9 @@ WORKSPACE_FORMAT = "qviz-workspace/2"   # /2: one RunSpec (JSON) + its back end 
 def save_workspace(path: str, ws) -> None:
     """Persist a Workspace: one group per Run -- its RunSpec (JSON), the back end, status, error, and the RESULT when it
     has one (energy, SCF trace, levels, resolved settings, the code's run record: JSON in a `result` dataset), so a
-    reopen restores it with zero compute.  3D fields are not stored: they need the live calculation (Recompute)."""
+    reopen restores it with zero compute.  3D fields are not stored: a reopened run draws them from its saved state while the
+    state file exists (Run.fields_why_not says when it cannot; Recompute then).  The 3D view the run was left in (Run.view: field,
+    representation, iso level, slice, camera) is stored beside it, so it comes back the way the user left it."""
     with h5py.File(path, "w") as h:
         h.attrs.update(format=WORKSPACE_FORMAT, title=ws.title, materials=ws.materials or "",
                        created=_dt.datetime.now().isoformat(timespec="seconds"),
@@ -107,6 +109,8 @@ def save_workspace(path: str, ws) -> None:
             rg.attrs.update(spec=r.spec.to_json(), backend=r.backend_name,
                             energy=(float(r.energy) if r.energy is not None else np.nan),
                             status=r.status.value, error=r.error or "")
+            if r.view:
+                rg.attrs["view"] = json.dumps(r.view)
             if r.result is not None and r.status.value in ("ready", "failed"):
                 rg.create_dataset("result", data=json.dumps(_result_dict(r.result), default=_json_default))
     ws.path = path
@@ -129,16 +133,18 @@ def load_workspace(path: str, registry, compute: bool = True):
         g = h["runs"]
         for key in sorted(g):
             rg = g[key]
+            view = json.loads(str(rg.attrs["view"])) if "view" in rg.attrs else {}   # the 3D view it was left in (an older file: none)
             name = str(rg.attrs["backend"])
             spec = RunSpec.from_json(str(rg.attrs["spec"]))
             status, error = str(rg.attrs.get("status", "")), str(rg.attrs.get("error", "")) or None
             if "result" in rg:
                 run = ws.add_run(spec, backend=name if name in registry.names() else None, compute=False)
+                run.view = view
                 raw = rg["result"][()]
                 run.restore(_result_from(json.loads(raw.decode() if isinstance(raw, bytes) else raw), spec),
                             RunStatus(status), error)
             elif status == RunStatus.READY.value:
-                ws.add_run(spec, backend=name if name in registry.names() else None, compute=compute)
+                ws.add_run(spec, backend=name if name in registry.names() else None, compute=compute).view = view
             else:
                 run = ws.add_run(spec, backend=name if name in registry.names() else None, compute=False)
                 run.restore(None, RunStatus.FAILED, error or "interrupted: the app quit while this run was pending or running")

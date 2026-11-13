@@ -153,6 +153,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._scf_shown = None                       # the run whose trace the SCF view holds
         self._syncing = False
         self._cam_run = None          # which run the camera is fitted to (reset only on change)
+        self._viewed = None           # the run whose 3D view the controls hold (Run.view: saved when the selection moves on)
+        self._pending_field = None    # a run's remembered field, applied once its Field list is populated
+        self._pending_camera = None   # a run's remembered camera, applied at its first render
         self._cam_pair = None         # which (left,right) pair the split camera is fitted to
         self._split = False           # is the viewport currently two linked panes?
         self._fld_cache = {}          # GUI-side field cache: key -> ScalarField|None (off-thread sampled)
@@ -483,7 +486,7 @@ class MainWindow(QtWidgets.QMainWindow):
         run = self.ws.runs[row]
         menu = QtWidgets.QMenu(self)
         idle = run.status not in (RunStatus.PENDING, RunStatus.RUNNING)
-        act = menu.addAction("Recompute" + (" (brings back its 3D fields)" if run.restored else ""))
+        act = menu.addAction("Recompute" + (" (brings back its 3D fields)" if run.fields_why_not else ""))
         act.setEnabled(idle)
         saved = states.of(run)
         cont = menu.addAction("Continue from this run…" if saved else "Continue from this run (no saved state on disk)")
@@ -528,6 +531,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Quitting saves the workspace: to its own file when it has one, else to AUTOSAVE; the next start reopens it."""
         from qviz import project
         path = self.ws.path or str(AUTOSAVE)
+        self._remember_view(self.ws.selected)        # the view on screen goes with the workspace
         try:
             pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
             project.save_workspace(path, self.ws)
@@ -585,7 +589,35 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.setup.refresh_records()             # the draft reads the newest run of its own spec
         self._refresh_cmp_box()
+        if sel is not self._viewed:                   # the selection moved: the old run keeps its view, the new one gets its own back
+            self._remember_view(self._viewed)
+            self._apply_view(sel)
+            self._viewed = sel
         self._refresh_3d()
+
+    # -- the 3D view a run was left in (Run.view, saved with the workspace) ------------------------------------------------
+    def _remember_view(self, run) -> None:
+        """Record the controls and the camera into `run.view` -- only while the single view shows that run (its camera)."""
+        if run is None or run not in self.ws.runs or not run.is_ready or self._split or self._cam_run is not run:
+            return
+        cam = self.plotter.camera_position
+        run.view = {"field": self.field_box.currentText(), "representation": self.rep_box.currentText(),
+                    "iso": self.iso.value(), "slice": self.slice_on.isChecked(),
+                    "camera": [[float(x) for x in v] for v in cam]}
+
+    def _apply_view(self, run) -> None:
+        """Put `run`'s remembered view back into the controls; its camera at its first render, its field once listed."""
+        v = (run.view if run is not None else None) or {}
+        if not v:
+            return
+        for w, set_ in ((self.rep_box, lambda: self.rep_box.setCurrentText(v.get("representation", self.rep_box.currentText()))),
+                        (self.iso, lambda: self.iso.setValue(int(v.get("iso", self.iso.value())))),
+                        (self.slice_on, lambda: self.slice_on.setChecked(bool(v.get("slice", self.slice_on.isChecked()))))):
+            w.blockSignals(True); set_(); w.blockSignals(False)
+        self._sync_controls()
+        self._pending_field = v.get("field")
+        self._pending_camera = v.get("camera")
+        self._cam_run = None                          # a new run: its first render frames it (with its own camera, when it has one)
 
     def _update_orbitals(self, run):
         if run is None or not run.is_ready:
@@ -679,9 +711,9 @@ class MainWindow(QtWidgets.QMainWindow):
         run = self.ws.selected
         if run is None or not run.is_ready:
             return None, None, None, None
-        if run.restored:                         # reopened from a file: its fields need the live calculation
-            self.statusBar().showMessage(f"{run.summary}: restored from the workspace file -- right-click it → "
-                                         "Recompute to see its 3D fields")
+        if run.fields_why_not:                   # reopened from a file, and its saved state cannot draw it
+            self.statusBar().showMessage(f"{run.summary}: reopened from the workspace file, and {run.fields_why_not} -- "
+                                         "right-click it → Recompute to see its 3D fields")
             return None, None, None, None
         other = self._partner()
         if other is not None and not self.split_on.isChecked():   # Δρ mode (single view)
@@ -816,6 +848,10 @@ class MainWindow(QtWidgets.QMainWindow):
             p.suppress_rendering = False
         if cam is not None:
             p.camera_position = cam                  # keep view across control changes
+        elif self._pending_camera is not None:       # a run reopened with its view: the camera it was left at
+            p.camera_position = [tuple(v) for v in self._pending_camera]
+            self._pending_camera = None
+            self._cam_run = self.ws.selected
         else:
             if rep == "Surface (height)":
                 p.camera_position = "iso"             # a 3/4 view suits the height surface
@@ -948,7 +984,8 @@ class MainWindow(QtWidgets.QMainWindow):
         current = [self.field_box.itemText(i) for i in range(self.field_box.count())]
         if names == current:
             return
-        keep = self.field_box.currentText()
+        keep = self._pending_field or self.field_box.currentText()   # a reopened run's own field first
+        self._pending_field = None
         self.field_box.blockSignals(True)
         self.field_box.clear()
         if names:
@@ -1014,6 +1051,7 @@ class MainWindow(QtWidgets.QMainWindow):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save Workspace", "workspace.qproj.h5", "qviz workspace (*.h5)")
         if path:
+            self._remember_view(self.ws.selected)    # the view on screen goes with the workspace
             project.save_workspace(path, self.ws)
             self._settings.setValue("workspace/last", path)
             self._title()
@@ -1042,9 +1080,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._pool.start(_ComputeTask(run))
         self._settings.setValue("workspace/last", path)
         self._title()
+        blind = [r for r in ws.runs if r.fields_why_not]   # reopened, and no saved state to draw them from
         self.statusBar().showMessage(f"opened {len(ws.runs)} run(s) from {path}"
                                      + (f"; recomputing {len(todo)} saved without results" if todo else
-                                        " (restored: right-click a run → Recompute for its 3D fields)" if ws.runs else ""))
+                                        f" ({len(blind)} without a saved state: right-click a run → Recompute for its 3D fields)"
+                                        if blind else " (3D fields drawn from the saved states)" if ws.runs else ""))
 
     def _title(self) -> None:
         self.setWindowTitle("qchem viz" + (f" — {pathlib.Path(self.ws.path).name}" if self.ws.path else ""))

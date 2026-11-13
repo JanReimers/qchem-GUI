@@ -40,6 +40,7 @@ import os
 import pathlib
 import sys
 import math
+import threading
 from typing import Optional
 
 import numpy as np
@@ -401,6 +402,53 @@ class Solid2Backend:
         if open_run:
             record["refused@open"] = json.loads(open_run)
         return {k: v for k, v in record.items() if isinstance(v, dict) and v}
+
+    # -- a reopened run's 3D fields, from its saved state (qchem_py.StateView) ----------------------------------------------
+    def fields_from_state(self, spec: RunSpec, result: Result) -> Optional[str]:
+        """Give a REOPENED run's result its 3D fields back from its saved state: the library builds only the run's basis and the
+        saved density / orbitals (no Hamiltonian, no SCF), on the FIRST draw (seconds for a molecule, the basis build for a
+        crystal).  The view is the library's to refuse -- a state that is not this spec's (another basis, a moved atom) raises
+        qchem_py.RestartRefused from the draw, with its reason.  Returns why there are no fields (None: attached)."""
+        if self._qc is None:
+            return self._why_absent
+        path = result.state_file
+        if not path or not os.path.exists(path):
+            return "its saved state is gone"
+        native = self.translate(spec).native
+        lock, held = threading.Lock(), {}
+
+        def view():
+            with lock:                                # two panels may draw at once: one view, built once
+                if "view" not in held:
+                    if "deck" in native:
+                        held["view"] = self._qc.StateView.crystal(native["deck"], path)
+                    else:
+                        n = native
+                        held["view"] = self._qc.StateView.molecule(
+                            numbers=n["numbers"], positions=n["positions"], basis=n["basis"], model=n["model"],
+                            symmetry=n["symmetry"], polarized=n["polarized"], multiplicity=n["multiplicity"], pp=n["pp"],
+                            basis_file=n.get("basis_file", ""), angular=n.get("angular") or "cartesian", path=path)
+                return held["view"]
+
+        def scalar(d, name, signed) -> ScalarField:
+            return ScalarField(name, np.asarray(d["values"]), tuple(d["origin"]), tuple(d["spacing"]), signed=signed)
+
+        if "deck" in native:
+            struct = data_structure(spec)
+
+            def crystal(name: str, spin: bool):
+                return lambda npts, pad: scalar(view().field(*cell_box(struct.lattice, npts), spin=spin), name, spin)
+            result.fields = {"density": FieldRef("Electron density", False, crystal("Electron density", False))}
+            if result.polarized:
+                result.fields["spin_density"] = FieldRef("Spin density (ρ↑−ρ↓)", True, crystal("Spin density (ρ↑−ρ↓)", True))
+            return None
+        result.fields = {"density": FieldRef("Electron density", False,
+                                             lambda npts, pad: scalar(view().density(npts, pad), "Electron density", False))}
+        if result.polarized:
+            result.fields["spin_density"] = FieldRef("Spin density (ρ↑−ρ↓)", True,
+                                                     lambda npts, pad: scalar(view().spin_density(npts, pad), "Spin density (ρ↑−ρ↓)", True))
+        result.orbital = lambda i, npts, pad: scalar(view().orbital(i, npts, pad), f"MO #{i}", True)
+        return None
 
     def _solve(self, job: Job, on_step: Optional[StepSink]) -> Result:
         n = job.native

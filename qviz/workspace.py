@@ -46,6 +46,10 @@ class Run:
         self._listeners: list[Callable[["Run"], None]] = []
         self._stop = False                # set by stop() from the GUI thread; read at the next SCF iteration
         self._restored = False            # reopened from a file: result without its calculation
+        self._fields_why_not: Optional[str] = None   # a reopened run: why its 3D fields are not drawn from its saved state
+        #: The 3D view the user left this run in -- {"field", "representation", "iso", "slice", "camera"} -- kept with the
+        #: workspace so a reopened run comes back the way it was left.  The app reads and writes it; {} = never viewed.
+        self.view: dict = {}
 
     @property
     def backend_name(self) -> str:
@@ -70,12 +74,26 @@ class Run:
     # -- lifecycle --------------------------------------------------------
     @property
     def restored(self) -> bool:
-        """Reopened from a workspace file with its result but without its calculation: no 3D fields until recomputed."""
+        """Reopened from a workspace file with its result but without its calculation (see fields_why_not)."""
         return self._restored
 
+    @property
+    def fields_why_not(self) -> Optional[str]:
+        """A REOPENED run's 3D fields: None when they are drawn from its saved state (the back end's fields_from_state), else
+        why not (its state file is gone, its back end keeps none) -- then only a recompute brings them back."""
+        return self._fields_why_not if self._restored else None
+
     def restore(self, result, status: "RunStatus", error: Optional[str]) -> None:
-        """Take a saved result (workspace reopen): no compute; fields come back with compute()."""
+        """Take a saved result (workspace reopen): no compute.  A ready run whose saved state is still on disk gets its 3D
+        fields back from it (drawn on first use); otherwise they come back with compute()."""
         self.result, self.status, self.error, self._restored = result, status, error, True
+        self._fields_why_not = None                   # a run that did not finish draws nothing anyway (is_ready)
+        if result is not None and status is RunStatus.READY:
+            attach = getattr(self.backend, "fields_from_state", None)
+            try:
+                self._fields_why_not = attach(self.spec, result) if attach else f"{self.backend_name} keeps no saved state"
+            except Exception as e:                    # noqa: BLE001 -- a spec the back end no longer takes: no fields, and why
+                self._fields_why_not = str(e)
         self._notify()
 
     def stop(self) -> None:

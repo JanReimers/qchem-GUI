@@ -92,6 +92,20 @@ class WorkspaceOnFake(unittest.TestCase):
         self.assertFalse(a.restored)
         self.assertTrue(a.offers("density"), "a recompute brings the fields back")
 
+    def test_the_view_a_run_was_left_in_comes_back_with_it(self):
+        ws = self.ws()
+        a = ws.add_run(water())
+        b = ws.add_run(water(theory="DFT", functional="LDA"))
+        a.view = {"field": "HOMO", "representation": "Wireframe", "iso": 73, "slice": True,
+                  "camera": [[1.5, -2.0, 3.25], [0.0, 0.0, 0.5], [0.0, 0.0, 1.0]]}
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "w.qproj.h5")
+            project.save_workspace(path, ws)
+            back = project.load_workspace(path, ws.registry, compute=False)
+        self.assertEqual(back.runs[0].view, a.view)
+        self.assertEqual(back.runs[1].view, {}, "a run never viewed has no view")
+        self.assertEqual(back.runs[0].fields_why_not, "Fake keeps no saved state")
+
     def test_a_v1_workspace_is_refused_and_the_converter_makes_a_v2_one(self):
         with tempfile.TemporaryDirectory() as d:
             v1, v2 = os.path.join(d, "v1.h5"), os.path.join(d, "v2.h5")
