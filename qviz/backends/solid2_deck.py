@@ -172,7 +172,7 @@ def to_deck(spec: RunSpec) -> dict:
     deck: dict = {"structure": structure_entry(spec), "kmesh": list(ac.kmesh),
                   "basis": {"data": shared_representation(spec)["basis"].upper()}}
     if (ac.representation or {}).get("spherical"):
-        deck["basis"]["spherical"] = True                 # real solid-harmonic Gaussians (5 d, 7 f); unstated: Cartesian (6 d, 10 f)
+        deck["basis"]["angular"] = "spherical"            # BasisSet::Gaussian::Angular: real solid harmonics (5 d, 7 f); unstated: Cartesian (6 d, 10 f)
     if ac.epsilon_Ha_per_atom != LIB_EPS:                 # the run's ONE accuracy target (V-FACADE-ACCURACY), stated off its default
         deck["accuracy"] = ac.epsilon_Ha_per_atom
     solid: dict = {}
@@ -242,12 +242,12 @@ def to_deck(spec: RunSpec) -> dict:
 MIXER_KNOBS = (("kerker_g0", "kerkerG0", float), ("pulay_depth", "pulayDepth", int), ("pulay_start", "pulayStart", int))
 
 
-#: The SCF seeds a user may state (accuracy.scf["seed"]): (name, menu text, a crystal may, a molecule may).  Unstated = Auto, the
-#: facade's own choice (seed_auto says which).  The library's SeedStrategy names (ChargeDensity/Seed.C).
-SEEDS = (("SAD", "SAD: superposed neutral-atom densities", True, True),
-         ("IonicSAD", "Ionic SAD: superposed ionic densities", True, False),
-         ("CoreGuess", "Core guess: ρ = 0, so the first orbitals are the bare nuclei's (hydrogen-like)", True, True),
-         ("Uniform", "Uniform ρ over the cell", True, False))
+#: The SCF seeds a user may state (accuracy.scf["seed"]), for ANY structure (the library's one seed option, qchem.SeedPolicy):
+#: (name, menu text).  Unstated = Auto, the facade's own choice (seed_auto says which).  The library's SeedStrategy names.
+SEEDS = (("SAD", "SAD: superposed neutral-atom densities"),
+         ("IonicSAD", "Ionic SAD: superposed ionic densities"),
+         ("CoreGuess", "Core guess: ρ = 0, so the first orbitals are the bare nuclei's (hydrogen-like)"),
+         ("Uniform", "Uniform ρ"))
 
 
 def imposed_text(spec: RunSpec) -> str:
@@ -320,7 +320,7 @@ def resolved(spec: RunSpec) -> list[tuple[str, str]]:
     return [("structure", st if isinstance(st, str) else "inline (lattice + sites)"),
             ("k-mesh", "×".join(map(str, d["kmesh"]))),
             ("basis", d["basis"]["data"]),
-            ("Gaussians", "spherical" if d["basis"].get("spherical") else "Cartesian"),
+            ("Gaussians", "spherical" if d["basis"].get("angular") == "spherical" else "Cartesian"),
             ("ε", f"{d['accuracy']:g} Ha/atom, stated: it sizes the grids (rasters, mesh)" if "accuracy" in d
                   else f"{LIB_EPS:g} Ha/atom, the library's default: it sizes the grids (rasters, mesh)"),
             ("symmetry", imposed_text(spec) if d.get("solid", {}).get("imposeSymmetry") else "free (not imposed)"),

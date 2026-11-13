@@ -75,8 +75,9 @@ class OneDraftTwoViews(unittest.TestCase):
         self.assertEqual(s.accuracy.scf["mixing_alpha"], 0.2, "the user's default linear start")
         self.assertAlmostEqual(self.insp.alpha.value(), 0.2)
         self.assertTrue(self.insp.seed_box.itemText(0).startswith("Auto: SAD"), "a valence (LDA + PP) preset seeds from SAD")
-        self.assertFalse(self.insp.seed_box.isEnabled(), "a molecule's seed waits for the structure-neutral option")
-        self.assertFalse(self.insp.angular_box.isEnabled())
+        self.assertTrue(self.insp.seed_box.isEnabled(), "the seed is structure-neutral: a molecule states it too")
+        self.assertTrue(self.insp.angular_box.isEnabled())
+        self.assertEqual(self.insp.seed_box.count(), 1 + 4, "Auto, then every seed the library offers")
         self.assertEqual(self.insp.angular_box.currentText(), "Cartesian")
 
     def test_a_pseudopotential_run_names_the_functional_its_pps_were_fitted_with(self):

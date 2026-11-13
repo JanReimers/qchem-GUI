@@ -133,7 +133,7 @@ def _calculator_args(n: dict) -> dict:
                 diis_sv_tol=n["diis_sv_tol"], mixer=n["mixer"], smearing_kT=n["smearing_kT"],
                 diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"], relax_min=n["relax_min"],
                 ladder_switch_at=n["ladder_switch_at"], restart_from=n.get("restart_from", ""),
-                basis_file=n.get("basis_file", ""),
+                basis_file=n.get("basis_file", ""), seed=n.get("seed", ""), angular=n.get("angular", ""),
                 **{k: n[k] for k, _ in solid2_deck.DECK_GATES})
 
 
@@ -289,10 +289,6 @@ class Solid2Backend:
             Capability("accuracy.representation.basis", molecule(lambda s: rep(s).get("basis") in (None, *BASES)
                                                                  or bool(code_block(s, "solid2").get("basis_file"))),
                        "the stated basis is not a registered Gaussian basis (nor a downloaded one: Basis ▸ Basis Set Exchange)"),
-            Capability("a molecule's seed is the facade's own", molecule(lambda s: not (s.accuracy.scf or {}).get("seed")),
-                       "a stated seed reaches crystals only until the seed rule is structure-neutral (OpenWork)"),
-            Capability("a molecule's Gaussians are Cartesian", molecule(lambda s: not rep(s).get("spherical")),
-                       "spherical Gaussians reach crystals only until the angular form is a structure-neutral basis option (OpenWork)"),
             Capability("a downloaded basis file exists", lambda s: not code_block(s, "solid2").get("basis_file")
                        or os.path.exists(code_block(s, "solid2")["basis_file"]),
                        "the downloaded basis file is gone (Basis ▸ Basis Set Exchange downloads it again)"),
@@ -342,6 +338,8 @@ class Solid2Backend:
             "mixer": str(scf.get("mixer", "Auto")),          # the facade refuses what a molecule cannot mix (Kerker: G space)
             "smearing_kT": float(ph.occupations.kT_Ha) if ph.occupations.smearing == "fermi-dirac" else 0.0,
             "basis_file": str(own.get("basis_file") or ""),
+            "seed": str(scf.get("seed") or ""),               # the structure-neutral options, by the deck's names ("" = Auto / Cartesian)
+            "angular": "spherical" if rep.get("spherical") else "",
             "threads": int(own.get("threads") or 0),          # the run's OpenMP threads, 0 = the process's (qchem_py.Threads)
             "restart_from": solid2_deck.continues_from(spec) or "",
             **{key: -1.0 if scf.get(key) is None else 0.0 if scf[key] == "off" else float(scf[key])   # < 0: default, 0: off

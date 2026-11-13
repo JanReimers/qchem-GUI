@@ -902,23 +902,20 @@ class SetupPanel(QtWidgets.QWidget):
         self.fresh_btn.setVisible(bool(start) and self._run is None)
         self.seed_box.clear()
         self.seed_box.addItem(f"Auto: {solid2_deck.seed_auto(s)}", None)
-        for name, text, crystal_ok, molecule_ok in solid2_deck.SEEDS:
-            if (molecule_ok if mol else crystal_ok):
-                self.seed_box.addItem(text, name)
+        for name, text in solid2_deck.SEEDS:
+            self.seed_box.addItem(text, name)
         stated_seed = (ac.scf or {}).get("seed")
         i = self.seed_box.findData(stated_seed) if stated_seed else 0
         if i < 0:                                     # a stated seed this structure does not offer: shown as it is (the code judges it)
             self.seed_box.addItem(stated_seed, stated_seed); i = self.seed_box.count() - 1
         self.seed_box.setCurrentIndex(i)
-        self.seed_box.setEnabled(not start and self._run is None and not mol)
+        self.seed_box.setEnabled(not start and self._run is None)
         self.threads_box.setValue(int(((ac.representation or {}).get("solid2") or {}).get("threads") or 0))
         self.angular_box.setCurrentIndex(1 if (ac.representation or {}).get("spherical") else 0)
-        self.angular_box.setEnabled(self._run is None and not mol)
-        why = ("A molecule takes the code's own choice for now: the seed and the Gaussians' form become options a molecule "
-               "and a crystal share (the user, 2026-11-12), and the molecular run gets them then") if mol else ""
-        self.seed_box.setToolTip(why or "The density the first iteration starts from (a fresh run; a saved state replaces it).  "
-                                        "Auto: the code's own choice, named here")
-        self.angular_box.setToolTip(why or ANGULAR_TIP)
+        self.angular_box.setEnabled(self._run is None)
+        self.seed_box.setToolTip("The density the first iteration starts from (a fresh run; a saved state replaces it).  "
+                                 "Auto: the code's own choice, named here")
+        self.angular_box.setToolTip(ANGULAR_TIP)
         scf = ac.scf or {}
         self.acc_box.setCurrentText(str(scf.get("accelerator", "Auto")))
         auto_mix = solid2_deck.mixer_auto(s)

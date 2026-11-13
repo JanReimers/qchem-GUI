@@ -434,18 +434,25 @@ class TheBridgeRunsThem(unittest.TestCase):
         s = si_inline()
         s = dataclasses.replace(s, accuracy=dataclasses.replace(s.accuracy, representation={**s.accuracy.representation, "spherical": True}))
         deck = json.loads(solid2().translate(s).native["deck"])
-        self.assertIs(deck["basis"]["spherical"], True)
+        self.assertEqual(deck["basis"]["angular"], "spherical")
         r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
-    def test_a_molecule_that_states_a_seed_or_spherical_gaussians_is_refused_not_substituted(self):
+    def test_a_molecule_states_the_same_seed_and_gaussians_a_crystal_does(self):
+        """The structure-neutral options (qchem.SeedPolicy, BasisSet::Gaussian::Angular) reach the molecular facade by the deck's
+        names: the core guess starts from rho = 0 and reaches the same state; spherical d shells have 5 functions, not 6."""
         from qviz import molecules
         import dataclasses
         be, spec = solid2(), molecules.preset_spec("Methane (CH4)")
-        for ac in (dataclasses.replace(spec.accuracy, scf={**spec.accuracy.scf, "seed": "SAD"}),
-                   dataclasses.replace(spec.accuracy, representation={**spec.accuracy.representation, "spherical": True})):
-            with self.subTest(ac):
-                self.assertFalse(be.capabilities().can_run(dataclasses.replace(spec, accuracy=ac)))
+        base = be.run(be.translate(spec))
+        core = dataclasses.replace(spec, accuracy=dataclasses.replace(spec.accuracy, scf={**spec.accuracy.scf, "seed": "CoreGuess"}))
+        sph = dataclasses.replace(spec, accuracy=dataclasses.replace(spec.accuracy,
+                                                                    representation={**spec.accuracy.representation, "spherical": True}))
+        self.assertEqual((be.translate(core).native["seed"], be.translate(sph).native["angular"]), ("CoreGuess", "spherical"))
+        rc, rs = be.run(be.translate(core)), be.run(be.translate(sph))
+        self.assertTrue(base.converged and rc.converged and rs.converged)
+        self.assertAlmostEqual(rc.energy_Ha, base.energy_Ha, places=7, msg="the seed moves the start, not the answer")
+        self.assertLess(len(rs.levels), len(base.levels), "spherical Gaussians drop each d shell's s contaminant")
 
     def test_an_imposed_crystal_states_it_and_the_library_takes_it(self):
         deck = json.loads(solid2().translate(si_inline(impose_symmetry=True)).native["deck"])
