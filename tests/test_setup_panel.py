@@ -87,7 +87,15 @@ class OneDraftTwoViews(unittest.TestCase):
             self.skipTest(why)
         panel = SetupPanel(self.draft, BackendRegistry([FakeBackend()]), qc=qc)
         self.say("molecule F2")                                 # a valence preset: LDA + GTH pseudopotentials
-        self.assertEqual(panel.pp_fitted.text(), "GTH PPs (gth-lda-valence) fitted with PADE")
+        self.assertEqual(panel.pp_fitted.text(), "GTH PPs (gth-lda-valence) fitted with PADE (libxc 20)")
+        # the library's check (Hamiltonian::PPFunctionalChecks): LDA = Dirac + VWN5 {1, 7} is not the PPs' PADE {20} -- warned, and fixed in one click
+        form = panel._hform
+        self.assertTrue(form.isRowVisible(panel.pp_mismatch) and form.isRowVisible(panel.pp_match_btn))
+        self.assertIn("libxc 1 7", panel.pp_mismatch.text())
+        self.assertEqual(panel.pp_match_btn.text(), "Use PADE, the pseudopotentials' functional")
+        panel.pp_match_btn.click()
+        self.assertEqual((self.draft.spec.physics.theory, self.draft.spec.physics.functional), ("DFT", "PADE"))
+        self.assertFalse(form.isRowVisible(panel.pp_mismatch) or form.isRowVisible(panel.pp_match_btn), "PADE matches the fit")
 
     def test_one_undo_stack(self):
         self.say("set accuracy.epsilon_Ha_per_atom=1e-6")

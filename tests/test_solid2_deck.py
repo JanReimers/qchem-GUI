@@ -454,6 +454,16 @@ class TheBridgeRunsThem(unittest.TestCase):
         self.assertAlmostEqual(rc.energy_Ha, base.energy_Ha, places=7, msg="the seed moves the start, not the answer")
         self.assertLess(len(rs.levels), len(base.levels), "spherical Gaussians drop each d shell's s contaminant")
 
+    def test_a_pade_crystal_states_its_model_and_the_library_takes_it(self):
+        import dataclasses
+        s = si_inline()
+        s = dataclasses.replace(s, physics=dataclasses.replace(s.physics, functional="PADE"))
+        deck = json.loads(solid2().translate(s).native["deck"])
+        self.assertEqual(deck["solid"]["model"], "PADE")
+        r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertNotIn("model", json.loads(solid2().translate(si_inline()).native["deck"]).get("solid", {}), "LDA is the default")
+
     def test_an_imposed_crystal_states_it_and_the_library_takes_it(self):
         deck = json.loads(solid2().translate(si_inline(impose_symmetry=True)).native["deck"])
         self.assertIs(deck["solid"]["imposeSymmetry"], True, "a stated imposition reaches the deck (it was silently dropped)")

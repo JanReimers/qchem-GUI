@@ -54,7 +54,7 @@ from .base import FieldRef, Job, Refused, Result, RunStopped, StepSink, code_blo
 NAME = "SOLID²"
 
 # The models the molecular facade has (CalcOptions::model) and the spec's names for them.
-_MODEL = {("HF", None): "HF", ("DFT", "LDA"): "LDA", ("DFT", "Xalpha"): "Xalpha"}
+_MODEL = {("HF", None): "HF", ("DFT", "LDA"): "LDA", ("DFT", "PADE"): "PADE", ("DFT", "Xalpha"): "Xalpha"}   # Hamiltonian::Name
 
 # The registered Gaussian basis sets (BasisSet::Gaussian::Factory) -- a stated representation must be one.
 BASES = ("dzvp", "dzvp2", "tzvp", "orb", "orb1", "sipp", "sipp_sr", "valence_lowq", "valence_lowq_sph",
@@ -273,7 +273,7 @@ class Solid2Backend:
                        "deck::Build stops at the SCF)"),
             Capability("physics.theory/functional", molecule(lambda s: (s.physics.theory, s.physics.functional
                        if s.physics.theory == "DFT" else None) in _MODEL),
-                       "molecular models are HF, LDA and Xalpha"),
+                       "molecular models are HF, LDA, PADE and Xalpha"),
             Capability("physics.relativity", lambda s: s.physics.relativity == "none"
                        or (s.physics.relativity == "scalar" and s.physics.core == "pseudopotential"),
                        "non-relativistic all-electron (scalar relativity only through a pseudopotential)"),

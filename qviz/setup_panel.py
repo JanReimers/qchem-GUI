@@ -33,7 +33,7 @@ from .draft import Edit, SpecDraft
 from .spec import RunSpec, SpecError
 
 #: the method box's names -> (theory, functional)
-METHODS = {"HF": ("HF", None), "LDA": ("DFT", "LDA"), "Xalpha": ("DFT", "Xalpha")}
+METHODS = {"HF": ("HF", None), "LDA": ("DFT", "LDA"), "PADE": ("DFT", "PADE"), "Xalpha": ("DFT", "Xalpha")}   # the library's model names
 BASES = ("dzvp", "orb1", "dzvp2", "tzvp", "valence_lowq_vb", "sipp_sr")
 ACCELERATORS = ("Auto", "DIIS", "GDM", "Ladder", "Null")   # Auto: the facade's policy (a molecule's is DIIS)
 MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mixing; Kerker/Pulay mix in G space (crystals)
@@ -270,6 +270,12 @@ class SetupPanel(QtWidgets.QWidget):
         self.pp_fitted.setToolTip("A pseudopotential is generated (fitted) with one exchange-correlation functional; a run is most "
                                   "faithful to it with the same one.  The library names it per element")
         f.addRow("PPs fitted with", self.pp_fitted)
+        # THE MISMATCH, before the run (Hamiltonian::PPFunctionalChecks, compared on libxc ids): the warning and the one-click fix
+        self.pp_mismatch = QtWidgets.QLabel(); self.pp_mismatch.setWordWrap(True); self.pp_mismatch.setStyleSheet("color:#cf222e")
+        self.pp_match_btn = QtWidgets.QPushButton()
+        self.pp_match_btn.setToolTip("State the model the pseudopotentials were fitted with (the library names it)")
+        self.pp_match_btn.clicked.connect(self._use_pp_model)
+        f.addRow("", self.pp_mismatch); f.addRow("", self.pp_match_btn)
         self.pol_check = QtWidgets.QCheckBox("spin-polarized (two channels)")
         self.pol_check.clicked.connect(lambda on: self._edit({"physics": {"spin": {"polarized": on}}}, "spin"))
         f.addRow("Spin", self.pol_check)
@@ -580,25 +586,56 @@ class SetupPanel(QtWidgets.QWidget):
         self.draft.set(spec, "user", why)
         self.tabs.setCurrentIndex(0)
 
-    def _pp_fitted_text(self, s: RunSpec) -> str:
-        """'GTH PPs fitted with PADE' (or per element when they differ), asked of the library; why not, when it cannot say."""
-        els = sorted({site.element for site in s.structure.sites})
+    def _pp_answer(self, s: RunSpec) -> Optional[dict]:
+        """The library's pseudopotentials answer for this spec's elements against its model (checks included), cached; None
+        without qchem_py.  The GUI shows it and never compares functionals itself."""
         if self._qc is None or not hasattr(self._qc, "pseudopotentials"):
-            return "— (qchem_py is not loaded)"
-        key = tuple(els)
+            return None
+        els = sorted({site.element for site in s.structure.sites})
+        model = next((k for k, v in METHODS.items() if v == (s.physics.theory, s.physics.functional)), None)
+        key = (tuple(els), model)
         if key not in self._pp_fitted_cache:
-            out = json.loads(self._qc.pseudopotentials(json.dumps({"set": "gth-lda-valence", "elements": els})))
-            self._pp_fitted_cache[key] = out
-        out = self._pp_fitted_cache[key]
+            req = {"set": "gth-lda-valence", "elements": els} | ({"model": model} if model else {})
+            self._pp_fitted_cache[key] = json.loads(self._qc.pseudopotentials(json.dumps(req)))
+        return self._pp_fitted_cache[key]
+
+    def _pp_fitted_text(self, s: RunSpec) -> str:
+        """'GTH PPs fitted with PADE (libxc 20)' (or per element when they differ), asked of the library; why not, when it cannot say."""
+        out = self._pp_answer(s)
+        if out is None:
+            return "— (qchem_py is not loaded)"
         if "error" in out:
             return out["error"]
         fitted = out.get("fitted") or {}
         if not fitted:
             return "— (this qchem_py does not name the fitted functional)"
-        labels = sorted(set(fitted.values()))
-        if len(labels) == 1:
-            return f"GTH PPs ({out['set']}) fitted with {labels[0]}"
-        return f"GTH PPs ({out['set']}) fitted with " + ", ".join(f"{e}: {f}" for e, f in fitted.items())
+        ids = {c["element"]: c["fittedLibxcIDs"] for c in out.get("checks", [])}
+        def name(el):
+            return fitted[el] + (f" (libxc {' '.join(map(str, ids[el]))})" if el in ids else "")
+        named = {el: name(el) for el in fitted}
+        if len(set(named.values())) == 1:
+            return f"GTH PPs ({out['set']}) fitted with {next(iter(named.values()))}"
+        return f"GTH PPs ({out['set']}) fitted with " + ", ".join(f"{e}: {n}" for e, n in named.items())
+
+    def _pp_mismatch(self, s: RunSpec) -> tuple[str, str]:
+        """(the warning, the model that matches) from the library's checks; ("", "") when they match or it cannot say."""
+        out = self._pp_answer(s) or {}
+        bad = [c for c in out.get("checks", []) if not c["match"]]
+        if not bad:
+            return "", ""
+        c = bad[0]
+        els = ", ".join(b["element"] for b in bad)
+        text = (f"The run states {c['run']} (libxc {' '.join(map(str, c['runLibxcIDs']))}), but the pseudopotentials of {els} were "
+                f"fitted with {c['fitted']} (libxc {' '.join(map(str, c['fittedLibxcIDs']))}): a PP is most accurate under its own "
+                "functional.  " + (f"State {c['matchingModel']} to match." if c["matchingModel"]
+                                   else f"No model here matches {c['fitted']}: use pseudopotentials fitted for the run's functional."))
+        return text, c["matchingModel"]
+
+    def _use_pp_model(self) -> None:
+        s = self.draft.spec
+        _, model = self._pp_mismatch(s)
+        if model in METHODS:
+            self._edit({"physics": dict(zip(("theory", "functional"), METHODS[model]))}, f"method {model} (the PPs' own)")
 
     def _pick_preset(self, name: str) -> None:
         if self._run is None and name in molecules.MOLECULES:
@@ -865,6 +902,11 @@ class SetupPanel(QtWidgets.QWidget):
         self.pp_check.setChecked(p.core == "pseudopotential")
         self.pp_fitted.setText(self._pp_fitted_text(s) if p.core == "pseudopotential" else "")
         self._hform.setRowVisible(self.pp_fitted, p.core == "pseudopotential")
+        warn, model = self._pp_mismatch(s) if p.core == "pseudopotential" else ("", "")
+        self.pp_mismatch.setText(warn)
+        self.pp_match_btn.setText(f"Use {model}, the pseudopotentials' functional" if model else "")
+        self._hform.setRowVisible(self.pp_mismatch, bool(warn))
+        self._hform.setRowVisible(self.pp_match_btn, bool(model) and self._run is None)
         self.pol_check.setChecked(p.spin.polarized)
         if mol:
             self.mult_spin.setSpecialValueText(auto_multiplicity(s))

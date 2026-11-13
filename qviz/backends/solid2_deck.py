@@ -33,7 +33,8 @@ from typing import Optional
 from ..spec import RunSpec
 from .base import code_block, shared_representation
 
-_PP_SET = {"LDA": "gth-lda-valence"}                 # functional -> the pp set generated for it (pseudopotentials.json)
+#: functional -> the pp set its run reads (pseudopotentials.json).  PADE is the GTH LDA set's OWN fit (lane H, Model::PADE): same set.
+_PP_SET = {"LDA": "gth-lda-valence", "PADE": "gth-lda-valence"}
 _BASES = ("SIPP", "SIPP_SR", "VALENCE_LOWQ", "VALENCE_LOWQ_SR", "VALENCE_LOWQ_SR2", "VALENCE_LOWQ_SPH",
           "VALENCE_LOWQ_VA", "VALENCE_LOWQ_VB")       # BasisSetData values with a pseudopotential valence block
 
@@ -178,6 +179,8 @@ def to_deck(spec: RunSpec) -> dict:
     solid: dict = {}
     if _PP_SET[ph.functional] != "gth-lda-valence":
         solid["pp"] = _PP_SET[ph.functional]
+    if ph.functional != "LDA":
+        solid["model"] = ph.functional                    # Hamiltonian::Name (solid.model; unstated: LDA)
     if ph.spin.polarized:
         m = ph.spin.site_moments
         solid["multiplicity"] = int(round(abs(sum(m)))) + 1 if m else (ph.spin.multiplicity or 1)
