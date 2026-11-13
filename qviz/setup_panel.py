@@ -36,10 +36,6 @@ from .spec import RunSpec, SpecError
 METHODS = {"HF": ("HF", None), "LDA": ("DFT", "LDA"), "Xalpha": ("DFT", "Xalpha")}
 BASES = ("dzvp", "orb1", "dzvp2", "tzvp", "valence_lowq_vb", "sipp_sr")
 ACCELERATORS = ("Auto", "DIIS", "GDM", "Ladder", "Null")   # Auto: the facade's policy (a molecule's is DIIS)
-#: AN OPEN LIBRARY DEFECT, shown beside Kerker G0 on a spin-polarized run (controller 2026-11-12; the user lost NiO's moments to it).
-#: Lane B's fix READY removes this string and its row.
-KERKER_SPIN_DEFECT = ("Kerker preconditioning (kerkerG0 > 0) on a spin-polarized run can drain the magnetic moment: open defect "
-                      "(OpenWork §3). For now use Pulay on D (no kerkerG0).")
 MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mixing; Kerker/Pulay mix in G space (crystals)
 #: the trim presets (the user, 2026-11-11: "some crude control like {light, medium, ruthless} auto trim"): basis.autoTrim at these
 #: solid.orthoTol -- the vet stage removes the most diffuse implicated shell per pass until no k-block drops an AO at orthoTol.
@@ -394,9 +390,6 @@ class SetupPanel(QtWidgets.QWidget):
                                   "G²/(G²+G0²).  Kerker needs it; for Pulay it preconditions the history (not stated: Pulay on D)")
         self.kerker_g0.editingFinished.connect(lambda: self._edit({"accuracy": {"scf": {"kerker_g0": round(self.kerker_g0.value(), 4) or None}}}, "Kerker G0"))
         f.addRow("Kerker G0", self.kerker_g0)
-        self.kerker_warn = QtWidgets.QLabel(KERKER_SPIN_DEFECT); self.kerker_warn.setWordWrap(True)
-        self.kerker_warn.setStyleSheet("color:#cf222e")
-        f.addRow("", self.kerker_warn)
         self.pulay_depth, self.pulay_start = QtWidgets.QSpinBox(), QtWidgets.QSpinBox()
         self.pulay_depth.setRange(0, 30); self.pulay_depth.setSpecialValueText("not stated")
         self.pulay_depth.setToolTip("How many past densities Pulay extrapolates over (Pulay needs it)")
@@ -945,8 +938,6 @@ class SetupPanel(QtWidgets.QWidget):
         self.pulay_depth.setValue(int(scf.get("pulay_depth") or 0))
         self.pulay_start.setValue(int(scf.get("pulay_start") or 0))
         self._scf_form.setRowVisible(self.kerker_g0, mixer in ("Kerker", "Pulay"))
-        self._scf_form.setRowVisible(self.kerker_warn, mixer in ("Kerker", "Pulay") and bool(scf.get("kerker_g0"))
-                                     and bool(s.physics.spin.polarized))
         for box in (self.pulay_depth, self.pulay_start):
             self._scf_form.setRowVisible(box, mixer == "Pulay")
         self.maxit.setValue(int(scf.get("max_iter", 100)))
