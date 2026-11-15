@@ -607,6 +607,33 @@ if __name__ == "__main__":
 
 
 @unittest.skipUnless(solid2()._qc is not None, "qchem_py not built (QCHEM_BUILD)")
+class TheSetupRefusesAsAValue(unittest.TestCase):
+    """A molecule's options the library cannot run come back from MoleculeSetup::Admit as a SetupRefusal VALUE: the binding raises
+    qchem_py.SetupRefused (a ValueError, told apart from a refused state), and the back end raises Refused with the record that
+    names the policy (a workspace Run then settles FAILED, its record kept)."""
+
+    def test_the_binding_raises_setup_refused_naming_the_policy(self):
+        be = solid2()
+        n = be.translate(water()).native
+        with self.assertRaisesRegex(be._qc.SetupRefused, "^setup refused \\(policy SpinMultiplicity\\)"):
+            be._qc.Calculator(n["numbers"], n["positions"], basis="dzvp", model="HF", polarized=True, multiplicity=2)
+        self.assertTrue(issubclass(be._qc.SetupRefused, ValueError))
+        self.assertFalse(issubclass(be._qc.SetupRefused, be._qc.RestartRefused))
+
+    def test_a_refused_setup_is_refused_with_the_record_naming_its_policy(self):
+        # The spec's own check refuses a doublet water first; the native job is edited to reach the LIBRARY's door.
+        from qviz.backends.base import Refused
+        be = solid2()
+        job = be.translate(water())
+        job.native.update(polarized=True, multiplicity=2)
+        with self.assertRaises(Refused) as caught:
+            be.run(job)
+        self.assertTrue(str(caught.exception).startswith("setup refused (policy SpinMultiplicity)"), str(caught.exception))
+        self.assertIsInstance(caught.exception.__cause__, be._qc.SetupRefused)
+        self.assertIn("SpinMultiplicity", json.dumps(caught.exception.record))
+
+
+@unittest.skipUnless(solid2()._qc is not None, "qchem_py not built (QCHEM_BUILD)")
 class ReopenedRunsDraw(unittest.TestCase):
     """A run reopened from a workspace file draws its 3D fields from its SAVED STATE (qchem_py.StateView: the basis and the
     saved D / C, no SCF) -- the same fields the live run drew -- and says so when the state is gone."""
