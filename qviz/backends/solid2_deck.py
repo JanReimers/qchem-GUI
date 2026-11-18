@@ -2,7 +2,8 @@
 qviz.backends.solid2_deck -- a crystal RunSpec as a qchem INPUT DECK (doc/RunSpecPlan.md §9, route (b): the deck is the seam).
 
 The GUI's RunSpec never reaches the library.  This module is the ONE translator: RunSpec -> deck JSON (qchem
-src/Calculation/Deck.C, schema 1): the file `rundeck` runs, and the JSON the bridge hands to `deck::Build`
+src/Calculation/Deck.C, SCHEMA 2: doc/InputDeck.md §3, the shared options at the top, only the
+periodic-only ones in `solid`): the file `rundeck` runs, and the JSON the bridge hands to `deck::Build`
 (`qchem_py.SolidRun`, qviz.backends.solid2).  So every GUI crystal run is a deck `rundeck` reproduces, and there is no second copy of the
 deck's resolve logic in pybind.
 
@@ -12,14 +13,15 @@ What the deck is told, and what it is left to derive:
     structure: the materials.json entry itself (`lattice.vectors_bohr` rows a, b, c; `atoms` el + frac -- qchem's
     decks/Si_diamond_inline.json).
   * Nelec / species -- derived by the deck from the material and the pp set, never restated.
-  * spin -- unpolarized = multiplicity 0 (the deck's minimal-spin default, not written); polarized = the two-channel run,
-    multiplicity |Σ site_moments| + 1, and the ordering as `siteSpins` (the moments' signs: the deck's decoration is a
-    sublattice sign, the magnitude is the seed's business).
+  * spin -- unpolarized = nothing written (the deck's UnPolarized, minimal-spin default); polarized = `"spin": "Polarized"`
+    (R6: the two-channel run) beside multiplicity |Σ site_moments| + 1 (S only: an AFM cell is 1), and the ordering as `spins`
+    (the moments' signs: the deck's decoration is a sublattice sign, the magnitude is the seed's business).
   * +U -- one manifold per site; projector ortho-atomic | pseudo-atomic | lowdin (CP2K's LOWDIN = the deck's siteShells).
   * ε -- NOT mapped yet: the deck's own defaults (the anchors' recipe) stand, and the resolved list says so.  The k-mesh
     must be stated (no ε -> k-mesh rule is banked).
   * representation["solid2"]["deck"] -- a partial deck, deep-merged LAST: the stated per-code recipe (a parity recipe's
-    SCF gates, an xcMesh).  Like every per-code block it is read by this code alone.
+    SCF gates, an xc.mesh), in schema 2 (a saved schema-1 block is moved at load: qviz.deck_schema).  Like every per-code
+    block it is read by this code alone.
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ import pathlib
 from typing import Optional
 
 from ..spec import RunSpec
+from .. import deck_schema
 from .base import code_block, shared_representation
 
 #: functional -> the pp set its run reads (pseudopotentials.json).  PADE is the GTH LDA set's OWN fit (lane H, Model::PADE): same set.
@@ -152,7 +155,7 @@ def structure_entry(spec: RunSpec) -> str | dict:
     if src and shipped and _material_mismatch(spec, src) is None:
         return src
     # each atom's `spin` rides the entry as it does in materials.json: the library's SEED reads its magnetic decoration from the
-    # structure's atoms (solid.siteSpins drives the imposition); without it an inline AFM cell seeded NON-magnetic (the user's NiO,
+    # structure's atoms (the deck's spins drive the imposition); without it an inline AFM cell seeded NON-magnetic (the user's NiO,
     # 2026-11-12: m_site 0.000000 at iteration 1 vs 2.48 for the same cell by name)
     moments = spec.physics.spin.site_moments or ()
     entry: dict = {"lattice": {"vectors_bohr": [list(r) for r in spec.structure.lattice_bohr]},
@@ -170,28 +173,29 @@ def to_deck(spec: RunSpec) -> dict:
     assert why_not(spec) is None, why_not(spec)
     ph, ac, tk = spec.physics, spec.accuracy, spec.task
     tags = {s.tag: i for i, s in enumerate(spec.structure.sites) if s.tag}
-    deck: dict = {"structure": structure_entry(spec), "kmesh": list(ac.kmesh),
+    deck: dict = {"schema": deck_schema.SCHEMA, "structure": structure_entry(spec), "kmesh": list(ac.kmesh),
                   "basis": {"data": shared_representation(spec)["basis"].upper()}}
     if (ac.representation or {}).get("spherical"):
         deck["basis"]["angular"] = "spherical"            # BasisSet::Gaussian::Angular: real solid harmonics (5 d, 7 f); unstated: Cartesian (6 d, 10 f)
     if ac.epsilon_Ha_per_atom != LIB_EPS:                 # the run's ONE accuracy target (V-FACADE-ACCURACY), stated off its default
         deck["accuracy"] = ac.epsilon_Ha_per_atom
-    solid: dict = {}
     if _PP_SET[ph.functional] != "gth-lda-valence":
-        solid["pp"] = _PP_SET[ph.functional]
+        deck["pp"] = _PP_SET[ph.functional]
     if ph.functional != "LDA":
-        solid["model"] = ph.functional                    # Hamiltonian::Name (solid.model; unstated: LDA)
-    if ph.spin.polarized:
+        deck["model"] = ph.functional                     # Hamiltonian::Name (RunOptions::model; a solid's unstated: LDA)
+    if ph.spin.polarized:                                 # R6: the spin group and S are two knobs
         m = ph.spin.site_moments
-        solid["multiplicity"] = int(round(abs(sum(m)))) + 1 if m else (ph.spin.multiplicity or 1)
+        deck["spin"] = "Polarized"                        # two channels: an AFM cell's local moments need them
+        deck["multiplicity"] = int(round(abs(sum(m)))) + 1 if m else (ph.spin.multiplicity or 1)   # S only: AFM -> 1
         if m:
-            solid["siteSpins"] = [_sign(x) for x in m]
+            deck["spins"] = [_sign(x) for x in m]         # the stated ordering, +1/-1/0 per site
     if (ac.scf or {}).get("accelerator"):
-        solid["accelerator"] = ac.scf["accelerator"]      # SolidCalcOptions::accelerator by name: Auto | DIIS | GDM | Ladder | Null
+        deck["accelerator"] = ac.scf["accelerator"]       # RunOptions::accelerator by name: Auto | DIIS | GDM | Ladder | Null
     if (ac.scf or {}).get("impose_symmetry"):
-        solid["imposeSymmetry"] = True                    # the SHUBNIKOV group of the stated siteSpins (a polarized crystal), else the space group
+        deck["imposeSymmetry"] = True                     # the SHUBNIKOV group of the stated spins (a polarized crystal), else the space group
     if (ac.scf or {}).get("seed"):
-        solid["seed"] = ac.scf["seed"]                    # SolidCalcOptions::seed by name: IonicSAD (the facade's) | SAD | CoreGuess | Uniform
+        deck["seed"] = ac.scf["seed"]                     # RunOptions::seed by name: IonicSAD (the facade's) | SAD | CoreGuess | Uniform
+    solid: dict = {}                                      # the PERIODIC-ONLY options
     if ph.hubbard:
         solid["hubbard"] = [{"site": tags[t], "l": h.l, "U_eV": h.U_eV, **_PROJECTOR[h.projector]}
                             for h in ph.hubbard for t in h.sites]
@@ -326,8 +330,8 @@ def resolved(spec: RunSpec) -> list[tuple[str, str]]:
             ("Gaussians", "spherical" if d["basis"].get("angular") == "spherical" else "Cartesian"),
             ("ε", f"{d['accuracy']:g} Ha/atom, stated: it sizes the grids (rasters, mesh)" if "accuracy" in d
                   else f"{LIB_EPS:g} Ha/atom, the library's default: it sizes the grids (rasters, mesh)"),
-            ("symmetry", imposed_text(spec) if d.get("solid", {}).get("imposeSymmetry") else "free (not imposed)"),
+            ("symmetry", imposed_text(spec) if d.get("imposeSymmetry") else "free (not imposed)"),
             ("threads", f"{d['threads']['openmp']} (OpenMP)" if "threads" in d else "the process's (QCHEM_OPENMP_THREADS; unset = serial)"),
-            ("accelerator", d.get("solid", {}).get("accelerator", "Auto (the facade's policy)")),
+            ("accelerator", d.get("accelerator", "Auto (the facade's policy)")),
             ("ρ mixer", (d.get("scf") or {}).get("mixer") or f"Auto: {mixer_auto(spec)}"),
-            ("starts from", continues_from(spec) or f"scratch, seeded by {d.get('solid', {}).get('seed') or 'Auto: ' + seed_auto(spec)}")]
+            ("starts from", continues_from(spec) or f"scratch, seeded by {d.get('seed') or 'Auto: ' + seed_auto(spec)}")]

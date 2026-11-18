@@ -77,8 +77,10 @@ class GoldenDecks(unittest.TestCase):
     def test_mno_plus_u_states_the_ordering_and_the_manifolds(self):
         d = D.to_deck(mno_plus_u())
         self.assertEqual(d["structure"], "MnO_AFM2")
-        self.assertEqual(d["solid"]["multiplicity"], 1, "AFM: zero net moment -> the two-channel singlet")
-        self.assertEqual(d["solid"]["siteSpins"], [1, -1, 0, 0])
+        self.assertEqual(d["schema"], 2)
+        self.assertEqual((d["spin"], d["multiplicity"]), ("Polarized", 1), "AFM (R6): two channels, zero net moment -> S = 0")
+        self.assertEqual(d["spins"], [1, -1, 0, 0])
+        self.assertEqual(set(d["solid"]), {"hubbard"}, "only the periodic-only options stay in solid")
         self.assertEqual(d["solid"]["hubbard"], [{"site": 0, "l": 2, "U_eV": 4.0, "projector": "siteShells"},
                                                  {"site": 1, "l": 2, "U_eV": 4.0, "projector": "siteShells"}])
         self.assertEqual(d["scf"], {"smearingkT": 5e-3, "NMaxIter": 200})
@@ -159,8 +161,8 @@ def solid2():
 class Continuation(unittest.TestCase):
     """The SCF knobs a continuation changes reach the deck, and the start rides the deck's own state block."""
     def test_the_stated_accelerator_reaches_the_deck(self):
-        self.assertEqual(D.to_deck(si_inline(accelerator="GDM"))["solid"]["accelerator"], "GDM")
-        self.assertNotIn("accelerator", D.to_deck(si_inline()).get("solid", {}), "unstated: the facade's Auto policy")
+        self.assertEqual(D.to_deck(si_inline(accelerator="GDM"))["accelerator"], "GDM")
+        self.assertNotIn("accelerator", D.to_deck(si_inline()), "unstated: the facade's Auto policy")
 
     def test_continued_round_trips_and_keeps_the_recipe(self):
         s = D.continued(si_inline(accelerator="GDM"), "/x/Si.h5")
@@ -428,7 +430,7 @@ class TheBridgeRunsThem(unittest.TestCase):
         for seed in ("SAD", "IonicSAD", "CoreGuess", "Uniform"):
             with self.subTest(seed):
                 deck = json.loads(solid2().translate(si_inline(seed=seed)).native["deck"])
-                self.assertEqual(deck["solid"]["seed"], seed)
+                self.assertEqual(deck["seed"], seed)
                 r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
                 self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         s = si_inline()
@@ -459,17 +461,17 @@ class TheBridgeRunsThem(unittest.TestCase):
         s = si_inline()
         s = dataclasses.replace(s, physics=dataclasses.replace(s.physics, functional="PADE"))
         deck = json.loads(solid2().translate(s).native["deck"])
-        self.assertEqual(deck["solid"]["model"], "PADE")
+        self.assertEqual(deck["model"], "PADE")
         r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-        self.assertNotIn("model", json.loads(solid2().translate(si_inline()).native["deck"]).get("solid", {}), "LDA is the default")
+        self.assertNotIn("model", json.loads(solid2().translate(si_inline()).native["deck"]), "LDA is the default")
 
     def test_an_imposed_crystal_states_it_and_the_library_takes_it(self):
         deck = json.loads(solid2().translate(si_inline(impose_symmetry=True)).native["deck"])
-        self.assertIs(deck["solid"]["imposeSymmetry"], True, "a stated imposition reaches the deck (it was silently dropped)")
+        self.assertIs(deck["imposeSymmetry"], True, "a stated imposition reaches the deck (it was silently dropped)")
         r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-        self.assertNotIn("imposeSymmetry", json.loads(solid2().translate(si_inline()).native["deck"]).get("solid", {}))
+        self.assertNotIn("imposeSymmetry", json.loads(solid2().translate(si_inline()).native["deck"]))
 
     def test_a_runs_threads_reach_the_deck_and_a_molecule_runs_inside_its_scope(self):
         import dataclasses

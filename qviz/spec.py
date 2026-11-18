@@ -21,6 +21,7 @@ RULED 2026-11-01 (doc/RunSpecPlan.md §10):
 """
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass, field, fields, asdict, is_dataclass
 from typing import Any, Optional
@@ -238,11 +239,30 @@ class RunSpec:
         schema = d.pop("schema", SCHEMA)
         if schema != SCHEMA:
             raise SpecError(f"schema {schema!r}: this reader knows {SCHEMA!r}")
+        d = _deck_to_schema2(d)
         return _read(cls, d, "")
 
     @classmethod
     def from_json(cls, text: str) -> "RunSpec":
         return cls.from_dict(json.loads(text))
+
+
+def _deck_to_schema2(d: dict) -> dict:
+    """A saved spec's solid2 deck block (accuracy.representation.solid2.deck) in the qchem deck's schema 2 (qviz.deck_schema):
+    a spec saved before 2026-11-17 states the shared keys inside `solid`."""
+    from .deck_schema import DeckSchemaError, migrate
+    own = ((d.get("accuracy") or {}).get("representation") or {}).get("solid2") or {}
+    if not isinstance(own, dict) or "deck" not in own:
+        return d
+    try:
+        deck = migrate(own["deck"])
+    except DeckSchemaError as e:
+        raise SpecError(str(e)) from e
+    if deck is own["deck"]:
+        return d
+    d = copy.deepcopy(d)
+    d["accuracy"]["representation"]["solid2"]["deck"] = deck
+    return d
 
 
 def _check(problems: list[str], ok: bool, msg: str) -> None:

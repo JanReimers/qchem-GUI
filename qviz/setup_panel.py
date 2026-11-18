@@ -38,7 +38,7 @@ BASES = ("dzvp", "orb1", "dzvp2", "tzvp", "valence_lowq_vb", "sipp_sr")
 ACCELERATORS = ("Auto", "DIIS", "GDM", "Ladder", "Null")   # Auto: the facade's policy (a molecule's is DIIS)
 MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mixing; Kerker/Pulay mix in G space (crystals)
 #: the trim presets (the user, 2026-11-11: "some crude control like {light, medium, ruthless} auto trim"): basis.autoTrim at these
-#: solid.orthoTol -- the vet stage removes the most diffuse implicated shell per pass until no k-block drops an AO at orthoTol.
+#: orthoTol -- the vet stage removes the most diffuse implicated shell per pass until no k-block drops an AO at orthoTol.
 #: medium = the conditioning report's floor (OverlapConditioning); the banked NiO / MnO decks state 1e-4 (ruthless).
 TRIM_PRESETS = (("off", None), ("light", 1e-8), ("medium", 1e-6), ("ruthless", 1e-4))
 BASIS_TIP = ("orb1 is the smallest/fastest; valence_lowq_vb / sipp_sr are valence (GTH) bases -- with the pseudopotential "
@@ -228,7 +228,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.spins_edit = QtWidgets.QLineEdit()
         self.spins_edit.setPlaceholderText("one per site: + - 0  (empty = no magnetic order)")
         self.spins_edit.setToolTip("The crystal's collinear magnetic order, stated after import: one of + - 0 per site in site "
-                                   "order (an AFM-II MnO cell: + - 0 0).  The deck gets the signs (solid.siteSpins).")
+                                   "order (an AFM-II MnO cell: + - 0 0).  The deck gets the signs (spins).")
         self.spins_edit.editingFinished.connect(self._on_spins)
         f.addRow("Site spins", self.spins_edit)
         self.save_material_btn = QtWidgets.QPushButton("Save to my materials…")
@@ -316,7 +316,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.trim_box = QtWidgets.QComboBox()
         for name, tol in TRIM_PRESETS:
             self.trim_box.addItem(name if tol is None else f"{name} (orthoTol {tol:g})", tol)
-        self.trim_box.setToolTip("Remove near-dependent diffuse shells (basis.autoTrim at solid.orthoTol): the library removes the most "
+        self.trim_box.setToolTip("Remove near-dependent diffuse shells (basis.autoTrim at orthoTol): the library removes the most "
                                  "diffuse shell implicated in a near-dependence, from every site of that element and every k, until "
                                  "no k-block drops a function at orthoTol.  Build shows which shells went and S's min eigenvalue "
                                  "before and after")
@@ -923,7 +923,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.eps_box.setCurrentText(eps)
         deck = code_block(s, "solid2").get("deck") or {}
         stated = (deck.get("basis") or {}).get("trim") or []
-        tol = (deck.get("solid") or {}).get("orthoTol") if (deck.get("basis") or {}).get("autoTrim") else None
+        tol = deck.get("orthoTol") if (deck.get("basis") or {}).get("autoTrim") else None
         for k in range(self.trim_box.count() - 1, len(TRIM_PRESETS) - 1, -1):
             self.trim_box.removeItem(k)               # a previous render's "stated" entry
         if stated:                                    # the Shells table's choice: a stated trim
@@ -1220,8 +1220,8 @@ class SetupPanel(QtWidgets.QWidget):
         tol = self.trim_box.itemData(i)
         if tol == "stated":
             return
-        self._deck_edit({"basis": {"autoTrim": True, "trim": None}, "solid": {"orthoTol": tol}} if tol else
-                        {"basis": {"autoTrim": None, "trim": None}, "solid": {"orthoTol": None}})
+        self._deck_edit({"basis": {"autoTrim": True, "trim": None}, "orthoTol": tol} if tol else
+                        {"basis": {"autoTrim": None, "trim": None}, "orthoTol": None})
 
     def _open_shells(self) -> None:
         """The pop-out shell table for the draft's crystal (built once: the cell's untrimmed S per k)."""

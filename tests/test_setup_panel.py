@@ -196,7 +196,8 @@ class CrystalBasis(unittest.TestCase):
         self.assertEqual([box.itemText(i).split()[0] for i in range(box.count())], ["off", "light", "medium", "ruthless"])
         box.setCurrentIndex(3); box.activated.emit(3)
         deck = draft.spec.accuracy.representation["solid2"]["deck"]
-        self.assertEqual((deck["basis"], deck["solid"]), ({"autoTrim": True}, {"orthoTol": 1e-4}))
+        self.assertEqual((deck["basis"], deck["orthoTol"]), ({"autoTrim": True}, 1e-4))
+        self.assertNotIn("solid", deck, "orthoTol is a top-level key (deck schema 2)")
         from qviz.backends import solid2_deck
         self.assertTrue(solid2_deck.to_deck(draft.spec)["basis"]["autoTrim"])
         self.assertEqual(box.currentText(), "ruthless (orthoTol 0.0001)", "the box shows the draft's preset")
