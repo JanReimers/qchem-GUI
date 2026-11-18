@@ -385,7 +385,7 @@ class TheBridgeRunsThem(unittest.TestCase):
         self.assertIsNone(res.failure)
         self.assertEqual(len(rows), res.provenance["iterations"])
         self.assertEqual(rows[0].titles[:2], ("Etotal", "[F,D]"), "the periodic console's own columns")
-        self.assertEqual(res.provenance["deck"]["solid"]["Nelec"], 8, "the resolved deck derives Nelec")
+        self.assertEqual(res.provenance["deck"]["Nelec"], 8, "the resolved deck derives Nelec (schema 2: top level)")
         r, _ = RundeckReadsThem.rundeck(self, json.loads(job.native["deck"]))
         etot = [float(l.split()[3]) for l in r.stdout.splitlines() if l.startswith("[rundeck] Etot =")]
         self.assertEqual(len(etot), 1, r.stdout[-2000:])
