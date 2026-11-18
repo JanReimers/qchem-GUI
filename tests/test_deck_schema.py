@@ -1,8 +1,8 @@
 """The GUI writes the qchem deck's SCHEMA 2 (doc/InputDeck.md §3, V-FACADE-PARITY P0) and moves a saved schema-1 block at load.
 
-THE DONE-CHECK for retiring the library's schema-1 translator (Deck.C ToSchema2): every deck the GUI writes resolves under
-`rundeck --resolved` to the SAME run as its schema-1 spelling read through that translator.  The schema-2 deck is stamped
-`"schema": 2`, so the library refuses (never translates) a key at its old place: the translator plays no part in reading it.
+The library's schema-1 translator is RETIRED (main, V-FACADE-PARITY P2): a key at its schema-1 place is refused by name, never
+translated.  So every deck the GUI writes must resolve under `rundeck --resolved`, and its schema-1 spelling must be refused --
+the GUI's own `migrate` is now the only reader of a saved schema-1 block.
 
     QCHEM_BUILD=~/Code/qchem-lane-g/build/Release .venv/bin/python -m unittest tests.test_deck_schema
 """
@@ -23,7 +23,7 @@ from tests.test_solid2_deck import BENCH, NAF, RUNDECK, SI, crystal, from_bench,
 
 
 def schema1(deck: dict) -> dict:
-    """`deck`'s schema-1 spelling, as the GUI wrote it before 2026-11-17: the shared keys inside `solid`, no `spin` (a schema-1
+    """`deck`'s schema-1 spelling, as the GUI wrote it before 2026-11-17 (now refused by the library): the shared keys inside `solid`, no `spin` (a schema-1
     multiplicity >= 1 MEANT Polarized), no stamp."""
     d = copy.deepcopy(deck)
     d.pop("schema", None)
@@ -90,17 +90,25 @@ class TheWriterIsSchema2(unittest.TestCase):
 
 
 @unittest.skipUnless(RUNDECK.exists() and (BENCH / "Si_Gamma_parity.json").exists(), "rundeck / qchem's decks not found (QCHEM_BUILD, QCHEM_SRC)")
-class TheTranslatorIsNotNeeded(unittest.TestCase):
-    def test_every_gui_deck_resolves_as_its_schema1_spelling_did(self):
+class TheLibraryReadsSchema2Only(unittest.TestCase):
+    def test_every_gui_deck_resolves(self):
         for spec in gui_specs():
             with self.subTest(spec.label):
-                d2 = D.to_deck(spec)
-                self.assertEqual(resolve(d2), resolve(schema1(d2)))
+                resolve(D.to_deck(spec))
+
+    def test_its_schema1_spelling_is_refused_by_name(self):
+        for spec in gui_specs():
+            with self.subTest(spec.label):
+                d1 = schema1(D.to_deck(spec))
+                if not {old for old, _ in deck_schema.MOVES} & set(d1.get("solid", {})):
+                    continue   # states no moved key (the plain inline cell): both spellings are one deck
+                with self.assertRaisesRegex(AssertionError, r"'solid\.\w+' is the RETIRED schema-1 place of"):
+                    resolve(d1)
 
     def test_a_schema2_deck_refuses_a_key_at_its_old_place(self):
         d = D.to_deck(si_inline())
         d.setdefault("solid", {})["seed"] = "SAD"
-        with self.assertRaisesRegex(AssertionError, "solid.seed.*SCHEMA-1 place of 'seed'"):
+        with self.assertRaisesRegex(AssertionError, "'solid.seed' is the RETIRED schema-1 place of 'seed'"):
             resolve(d)
 
 

@@ -285,6 +285,9 @@ class Solid2Backend:
                        and set(code_block(s, "solid2")) <= _REP_KEYS | {"deck"}),
                        "a stated representation is a shared basis, or SOLID² settings under representation['solid2'] "
                        "(mesh_radial, mesh_angular)"),
+            Capability("accuracy.scf.accelerator", molecule(lambda s: (s.accuracy.scf or {}).get("accelerator") != "Null"),
+                       "a molecule always extrapolates its Fock matrix (DIIS, GDM or the Ladder): the molecular facade refuses Null, "
+                       "which only a crystal's density mixing can stand in for"),
             Capability("molecular deck keys", molecule(lambda s: _molecule_deck_ok(code_block(s, "solid2").get("deck"))),
                        "a molecule has no input deck yet (V-FACADE-OPTS): its only deck key is state.restartFrom"),
             Capability("accuracy.representation.basis", molecule(lambda s: rep(s).get("basis") in (None, *BASES)

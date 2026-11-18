@@ -35,7 +35,7 @@ from .spec import RunSpec, SpecError
 #: the method box's names -> (theory, functional)
 METHODS = {"HF": ("HF", None), "LDA": ("DFT", "LDA"), "PADE": ("DFT", "PADE"), "Xalpha": ("DFT", "Xalpha")}   # the library's model names
 BASES = ("dzvp", "orb1", "dzvp2", "tzvp", "valence_lowq_vb", "sipp_sr")
-ACCELERATORS = ("Auto", "DIIS", "GDM", "Ladder", "Null")   # Auto: the facade's policy (a molecule's is DIIS)
+ACCELERATORS = ("Auto", "DIIS", "GDM", "Ladder", "Null")   # Auto: the facade's policy (a molecule's is DIIS); Null: a crystal's only
 MIXERS = ("Auto", "Linear", "Kerker", "Pulay")         # SOLID²'s SCFParams::Mixing; Kerker/Pulay mix in G space (crystals)
 #: the trim presets (the user, 2026-11-11: "some crude control like {light, medium, ruthless} auto trim"): basis.autoTrim at these
 #: orthoTol -- the vet stage removes the most diffuse implicated shell per pass until no k-block drops an AO at orthoTol.

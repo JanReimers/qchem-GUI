@@ -693,3 +693,15 @@ class ReopenedRunsDraw(unittest.TestCase):
         n = be.translate(water(xyz=(0, 0, 0, 0, 1.431, 1.171, 0, -1.431, 1.107))).native      # one H moved 0.064 bohr
         with self.assertRaisesRegex(RuntimeError, "view refused \\(mismatch\\).*reopen the run's own spec"):
             be._qc.StateView.molecule(n["numbers"], n["positions"], basis="dzvp", model=n["model"], path=first.state_file)
+
+
+class AMoleculeAlwaysExtrapolates(unittest.TestCase):
+    """The molecular facade refuses accelerator Null (lane S P2, 2026-11-18): only a crystal's density mixing stands in for a Fock-side
+    extrapolator.  The capability says so before a run, in the GUI's words; a crystal keeps it."""
+    def test_null_is_a_crystal_s_only(self):
+        caps = solid2().capabilities()
+        v = caps.can_run(water(accelerator="Null"))
+        self.assertFalse(v)
+        self.assertTrue(any("refuses Null" in r for r in v.reasons), v.reasons)
+        self.assertFalse(any("refuses Null" in r for r in caps.can_run(water(accelerator="GDM")).reasons))
+        self.assertFalse(any("refuses Null" in r for r in caps.can_run(si_inline(accelerator="Null")).reasons))
