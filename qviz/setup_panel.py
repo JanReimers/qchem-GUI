@@ -1090,7 +1090,7 @@ class SetupPanel(QtWidgets.QWidget):
         else:
             lines = basisinfo.summary(s)
         self.basis_summary.setText("\n".join(lines + basisinfo.fits(s, record)))
-        rows = basisinfo.element_rows(s)
+        rows = basisinfo.element_rows(s, record)
         self.basis_table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, v in enumerate(row):

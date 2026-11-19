@@ -253,7 +253,7 @@ class Toolset:
                for run in (rec or {}).values() if run.get("basis")]
         return {"is_result": True, "licensed": licensed, "source": source, "basis": basisinfo.basis_name(spec),
                 "elements": [{"element": e, "atoms": n, "shells": sh, "functions_per_atom": f}
-                             for e, n, sh, f in basisinfo.element_rows(spec)],
+                             for e, n, sh, f in basisinfo.element_rows(spec, rec)],
                 "conditioning": cond, "record": raw,
                 "summary": "; ".join(cond) or f"no basis record yet ({source})"}
 

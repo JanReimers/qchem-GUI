@@ -73,6 +73,17 @@ def _section(record: Optional[dict], name: str) -> dict:
 GRID_SECTIONS = ("hamiltonian", "grids", "seedDensity", "densityMixer")
 
 
+def basis_elements(record: Optional[dict]) -> list[dict]:
+    """The orbital basis's shells per element as the library read them while it built the basis (basis.elements:
+    [{element, Z, atoms, shells "3s 2p 1d", nFunctions per atom}]); [] when not filed (no build yet, or a crystal: its
+    Gaussian basis is built outside a "basis" scope until lane S opens one)."""
+    for build in (False, True):        # the run that filed them: a Run's own basis section holds only its usage
+        for run in _runs(record, build):
+            if (run.get("basis") or {}).get("elements"):
+                return run["basis"]["elements"]
+    return []
+
+
 def fit_bases(record: Optional[dict]) -> list[dict]:
     """The fit bases the Hamiltonian built, as its terms file them ([]: none filed)."""
     h = _section(record, "hamiltonian")

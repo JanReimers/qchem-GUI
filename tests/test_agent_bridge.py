@@ -37,6 +37,8 @@ class McpOverStdio(unittest.TestCase):
                                                             "points": 29100}},
                                  "basis": {"name": "dzvp", "nFunctions": 19, "perIrrep": [
                                      {"irrep": "A1", "nFunctions": 19, "lambdaMin": 0.0186, "lambdaMax": 4.7, "cond": 254.6}],
+                                     "elements": [{"element": "O", "Z": 8, "atoms": 1, "shells": "3s 2p 1d", "nFunctions": 15},
+                                                  {"element": "H", "Z": 1, "atoms": 2, "shells": "2s", "nFunctions": 2}],
                                      "usage": [1, 2, 3]}}}
         self.bridge = AgentBridge(Toolset(self.draft, BackendRegistry([FakeBackend()]),
                                           draft_record=lambda: (rec, "from this spec's Build (no SCF)")),
@@ -94,7 +96,8 @@ class McpOverStdio(unittest.TestCase):
         basis = json.loads(self.rpc("tools/call", {"name": "get_basis", "arguments": {}})["result"]["content"][0]["text"])
         self.assertIn("condition number 255", basis["summary"])
         self.assertNotIn("usage", basis["record"][0], "the bulky per-function populations stay home")
-        self.assertEqual(basis["elements"][0]["element"], "O")
+        self.assertEqual(basis["elements"][0], {"element": "O", "atoms": 1, "shells": "3s 2p 1d", "functions_per_atom": 15},
+                         "the library's basis.elements rows")
 
     def test_a_closed_gui_is_said_plainly_and_the_tools_still_list(self):
         self.bridge.close()

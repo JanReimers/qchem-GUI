@@ -225,18 +225,23 @@ class DetectedSymmetry(unittest.TestCase):
 
 
 class BasisDetails(unittest.TestCase):
-    def test_the_shells_per_element_add_up_to_the_library_s_function_count(self):
-        from qviz import basisinfo
-        from qviz.backends.solid2 import _import_qchem_py
+    def test_the_shells_per_element_are_the_library_s_and_add_up_to_its_function_count(self):
+        from qviz import basisinfo, gridinfo
+        from qviz.backends.solid2 import Solid2Backend, _import_qchem_py
         from qviz.spec import Accuracy, molecule
         qc, why = _import_qchem_py()
         if qc is None:
             self.skipTest(why)
         w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107],
                      accuracy=Accuracy(representation={"basis": "dzvp"}))
-        rows = basisinfo.element_rows(w)
-        self.assertEqual(rows, [("O", 1, "3s 2p 1d", 15), ("H", 2, "2s", 2)], "dzvp.bsd, read past its free-text trailer")
-        self.assertIn("Build (or Run) shows", basisinfo.summary(w)[0], "the conditioning is the library's record, not recomputed")
+        self.assertEqual(basisinfo.element_rows(w), [], "before a Build the GUI reads no basis file of its own")
+        self.assertIn("Build (or Run) shows the shells per element", basisinfo.summary(w)[0])
+        be = Solid2Backend()
+        record = be.build(be.translate(w))
+        rows = basisinfo.element_rows(w, record)
+        self.assertEqual(rows, [("O", 1, "3s 2p 1d", 15), ("H", 2, "2s", 2)], "basis.elements, as the library read dzvp.bsd")
+        total = sum(b["nFunctions"] for b in gridinfo._section(record, "basis").get("perIrrep") or [])
+        self.assertEqual(sum(n * f for _, n, _, f in rows), total, "the rows add up to the library's per-irrep count")
 
 
 class ScfKnobs(unittest.TestCase):

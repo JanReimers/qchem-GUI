@@ -1,7 +1,8 @@
 """
-qviz.basisinfo -- what a spec's orbital basis IS, before any SCF: the shells on each element (read from qchem's
-BasisSetData file); its size and the overlap's conditioning are the library's own record (a Build's or a run's basis section,
-gridinfo.conditioning), never recomputed here.
+qviz.basisinfo -- what a spec's orbital basis IS, before any SCF.  The shells on each element, its size and the overlap's
+conditioning are the library's own record (a Build's or a run's basis section: basis.elements, gridinfo.conditioning), never
+recomputed here.  The one exception is a CRYSTAL's shells per element: the library files no basis.elements for a solid yet
+(its Gaussian basis is built outside a "basis" scope -- OpenWork, lane S), so those are still read from the .bsd file.
 
 A small S eigenvalue is a near-linear dependence: diffuse functions on neighbouring atoms spanning almost the same
 space.  The condition number s_max/s_min says how much the SCF's orthogonalization amplifies round-off.
@@ -17,7 +18,7 @@ from .backends.solid2 import basis_for
 from .spec import RunSpec
 
 _L = "spdfgh"
-_CART = (1, 3, 6, 10, 15, 21)                     # Cartesian components per l (the facade's molecular basis is Cartesian)
+_CART = (1, 3, 6, 10, 15, 21)                     # Cartesian components per l (a crystal's .bsd read only)
 
 
 def basis_name(spec: RunSpec) -> str:
@@ -30,9 +31,16 @@ def basis_file(spec: RunSpec) -> Optional[str]:
     return ((spec.accuracy.representation or {}).get("solid2") or {}).get("basis_file")
 
 
-def element_rows(spec: RunSpec) -> list[tuple[str, int, str, int]]:
-    """(element, atoms of it, contracted shells like "3s 2p 1d", Cartesian functions per atom) per element in the
-    structure; shells "no block in <basis>" (and 0 functions) for an element the file lacks."""
+def element_rows(spec: RunSpec, record: Optional[dict] = None) -> list[tuple[str, int, str, int]]:
+    """(element, atoms of it, contracted shells like "3s 2p 1d", functions per atom) per element: the library's own rows
+    (basis.elements) from \a record (a Build's or a run's).  A molecule with no record yet has none (summary() says Build fills
+    them).  A crystal, whose build files none yet, reads its .bsd: shells "no block in <basis>" (0 functions) for an element the
+    file lacks, functions counted Cartesian."""
+    lib = gridinfo.basis_elements(record)
+    if lib:
+        return [(r["element"], r["atoms"], r["shells"], r["nFunctions"]) for r in lib]
+    if spec.structure.kind == "molecule":
+        return []
     name = basis_name(spec)
     file = basis_file(spec)
     try:
@@ -69,4 +77,4 @@ def summary(spec: RunSpec) -> list[str]:
     name = basis_name(spec)
     if spec.structure.kind != "molecule":
         return [f"{name}: a crystal's overlap is per k -- Build (or Run) shows its conditioning (the [basis trim] report)"]
-    return [f"{name}: Build (or Run) shows the function count and the overlap's conditioning per irrep"]
+    return [f"{name}: Build (or Run) shows the shells per element, the function count and the overlap's conditioning per irrep"]

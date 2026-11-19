@@ -182,7 +182,6 @@ class BSE(unittest.TestCase):
         self.assertEqual(s.accuracy.representation["basis"], "cc-pvdz")
         self.assertIn("Basis Set Exchange", panel.bse_note.text())
         self.assertTrue(be.capabilities().can_run(s), be.capabilities().can_run(s).reasons)
-        self.assertEqual(basisinfo.element_rows(s), [("O", 1, "3s 2p 1d", 15), ("H", 2, "2s 1p", 5)], "read from the download")
         job = be.translate(s)
         self.assertIn("downloaded", job.resolved["basis"])
         res = be.run(job)
@@ -196,6 +195,8 @@ class BSE(unittest.TestCase):
         #     -> nao 25, converged, E_HF -76.0271296557   (built-in basis="cc-pvdz", cart=True: -76.0271296557)
         # Ours, 2026-11-10: -76.0271296557.  Gated at 1e-8 Ha: the default [F,D] 1e-5 stop puts the energy within ~1e-10.
         self.assertAlmostEqual(res.energy_Ha, -76.0271296557, delta=1e-8)
+        self.assertEqual(basisinfo.element_rows(s, res.record), [("O", 1, "3s 2p 1d", 15), ("H", 2, "2s 1p", 5)],
+                         "the library's own rows, from the download it read")
         basis = next(r["basis"] for k, r in res.record.items() if "basis" in r and "file" in r["basis"])
         self.assertEqual(basis["file"], side["path"])
         self.assertEqual(basis["nFunctions"], 25)
