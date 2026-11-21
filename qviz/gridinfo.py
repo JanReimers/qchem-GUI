@@ -29,6 +29,10 @@ LADDER_COLUMNS = ("Level", "FFT grid", "Ecut (Ha)", "G vectors", "Role")
 def planned(spec: RunSpec) -> list[str]:
     """What the spec asks for, before anything is built: the molecular XC mesh, or a crystal's k-mesh and density Ecut."""
     st, ph, ac = spec.structure, spec.physics, spec.accuracy
+    if st.kind == "atom":
+        if not (ph.theory == "DFT" or ph.core == "pseudopotential"):
+            return ["no XC mesh: Hartree-Fock exchange is analytic"]
+        return ["XC mesh: the radial atom's own (radial points only; the library's default) -- Build (or Run) shows it"]
     if st.kind == "molecule":
         if not (ph.theory == "DFT" or ph.core == "pseudopotential"):
             return ["no XC mesh: Hartree-Fock exchange is analytic",

@@ -22,7 +22,10 @@ _CART = (1, 3, 6, 10, 15, 21)                     # Cartesian components per l (
 
 
 def basis_name(spec: RunSpec) -> str:
-    """The basis SOLID² will use: the stated one, else its ε rule's."""
+    """The basis SOLID² will use: the stated one, else its ε rule's (an atom's: its radial family, solid2_atom)."""
+    if spec.structure.kind == "atom":
+        from .backends.solid2_atom import radial_type
+        return radial_type(spec)
     return (spec.accuracy.representation or {}).get("basis") or basis_for(spec.accuracy.epsilon_Ha_per_atom)
 
 
@@ -39,7 +42,7 @@ def element_rows(spec: RunSpec, record: Optional[dict] = None) -> list[tuple[str
     lib = gridinfo.basis_elements(record)
     if lib:
         return [(r["element"], r["atoms"], r["shells"], r["nFunctions"]) for r in lib]
-    if spec.structure.kind == "molecule":
+    if spec.structure.kind != "crystal":
         return []
     name = basis_name(spec)
     file = basis_file(spec)
@@ -62,7 +65,7 @@ def fits(spec: RunSpec, record: Optional[dict]) -> list[str]:
     """The Basis tab's other bases -- what the run fits ρ (Hartree) and Vxc in -- as the record files them
     (hamiltonian.<term>.fitbasis: [{role, name, nFunctions}]).  Hartree-Fock has none: its Coulomb and exchange are analytic."""
     ph = spec.physics
-    if spec.structure.kind == "molecule" and not (ph.theory == "DFT" or ph.core == "pseudopotential"):
+    if spec.structure.kind != "crystal" and not (ph.theory == "DFT" or ph.core == "pseudopotential"):
         return ["fit bases: none -- Hartree-Fock's Coulomb and exchange are analytic four-centre integrals"]
     got = gridinfo.fit_bases(record)
     if not got:
@@ -75,6 +78,9 @@ def summary(spec: RunSpec) -> list[str]:
     """The Basis tab's lines before the library has built this spec: its conditioning is the build's own record
     (basis.perIrrep, gridinfo.conditioning), so Build (or Run) fills them."""
     name = basis_name(spec)
+    if spec.structure.kind == "atom":
+        return [f"{name} radial basis (the radial atom: blocked by l, m analytic): Build (or Run) shows its functions per l "
+                "and the overlap's conditioning"]
     if spec.structure.kind != "molecule":
         return [f"{name}: a crystal's overlap is per k -- Build (or Run) shows its conditioning (the [basis trim] report)"]
     return [f"{name}: Build (or Run) shows the shells per element, the function count and the overlap's conditioning per irrep"]

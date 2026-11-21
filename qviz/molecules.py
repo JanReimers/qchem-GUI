@@ -38,7 +38,7 @@ def to_xyz(spec) -> str:
     """A spec's structure as .xyz text (Å), the reader's inverse.  A crystal is written as EXTENDED xyz: its cell vectors in
     the comment line (Lattice="..." pbc="T T T", the ASE / OVITO convention) and its sites Cartesian."""
     st = spec.structure
-    if st.kind == "molecule":
+    if st.kind != "crystal":
         rows = [(s.element, s.xyz) for s in st.sites]
         comment = spec.label
     else:
@@ -96,6 +96,21 @@ MOLECULES = {
     "Ammonia (NH3)":        (_AMMONIA[0], _AMMONIA[1], "dzvp", 72, 0),
     "Ethene (C2H4)":        (_ETHENE[0],  _ETHENE[1],  "dzvp", 72, 0),
 }
+
+
+#: the radial atoms the structure picker offers (any element runs: an .xyz of one atom imports as one)
+ATOMS = ("H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Ar", "Fe", "Kr")
+
+
+def symbol(Z: int) -> str:
+    return _ELEMENTS[Z - 1]
+
+
+def atom_spec(element: str):
+    """A lone atom's draft: the RADIAL atom facade (spherical, radial basis), HF, polarized -- Pol is the general case (its
+    configuration is the library's Hund's-rule call; a closed shell converges to m = 0 in two channels)."""
+    from .spec import atom
+    return atom(element, polarized=True)
 
 
 def preset_spec(name: str):

@@ -113,9 +113,10 @@ class Toolset:
                   _schema({"patch": {"type": "object"}, "rationale": {"type": "string"}}, ["patch", "rationale"]), self.propose_spec_patch)
         self._add("build_structure", f"{W} Replace the draft's structure: a preset molecule by name; a molecule no preset has, "
                   "from explicit atoms (element + Cartesian position in angstrom; the geometry is then yours, so say it is "
-                  "approximate); or a crystal prototype (rocksalt | diamond | fcc) with elements and the cubic lattice "
+                  "approximate); a lone atom (kind atom, name = the element symbol: the RADIAL atom facade, spherical, radial bases); "
+                  "or a crystal prototype (rocksalt | diamond | fcc) with elements and the cubic lattice "
                   "constant a_bohr.  A new structure starts as Hartree-Fock: set the method with propose_spec_patch.",
-                  _schema({"kind": {"enum": ["molecule", "crystal"]}, "name": {"type": "string"},
+                  _schema({"kind": {"enum": ["molecule", "crystal", "atom"]}, "name": {"type": "string"},
                            "atoms": {"type": "array", "items": {"type": "object", "properties": {
                                "element": {"type": "string"}, "xyz_angstrom": {"type": "array", "items": {"type": "number"},
                                                                                  "minItems": 3, "maxItems": 3}},
@@ -277,6 +278,13 @@ class Toolset:
 
     def build_structure(self, kind: str, name: str = "", prototype: str = "", elements: tuple = (), a_bohr: float = 0.0,
                         atoms: tuple = ()) -> dict:
+        if kind == "atom":
+            el = name.strip().capitalize()
+            if el not in Z_OF:
+                return {"error": f"an atom is named by its element symbol; {name!r} is not one"}
+            spec = molecules.atom_spec(el)
+            e = self.draft.set(spec, "agent", f"build_structure atom {el}")
+            return {"applied": True, "summary": f"draft is now {spec.summary} (the radial atom)", "diff_paths": len(e.diff())}
         if kind == "molecule" and atoms:
             unknown = [a["element"] for a in atoms if a["element"] not in Z_OF]
             if unknown:

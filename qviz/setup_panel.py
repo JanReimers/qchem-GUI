@@ -30,6 +30,7 @@ from .backends import solid2_deck
 from .backends.base import BackendRegistry, code_block, data_structure
 from .backends.solid2 import mesh_for
 from .draft import Edit, SpecDraft
+from .backends import solid2_atom
 from .spec import RunSpec, SpecError
 
 #: the method box's names -> (theory, functional)
@@ -650,6 +651,9 @@ class SetupPanel(QtWidgets.QWidget):
         if kind == "molecule":
             self._pick_preset(key)
             return
+        if kind == "atom":
+            self.draft.set(molecules.atom_spec(key), "user", f"Setup: atom {key}")
+            return
         m = self._materials[int(key)]
         try:
             self.draft.set(materials.pick(m), "user", f"Setup: material {m['name']}")
@@ -667,6 +671,9 @@ class SetupPanel(QtWidgets.QWidget):
             box.addItem(text, None)
             it = box.model().item(box.count() - 1)
             it.setEnabled(False); f = it.font(); f.setBold(True); it.setFont(f)
+        header("Atoms")
+        for el in molecules.ATOMS:
+            box.addItem(f"{el} (radial atom)", f"atom:{el}")
         header("Molecules")
         for name in molecules.MOLECULES:
             box.addItem(name, f"molecule:{name}")
@@ -683,6 +690,9 @@ class SetupPanel(QtWidgets.QWidget):
             src = s.structure.source or {}
             k = next((k for k, m in enumerate(self._materials) if m["name"] == src.get("materials") and m["layer"] == src.get("layer", "shipped")), None)
             want = None if k is None else f"material:{k}"
+        elif s is not None and s.structure.kind == "atom":
+            el = s.structure.sites[0].element
+            want = f"atom:{el}" if s.label == el and el in molecules.ATOMS else None
         elif s is not None:
             preset = molecules.preset_of(s)
             want = None if preset is None else f"molecule:{preset}"
@@ -783,6 +793,9 @@ class SetupPanel(QtWidgets.QWidget):
         """A molecule from outside (an .xyz import) into the draft: the draft's physics kept, its structure replaced."""
         from .spec import molecule
         self.show_run(None)
+        if len(numbers) == 1:                         # a lone atom is the radial atom (the user, 2026-11-21)
+            self.draft.set(molecules.atom_spec(molecules.symbol(numbers[0])), "user", f"import {label}")
+            return
         base = self.draft.spec
         if base is None or base.structure.kind != "molecule":
             self.draft.set(molecule(label, numbers, positions), "user", f"import {label}")
@@ -814,12 +827,14 @@ class SetupPanel(QtWidgets.QWidget):
             self._foot.setVisible(not ro)
             self.spec_view.setReadOnly(ro); self.apply_btn.setVisible(not ro)
             self.spec_view.setPlainText(s.to_json(indent=1) if s else "")
-            mol = s is not None and s.structure.kind == "molecule"
+            kind = s.structure.kind if s is not None else None
+            mol = kind in ("molecule", "atom")          # no lattice: Cartesian sites, a molecule-like Hamiltonian tab
+            atom = kind == "atom"
             self._render_structure(s)
             if not getattr(self, "_materials_listed", False):   # the library's crystals, listed on first show
                 self._materials_listed = True
                 self.refresh_materials()
-            crystal = s is not None and not mol
+            crystal = kind == "crystal"
             self.spins_edit.setText(materials.spins_text(s) if crystal else "")
             self._sform.setRowVisible(self.spins_edit, crystal)
             self._sform.setRowVisible(self.save_material_btn, crystal and not ro)
@@ -828,10 +843,13 @@ class SetupPanel(QtWidgets.QWidget):
             self.structure_box.setEnabled(not ro)       # a preset or a material starts a draft, even from an empty one
             for w in (self.method_box, self.pp_check, self.mult_spin):
                 w.setEnabled(not ro and mol)          # a crystal's are fixed by the periodic facade (CRYSTAL_PHYSICS)
+            for w in (self.pp_check, self.mult_spin, self.sym_check, self.angular_box, self.mesh_radial, self.mesh_angular):
+                if atom:
+                    w.setEnabled(False)               # the radial atom: all-electron, Hund's configuration, spherical, radial
             self.basis_box.setEnabled(not ro and s is not None)
             for w in (self.method_box, self.pp_check):
                 w.setToolTip(CRYSTAL_PHYSICS if crystal else "")
-            self.mult_spin.setVisible(s is None or mol)
+            self.mult_spin.setVisible(s is None or (mol and not atom))
             if s is not None:
                 self._render_values(s, mol)
             else:
@@ -880,7 +898,12 @@ class SetupPanel(QtWidgets.QWidget):
         self._render_grids(s)
         self._render_grid_knobs(s)
         self.sym_check.setChecked(bool((ac.scf or {}).get("impose_symmetry")))
-        if mol:
+        if st.kind == "atom":
+            self.sym_check.setChecked(True)
+            self.sym_check.setText("spherical by construction: the radial atom blocks by l")
+            self.sym_check.setToolTip("The radial atom's basis is radial functions times Y_lm: O(3) is never broken, so there is "
+                                      "nothing to impose or release")
+        elif mol:
             self.sym_check.setText("impose: block the SCF by irreps (SALC → irrep labels)")
             self.sym_check.setToolTip("")
         else:
@@ -908,7 +931,7 @@ class SetupPanel(QtWidgets.QWidget):
         self._hform.setRowVisible(self.pp_mismatch, bool(warn))
         self._hform.setRowVisible(self.pp_match_btn, bool(model) and self._run is None)
         self.pol_check.setChecked(p.spin.polarized)
-        if mol:
+        if mol and st.kind != "atom":
             self.mult_spin.setSpecialValueText(auto_multiplicity(s))
         self.mult_spin.setValue(p.spin.multiplicity or 0)
         o = p.occupations
@@ -1020,7 +1043,13 @@ class SetupPanel(QtWidgets.QWidget):
         basis, file = (s.accuracy.representation or {}).get("basis"), basisinfo.basis_file(s)
         self.basis_box.blockSignals(True)
         self.basis_box.clear()
-        if s.structure.kind == "crystal":
+        if s.structure.kind == "atom":            # a lone atom: the radial bases only (the user, 2026-11-21)
+            self.basis_box.addItems(solid2_atom.RADIAL_TYPES)
+            self.basis_box.setCurrentText(solid2_atom.radial_type(s))
+            self.basis_box.setToolTip("The radial atom's basis families (radial functions × Y_lm, blocked by l).  The library "
+                                      "fills the exponents from its pool (Medium) unless the deck block's atom.N / emin / emax "
+                                      "or exponents say otherwise")
+        elif s.structure.kind == "crystal":
             names = solid2_deck.periodic_bases({site.element for site in s.structure.sites})
             self.basis_box.addItems(names)
             if not basis:
@@ -1061,7 +1090,7 @@ class SetupPanel(QtWidgets.QWidget):
         file = self.basis_box.itemData(i)
         if self.basis_box.itemText(i) == _CHOOSE_BASIS:
             return
-        if self.draft.spec is not None and self.draft.spec.structure.kind == "crystal":
+        if self.draft.spec is not None and self.draft.spec.structure.kind in ("crystal", "atom"):
             self._edit({"accuracy": {"representation": {"basis": self.basis_box.itemText(i)}}}, "basis")
             return
         if file:
@@ -1133,7 +1162,7 @@ class SetupPanel(QtWidgets.QWidget):
         return None, f"not built ({why})" if why else "not built yet: Build (or Run) fills this from the library's record"
 
     def _render_grid_knobs(self, s: RunSpec) -> None:
-        mol = s.structure.kind == "molecule"
+        mol = s.structure.kind != "crystal"
         dft = s.physics.theory == "DFT" or s.physics.core == "pseudopotential"
         own = (s.accuracy.representation or {}).get("solid2") or {}
         mr, ma = mesh_for(s.accuracy.epsilon_Ha_per_atom)
@@ -1147,7 +1176,7 @@ class SetupPanel(QtWidgets.QWidget):
         self.mesh_reset.setVisible(stated)
         self.mesh_auto.setVisible(not stated)
         self.mesh_auto.setText(f"auto, from ε = {s.accuracy.epsilon_Ha_per_atom:g}")
-        self._grids_form.setRowVisible(self.mesh_reset.parentWidget(), mol and dft)
+        self._grids_form.setRowVisible(self.mesh_reset.parentWidget(), mol and dft and s.structure.kind != "atom")
         self._grids_form.setRowVisible(self.density_ecut, not mol)
         self.density_ecut.setValue(float(((own.get("deck") or {}).get("solid") or {}).get("densityEcut") or 0.0))
 

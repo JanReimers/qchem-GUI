@@ -66,6 +66,8 @@ def detected(spec: RunSpec, qc) -> list[str]:
         return ["detection needs the qchem_py extension (QCHEM_BUILD)"]
     st = spec.structure
     try:
+        if st.kind == "atom":
+            return ["O(3) -- a spherical atom (the radial facade blocks by l, m analytic)"]
         if st.kind == "molecule":
             if len(st.sites) == 1:
                 return ["O(3) -- a spherical atom (the SCF blocks by D2h)"]

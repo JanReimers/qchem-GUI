@@ -35,6 +35,7 @@ _ELEMENTS = ("H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn F
              "Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og").split()   # the whole table: what a basis or a pseudopotential covers is the library's question
 Z_OF = {s: i + 1 for i, s in enumerate(_ELEMENTS)}
 
+STRUCTURE_KINDS = ("molecule", "crystal", "atom")
 THEORIES     = ("HF", "DFT")
 CORES        = ("all-electron", "pseudopotential")
 SMEARINGS    = ("none", "fermi-dirac", "gaussian", "marzari-vanderbilt")
@@ -67,7 +68,7 @@ class Site:
 
 @dataclass(frozen=True)
 class Structure:
-    kind: str                                           # "molecule" | "crystal"
+    kind: str                                           # "molecule" | "crystal" | "atom" (one site, the radial atom facade)
     sites: tuple[Site, ...]
     lattice_bohr: Optional[tuple[tuple[float, float, float], ...]] = None   # rows a, b, c
     source: Optional[dict] = None                       # provenance only: {"materials": ...}, {"cif": path}, {"agent": ...}
@@ -166,8 +167,9 @@ class RunSpec:
         """Raise SpecError listing EVERY defect; return self when clean."""
         problems: list[str] = []
         st, ph, tk, ac = self.structure, self.physics, self.task, self.accuracy
-        _check(problems, st.kind in ("molecule", "crystal"), f"structure.kind {st.kind!r} not in ('molecule', 'crystal')")
+        _check(problems, st.kind in STRUCTURE_KINDS, f"structure.kind {st.kind!r} not in {STRUCTURE_KINDS}")
         _check(problems, len(st.sites) > 0, "structure.sites is empty")
+        _check(problems, st.kind != "atom" or len(st.sites) == 1, "an atom has exactly one site")
         for i, s in enumerate(st.sites):
             _check(problems, s.element in Z_OF, f"structure.sites[{i}].element {s.element!r} is not an element")
             if st.kind == "crystal":
@@ -178,7 +180,7 @@ class RunSpec:
             _check(problems, st.lattice_bohr is not None and len(st.lattice_bohr) == 3
                    and all(len(r) == 3 for r in st.lattice_bohr), "structure.lattice_bohr must be 3x3 for a crystal")
         else:
-            _check(problems, st.lattice_bohr is None, "a molecule has no lattice_bohr")
+            _check(problems, st.lattice_bohr is None, f"{'an atom' if st.kind == 'atom' else 'a molecule'} has no lattice_bohr")
         tags = [s.tag for s in st.sites if s.tag]
         _check(problems, len(tags) == len(set(tags)), "structure.sites: tags must be unique")
 
@@ -192,7 +194,8 @@ class RunSpec:
 
         sp = ph.spin
         if sp.multiplicity is not None:
-            _check(problems, st.kind == "molecule", "physics.spin.multiplicity is for molecules; a crystal states site_moments")
+            _check(problems, st.kind == "molecule", "physics.spin.multiplicity is for molecules; a crystal states site_moments, "
+                                                    "an atom its configuration (Hund's rules)")
             _check(problems, sp.multiplicity >= 1, "physics.spin.multiplicity must be >= 1")
             _check(problems, (self.num_electrons - (sp.multiplicity - 1)) % 2 == 0,
                    f"multiplicity {sp.multiplicity} has the wrong parity for {self.num_electrons} electrons")
@@ -338,3 +341,11 @@ def molecule(label: str, numbers, positions_bohr, *, theory: str = "HF", functio
     physics = Physics(theory=theory, functional=functional if theory == "DFT" else None, core=core,
                       spin=Spin(polarized=open_shell, multiplicity=multiplicity), relativity="none")
     return RunSpec(label, Structure("molecule", sites), physics, **kw).validate()
+
+
+def atom(element: str, *, theory: str = "HF", functional: Optional[str] = None, polarized: bool = True, **kw) -> RunSpec:
+    """A lone atom at the origin: the radial atom facade (spherical, radial bases).  Its spin is its configuration (Hund's
+    rules, the library's) in one channel or two, never a stated multiplicity; all-electron, non-relativistic."""
+    physics = Physics(theory=theory, functional=functional if theory == "DFT" else None, core="all-electron",
+                      spin=Spin(polarized=polarized), relativity="none")
+    return RunSpec(element, Structure("atom", (Site(element, xyz=(0.0, 0.0, 0.0)),)), physics, **kw).validate()

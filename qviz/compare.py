@@ -22,7 +22,7 @@ def same_geometry(a: Run, b: Run, tol: float = 1e-9) -> bool:
     sa, sb = a.spec.structure, b.spec.structure
     if sa.kind != sb.kind or [s.element for s in sa.sites] != [s.element for s in sb.sites]:
         return False
-    coords = (lambda st: [s.xyz for s in st.sites]) if sa.kind == "molecule" else (lambda st: [s.frac for s in st.sites])
+    coords = (lambda st: [s.xyz for s in st.sites]) if sa.kind != "crystal" else (lambda st: [s.frac for s in st.sites])
     if sa.kind == "crystal" and not np.allclose(sa.lattice_bohr, sb.lattice_bohr, atol=tol):
         return False
     return bool(np.allclose(coords(sa), coords(sb), atol=tol))

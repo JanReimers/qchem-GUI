@@ -26,6 +26,10 @@ names for its native arguments) and continues through the same spec key (restart
 resume, a warm start naming each difference, or RestartRefused) and the Result's provenance carries what it did
 (restartedFrom).
 
+AN ATOM (structure kind "atom"): the RADIAL atom facade (qchem AtomCalculation: spherical, radial bases, blocked by l), bound as
+`qchem_py.Calculator.atom(Z, charge, options)`; translate(spec) writes its options in the deck's spelling (solid2_atom).  It
+saves and continues as a molecule does; it has no per-orbital 3-D field and no field of its SCF iterate (the library says why).
+
 BUILD -> RUN: build(job) stops before the SCF (a crystal's deck::Build, a molecule's MoleculeCalculation::Prepare) and keeps
 the calculation; a Run of the same job converges it, so the Basis and Grids tabs read what the run will use.
 
@@ -49,7 +53,7 @@ from .. import states
 from ..capability import Capabilities, Capability
 from ..data import ScalarField, SCFCell, SCFRow, VectorField
 from ..spec import RunSpec
-from . import solid2_deck
+from . import solid2_atom, solid2_deck
 from .base import FieldRef, Job, Refused, Result, RunStopped, StepSink, code_block, data_structure, shared_representation
 
 NAME = "SOLID²"
@@ -139,8 +143,13 @@ def _calculator_args(n: dict) -> dict:
 
 
 def _native_key(n: dict) -> str:
-    """What identifies a job for its kept Build: a crystal's deck text, a molecule's arguments."""
+    """What identifies a job for its kept Build: a crystal's deck text, an atom's or a molecule's arguments."""
     return n["deck"] if "deck" in n else json.dumps(n, sort_keys=True)
+
+
+def _new_atom(qc, n: dict, build_only: bool = True):
+    """The radial atom of an atom job's native dict (qchem_py.Calculator.atom), built and not converged."""
+    return qc.Calculator.atom(n["Z"], n["charge"], n["options"], restart_from=n.get("restart_from", ""), build_only=build_only)
 
 
 def cell_box(lattice, n: int, reps=(1, 1, 1)) -> tuple[list[int], list[float], list[float]]:
@@ -221,7 +230,11 @@ class Solid2Backend:
 
     def why_no_snapshot(self, spec: RunSpec) -> Optional[str]:
         """Why a RUNNING job of `spec` cannot hand out its current iterate's density (None: it can)."""
-        return self._why_absent if self._qc is None else None   # a molecule's iterate_density, a crystal's field(iterate=True)
+        if self._qc is None:
+            return self._why_absent
+        if spec.structure.kind == "atom":
+            return "the radial atom offers no field of its SCF iterate (its density is radial; the converged one draws)"
+        return None   # a molecule's iterate_density, a crystal's field(iterate=True)
 
     def why_no_build(self, spec: RunSpec) -> Optional[str]:
         """Why `build` cannot run for `spec` (None: it can)."""
@@ -229,6 +242,8 @@ class Solid2Backend:
             return self._why_absent
         if spec.structure.kind == "molecule":
             return None                               # MoleculeCalculation::Prepare (the translate refuses what it cannot run)
+        if spec.structure.kind == "atom":
+            return solid2_atom.why_not(spec)          # AtomCalculation::Prepare
         return solid2_deck.why_not(spec)
 
     def build(self, job: Job) -> dict:
@@ -243,6 +258,9 @@ class Solid2Backend:
         try:
             if "deck" in job.native:
                 built = self._qc.SolidRun(job.native["deck"])             # the deck's `threads` scope the library's calls
+            elif "atom" in job.native:
+                with self._threads(job.native):
+                    built = _new_atom(self._qc, job.native["atom"])
             else:
                 with self._threads(job.native):
                     built = self._qc.Calculator(**_calculator_args(job.native), build_only=True)
@@ -267,8 +285,12 @@ class Solid2Backend:
 
         def crystal(s: RunSpec) -> bool:
             return s.structure.kind != "crystal" or solid2_deck.why_not(s) is None
+
+        def atom(s: RunSpec) -> bool:
+            return s.structure.kind != "atom" or solid2_atom.why_not(s) is None
         return Capabilities(NAME, installed=self._qc is not None, why_absent=self._why_absent, features=[
             Capability("structure.kind=crystal -> deck", crystal, lambda s: solid2_deck.why_not(s) or ""),
+            Capability("structure.kind=atom -> the radial atom", atom, lambda s: solid2_atom.why_not(s) or ""),
             Capability("task.kind=energy", lambda s: s.task.kind == "energy",
                        "single points only (MoleculeSession relax is not bound; a crystal's compute_U runs in rundeck: "
                        "deck::Build stops at the SCF)"),
@@ -293,10 +315,13 @@ class Solid2Backend:
             Capability("accuracy.representation.basis", molecule(lambda s: rep(s).get("basis") in (None, *BASES)
                                                                  or bool(code_block(s, "solid2").get("basis_file"))),
                        "the stated basis is not a registered Gaussian basis (nor a downloaded one: Basis ▸ Basis Set Exchange)"),
+            Capability("a downloaded basis is not an atom's", lambda s: s.structure.kind != "atom"
+                       or not code_block(s, "solid2").get("basis_file"),
+                       "the radial atom builds its own radial basis: a downloaded Gaussian file is for a molecule"),
             Capability("a downloaded basis file exists", lambda s: not code_block(s, "solid2").get("basis_file")
                        or os.path.exists(code_block(s, "solid2")["basis_file"]),
                        "the downloaded basis file is gone (Basis ▸ Basis Set Exchange downloads it again)"),
-            Capability("a downloaded basis is molecular", lambda s: s.structure.kind == "molecule"
+            Capability("a downloaded basis is molecular", lambda s: s.structure.kind != "crystal"
                        or not code_block(s, "solid2").get("basis_file"),
                        "a downloaded basis is all-electron and molecular; a crystal runs on a valence basis with its pseudopotential"),
             Capability("accuracy.scf.mixing_alpha", lambda s: all(0.0 < float(scf(s)[k]) <= 1.0 for k in
@@ -313,6 +338,18 @@ class Solid2Backend:
             text = json.dumps(deck, indent=2)
             return Job(NAME, spec, native={"deck": text}, resolved=dict(solid2_deck.resolved(spec)),
                        files={"deck": text.encode()})
+        if spec.structure.kind == "atom":
+            site = spec.structure.sites[0]
+            a = {"Z": site.Z, "charge": 0, "options": solid2_atom.options_text(spec),
+                 "max_iter": int((spec.accuracy.scf or {}).get("max_iter", 100)),
+                 "threads": int(code_block(spec, "solid2").get("threads") or 0)}
+            native = {"atom": a, "threads": a["threads"]}
+            a["state_save"] = states.path_for(spec.label, json.dumps({k: a[k] for k in ("Z", "charge", "options")}, sort_keys=True))
+            a["restart_from"] = solid2_deck.continues_from(spec) or ""
+            resolved = solid2_atom.resolved(spec)
+            resolved["starts from"] = (f"the saved state {a['restart_from']} (judged when it runs)" if a["restart_from"]
+                                       else "scratch, the facade's seed")
+            return Job(NAME, spec, native=native, resolved=resolved, files={"options": a["options"].encode()})
         st, ph, ac = spec.structure, spec.physics, spec.accuracy
         scf = ac.scf or {}
         rep = shared_representation(spec)
@@ -436,6 +473,23 @@ class Solid2Backend:
         def scalar(d, name, signed) -> ScalarField:
             return ScalarField(name, np.asarray(d["values"]), tuple(d["origin"]), tuple(d["spacing"]), signed=signed)
 
+        if "atom" in native:
+            a = native["atom"]
+            held["view"] = None
+
+            def atom_view():
+                with lock:
+                    if held["view"] is None:
+                        held["view"] = self._qc.StateView.atom(a["Z"], a["charge"], a["options"], path)
+                    return held["view"]
+            result.fields = {"density": FieldRef("Electron density", False,
+                                                 lambda npts, pad: scalar(atom_view().density(npts, pad), "Electron density", False))}
+            if result.polarized:
+                result.fields["spin_density"] = FieldRef("Spin density (ρ↑−ρ↓)", True,
+                                                         lambda npts, pad: scalar(atom_view().spin_density(npts, pad),
+                                                                                  "Spin density (ρ↑−ρ↓)", True))
+            result.orbital = None
+            return None
         if "deck" in native:
             struct = data_structure(spec)
 
@@ -484,6 +538,8 @@ class Solid2Backend:
 
         if "deck" in n:
             return self._run_deck(job, step, steps, live)
+        if "atom" in n:
+            return self._run_atom(job, step, steps)
 
         self._qc.clear_report()
         kept = self._kept_build(n)
@@ -523,6 +579,45 @@ class Solid2Backend:
                       provenance={"code": NAME, "iterations": calc.iterations(), "restartedFrom": restarted},
                       record=record,                  # the closures above own `calc`
                       state_file=saved if saved and os.path.exists(saved) else None)
+
+    def _run_atom(self, job: Job, step, steps: list[SCFRow]) -> Result:
+        """The radial atom: its Build (kept, or built now), then its SCF, streamed; saved as a molecule's run is."""
+        a = job.native["atom"]
+        self._qc.clear_report()
+        kept = self._kept_build(job.native)
+        with self._threads(job.native):
+            if kept is not None:
+                calc, self._prior = kept
+            else:
+                calc = _new_atom(self._qc, a)
+            calc.run_scf(step, a["max_iter"])
+        saved = a.get("state_save")
+        if saved:
+            states.state_dir().mkdir(parents=True, exist_ok=True)
+            calc.save_state(saved)
+        restarted = calc.restarted_from()
+        levels = _levels(calc.levels())
+        polarized = bool(job.spec.physics.spin.polarized)
+
+        def scalar(d, name, signed) -> ScalarField:
+            return ScalarField(name, np.asarray(d["values"]), tuple(d["origin"]), tuple(d["spacing"]), signed=signed)
+
+        def gradient(npts: int, pad: float) -> VectorField:
+            d = calc.gradient(npts, pad)
+            return VectorField("grad(rho)", np.asarray(d["vectors"]), tuple(d["origin"]), tuple(d["spacing"]))
+        fields = {"density":  FieldRef("Electron density", False, lambda npts, pad: scalar(calc.density(npts, pad), "Electron density", False)),
+                  "gradient": FieldRef("grad(rho)", False, gradient)}
+        if polarized:
+            fields["spin_density"] = FieldRef("Spin density (ρ↑−ρ↓)", True,
+                                              lambda npts, pad: scalar(calc.spin_density(npts, pad), "Spin density (ρ↑−ρ↓)", True))
+        converged = calc.converged()
+        record = self._prior | json.loads(self._qc.report())
+        return Result(converged=converged, energy_Ha=calc.total_energy() if converged else None, failure=calc.failure(),
+                      structure=data_structure(job.spec), scf=steps, levels=levels, polarized=polarized, fields=fields,
+                      orbital=None,           # the radial atom draws no per-orbital 3-D field (its orbitals are radial × Y_lm)
+                      resolved=_as_run(job.resolved, record, restarted),
+                      provenance={"code": NAME, "iterations": calc.iterations(), "restartedFrom": restarted},
+                      record=record, state_file=saved if saved and os.path.exists(saved) else None)
 
     def _run_deck(self, job: Job, step, steps: list[SCFRow], live: dict) -> Result:
         """A crystal: deck::Build (a refusal raises with the library's text), then the deck's schedule, streamed."""
