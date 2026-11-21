@@ -139,7 +139,7 @@ def _calculator_args(n: dict) -> dict:
                 diis_engage_fd=n["diis_engage_fd"], mom=n["mom"], mom_start=n["mom_start"], relax_min=n["relax_min"],
                 ladder_switch_at=n["ladder_switch_at"], restart_from=n.get("restart_from", ""),
                 basis_file=n.get("basis_file", ""), seed=n.get("seed", ""), angular=n.get("angular", ""),
-                **{k: n[k] for k, _ in solid2_deck.DECK_GATES})
+                net_charges=n.get("net_charges", []), **{k: n[k] for k, _ in solid2_deck.DECK_GATES})
 
 
 def _native_key(n: dict) -> str:
@@ -386,6 +386,8 @@ class Solid2Backend:
             **{key: -1.0 if scf.get(key) is None else 0.0 if scf[key] == "off" else float(scf[key])   # < 0: default, 0: off
                for key, _ in solid2_deck.DECK_GATES},
         }
+        if any(qs := st.net_charges()):                   # a charged molecule: its STRUCTURE's per-site net charges (Site.netCharge);
+            native["net_charges"] = [float(q) for q in qs]   # stated only then, so a neutral run keeps its state file's name
         # the state this run SAVES: named for its arguments (where it starts from excluded: a continuation of the same
         # settings overwrites its own file, as a crystal deck's does)
         native["state_save"] = states.path_for(spec.label, json.dumps({k: v for k, v in native.items() if k not in ("restart_from", "threads")},
@@ -467,7 +469,8 @@ class Solid2Backend:
                         held["view"] = self._qc.StateView.molecule(
                             numbers=n["numbers"], positions=n["positions"], basis=n["basis"], model=n["model"],
                             symmetry=n["symmetry"], polarized=n["polarized"], multiplicity=n["multiplicity"], pp=n["pp"],
-                            basis_file=n.get("basis_file", ""), angular=n.get("angular") or "cartesian", path=path)
+                            basis_file=n.get("basis_file", ""), angular=n.get("angular") or "cartesian", path=path,
+                            net_charges=n.get("net_charges", []))
                 return held["view"]
 
         def scalar(d, name, signed) -> ScalarField:

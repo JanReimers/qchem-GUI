@@ -49,12 +49,9 @@ class TheCharge(unittest.TestCase):
         self.assertEqual(atom("O", charge=-2).label, "O-2")
         self.assertEqual(RunSpec.from_dict(s.to_dict()), s)
 
-    def test_no_electron_left_or_a_charged_molecule_is_refused(self):
+    def test_no_electron_left_is_refused(self):
         with self.assertRaisesRegex(SpecError, "no electron"):
             atom("He", charge=2)
-        d = molecules.preset_spec("Water (H2O)").to_dict(); d["structure"]["charge"] = 1
-        with self.assertRaisesRegex(SpecError, "not wired"):
-            RunSpec.from_dict(d).validate()
 
 
 class TheOptions(unittest.TestCase):

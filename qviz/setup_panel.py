@@ -238,11 +238,13 @@ class SetupPanel(QtWidgets.QWidget):
         self.save_material_btn.clicked.connect(self._save_material)
         f.addRow(self.save_material_btn)
         self.sites = QtWidgets.QTableWidget(0, 5); self.sites.setFont(_mono())
-        self.sites.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.sites.setEditTriggers(QtWidgets.QAbstractItemView.DoubleClicked | QtWidgets.QAbstractItemView.EditKeyPressed)
         self.sites.verticalHeader().setVisible(False)
+        self.sites.itemChanged.connect(self._on_site_item)  # only a molecule's q column is editable (its per-site charge split)
         f.addRow(self.sites)
         self.charge_spin = QtWidgets.QSpinBox(); self.charge_spin.setRange(-3, 0)
-        self.charge_spin.setToolTip("The atom's net charge: a cation (Li+ = 1) or an anion (O- = -1), a normal radial-atom run")
+        self.charge_spin.setToolTip("The net charge: a cation (Li+ = 1, H2O+ = 1) or an anion (O- = -1, OH- = -1).  A molecule's "
+                                    "goes on its most electronegative site; edit the sites table's q column to split it")
         self.charge_spin.valueChanged.connect(self._on_charge)
         f.addRow("Charge (ion)", self.charge_spin)
         self.lattice = QtWidgets.QLabel(); self.lattice.setFont(_mono())
@@ -563,14 +565,32 @@ class SetupPanel(QtWidgets.QWidget):
             self._render()                               # the widgets show the draft, which did not change
 
     def _on_charge(self, q: int) -> None:
-        """The atom's charge, and its label with it (Li -> Li+): a new ion is a new state file."""
+        """The atom's or molecule's charge, and its label with it (Li -> Li+, H2O -> H2O+): a new ion is a new state file.  A
+        molecule's per-site split returns to the default rule (Structure.net_charges)."""
         s = self.draft.spec
-        if s is None or s.structure.kind != "atom":
+        if s is None or s.structure.kind == "crystal":
             return
-        el = s.structure.sites[0].element
-        from .spec import atom
-        label = atom(el, charge=q).label if s.label.startswith(el) else s.label
-        self._edit({"label": label, "structure": {"charge": q}}, f"charge {q:+d}")
+        from .spec import ion_label, neutral_label
+        label = ion_label(neutral_label(s.label), q)
+        patch = {"charge": q} if s.structure.kind == "atom" else {"charge": q, "site_charges": None}
+        self._edit({"label": label, "structure": patch}, f"charge {q:+d}")
+
+    def _on_site_item(self, item) -> None:
+        """A molecule's q cell edited: the per-site split, and the total (and the label) with it."""
+        s = self.draft.spec
+        if self._rendering or s is None or s.structure.kind != "molecule" or item.column() != self._q_column:
+            return
+        qs = list(s.structure.net_charges())
+        try:
+            qs[item.row()] = int(item.text())
+        except ValueError:
+            self.reason.setText(f"not applied: site {item.row() + 1}'s charge {item.text()!r} is not an integer")
+            self._render()
+            return
+        from .spec import ion_label, neutral_label
+        q = sum(qs)
+        self._edit({"label": ion_label(neutral_label(s.label), q), "structure": {"charge": q, "site_charges": qs}},
+                   f"site {item.row() + 1} charge {qs[item.row()]:+d}")
 
     def _on_mult(self, v: int) -> None:
         self._edit({"physics": {"spin": {"multiplicity": v or None, "polarized": v > 1}}}, "multiplicity")
@@ -824,6 +844,7 @@ class SetupPanel(QtWidgets.QWidget):
             self._render()
 
     _rendering = False
+    _q_column = -1                                      # the sites table's editable q column (a molecule's), -1 = none
     _EDITORS = ("mix_box", "alpha", "alpha_min", "alpha_max", "ladder_switch", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "method_box", "basis_box", "charge_spin", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
                 "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut", "spins_edit", "trim_box", "angular_box", "seed_box", "threads_box")
 
@@ -864,9 +885,9 @@ class SetupPanel(QtWidgets.QWidget):
             for w in (self.method_box, self.pp_check):
                 w.setToolTip(CRYSTAL_PHYSICS if crystal else "")
             self.mult_spin.setVisible(s is None or (mol and not atom))
-            self._sform.setRowVisible(self.charge_spin, atom)
-            if atom:
-                self.charge_spin.setRange(-3, s.structure.sites[0].Z - 1)
+            self._sform.setRowVisible(self.charge_spin, mol and s is not None)
+            if mol and s is not None:
+                self.charge_spin.setRange(-3, min(3, sum(x.Z for x in s.structure.sites) - 1))
                 self.charge_spin.setValue(s.structure.charge)
             if s is not None:
                 self._render_values(s, mol)
@@ -897,16 +918,22 @@ class SetupPanel(QtWidgets.QWidget):
         p, ac = s.physics, s.accuracy
         st = s.structure
         moments = p.spin.site_moments or ()
-        heads = ["site", "el", *(("x", "y", "z") if mol else ("a", "b", "c"))] + ([] if mol else ["μB"])
+        heads = ["site", "el", *(("x", "y", "z") if mol else ("a", "b", "c"))] + (["q"] if mol else ["μB"])
+        self._q_column = len(heads) - 1 if st.kind == "molecule" else -1
         self.sites.setColumnCount(len(heads)); self.sites.setHorizontalHeaderLabels(heads)
         self.sites.setRowCount(len(st.sites))
+        qs = st.net_charges() if mol else ()
         for i, site in enumerate(st.sites):
             r = site.xyz if mol else site.frac
             cells = [site.tag or str(i + 1), site.element, *(f"{x:.5f}" for x in r)]
-            if not mol:
-                cells.append(f"{moments[i]:+.1f}" if i < len(moments) else "")
+            cells.append(f"{qs[i]:+d}" if mol else f"{moments[i]:+.1f}" if i < len(moments) else "")
             for j, c in enumerate(cells):
-                self.sites.setItem(i, j, QtWidgets.QTableWidgetItem(c))
+                item = QtWidgets.QTableWidgetItem(c)
+                if j != self._q_column or self._run is not None:
+                    item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)
+                elif j == self._q_column:
+                    item.setToolTip("this site's net charge (the SAD seed's ion); the sites' sum is the molecule's charge")
+                self.sites.setItem(i, j, item)
         self.sites.resizeColumnsToContents()
         rows = min(len(st.sites), 12)                  # as tall as the sites (up to 12), then it scrolls
         self.sites.setFixedHeight(self.sites.horizontalHeader().height() + rows * self.sites.verticalHeader().defaultSectionSize() + 6)

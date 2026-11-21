@@ -34,6 +34,14 @@ _ELEMENTS = ("H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn F
              "Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th "
              "Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og").split()   # the whole table: what a basis or a pseudopotential covers is the library's question
 Z_OF = {s: i + 1 for i, s in enumerate(_ELEMENTS)}
+# Pauling electronegativities (CRC), for Structure.net_charges' default placement only; an element without one counts 0.
+PAULING = {"H": 2.20, "Li": 0.98, "Be": 1.57, "B": 2.04, "C": 2.55, "N": 3.04, "O": 3.44, "F": 3.98, "Na": 0.93, "Mg": 1.31,
+           "Al": 1.61, "Si": 1.90, "P": 2.19, "S": 2.58, "Cl": 3.16, "K": 0.82, "Ca": 1.00, "Sc": 1.36, "Ti": 1.54, "V": 1.63,
+           "Cr": 1.66, "Mn": 1.55, "Fe": 1.83, "Co": 1.88, "Ni": 1.91, "Cu": 1.90, "Zn": 1.65, "Ga": 1.81, "Ge": 2.01, "As": 2.18,
+           "Se": 2.55, "Br": 2.96, "Kr": 3.00, "Rb": 0.82, "Sr": 0.95, "Y": 1.22, "Zr": 1.33, "Nb": 1.6, "Mo": 2.16, "Tc": 1.9,
+           "Ru": 2.2, "Rh": 2.28, "Pd": 2.20, "Ag": 1.93, "Cd": 1.69, "In": 1.78, "Sn": 1.96, "Sb": 2.05, "Te": 2.1, "I": 2.66,
+           "Xe": 2.6, "Cs": 0.79, "Ba": 0.89, "La": 1.10, "Hf": 1.3, "Ta": 1.5, "W": 2.36, "Re": 1.9, "Os": 2.2, "Ir": 2.20,
+           "Pt": 2.28, "Au": 2.54, "Hg": 2.00, "Tl": 1.62, "Pb": 2.33, "Bi": 2.02}
 
 STRUCTURE_KINDS = ("molecule", "crystal", "atom")
 THEORIES     = ("HF", "DFT")
@@ -72,10 +80,22 @@ class Structure:
     sites: tuple[Site, ...]
     lattice_bohr: Optional[tuple[tuple[float, float, float], ...]] = None   # rows a, b, c
     source: Optional[dict] = None                       # provenance only: {"materials": ...}, {"cif": path}, {"agent": ...}
-    charge: int = 0                                     # net charge (e): an atom's ion (Li+ = 1); the other kinds take none yet
+    charge: int = 0                                     # net charge (e): an atom's or a molecule's ion (Li+ = 1, OH- = -1); a crystal's is not wired
+    site_charges: Optional[tuple[int, ...]] = None      # a molecule's per-site split of `charge` (qchem's Site.netCharge), None = the default rule
 
     def __hash__(self) -> int:                          # `source` is a dict: hash the rest
-        return hash((self.kind, self.sites, self.lattice_bohr, self.charge))
+        return hash((self.kind, self.sites, self.lattice_bohr, self.charge, self.site_charges))
+
+    def net_charges(self) -> tuple[int, ...]:
+        """Each site's net charge, summing to `charge`: the stated split, else THE DEFAULT RULE -- the whole charge on the most
+        electronegative site (Pauling; the first such site on a tie).  The split shapes only the library's SAD seed (each site's
+        ionic configuration); the total sets the electron count, so the converged state does not depend on it (controller 2026-11-21)."""
+        if self.site_charges is not None:
+            return tuple(self.site_charges)
+        q = [0] * len(self.sites)
+        if self.charge and q:
+            q[max(range(len(self.sites)), key=lambda i: (PAULING.get(self.sites[i].element, 0.0), -i))] = self.charge
+        return tuple(q)
 
 
 @dataclass(frozen=True)
@@ -171,8 +191,11 @@ class RunSpec:
         _check(problems, st.kind in STRUCTURE_KINDS, f"structure.kind {st.kind!r} not in {STRUCTURE_KINDS}")
         _check(problems, len(st.sites) > 0, "structure.sites is empty")
         _check(problems, st.kind != "atom" or len(st.sites) == 1, "an atom has exactly one site")
-        _check(problems, st.charge == 0 or st.kind == "atom",
-               "structure.charge is an atom's (an ion); a molecule's or a crystal's charge is not wired yet")
+        _check(problems, st.charge == 0 or st.kind != "crystal", "structure.charge: a crystal's charge is not wired yet")
+        if st.site_charges is not None:
+            _check(problems, st.kind == "molecule", "structure.site_charges is a molecule's per-site split of its charge")
+            _check(problems, len(st.site_charges) == len(st.sites) and sum(st.site_charges) == st.charge,
+                   f"structure.site_charges: one per site ({len(st.sites)}), summing to the charge {st.charge}")
         _check(problems, self.num_electrons >= 1, f"charge {st.charge} leaves no electron")
         for i, s in enumerate(st.sites):
             _check(problems, s.element in Z_OF, f"structure.sites[{i}].element {s.element!r} is not an element")
@@ -333,9 +356,21 @@ def _read(cls: type, d: Any, path: str):
 # --------------------------------------------------------------------------
 # Constructors the app (and the agent) use
 # --------------------------------------------------------------------------
+def ion_label(base: str, charge: int) -> str:
+    """`base` with its ion suffix: Li+ (1), O-2 (-2), H2O+ (1); `base` itself when neutral."""
+    return base + ("" if charge == 0 else f"{'+' if charge > 0 else '-'}{abs(charge) if abs(charge) > 1 else ''}")
+
+
+def neutral_label(label: str) -> str:
+    """`label` without an ion suffix ion_label wrote (H2O+ -> H2O, O-2 -> O)."""
+    import re
+    return re.sub(r"[+-]\d*$", "", label)
+
+
 def molecule(label: str, numbers, positions_bohr, *, theory: str = "HF", functional: Optional[str] = None,
-             multiplicity: Optional[int] = None, core: str = "all-electron", **kw) -> RunSpec:
-    """A molecule spec from Z + flat 3N bohr positions (the shape the picker and .xyz reader give)."""
+             multiplicity: Optional[int] = None, core: str = "all-electron", charge: int = 0, **kw) -> RunSpec:
+    """A molecule spec from Z + flat 3N bohr positions (the shape the picker and .xyz reader give); `charge` its net charge,
+    on its most electronegative site (Structure.net_charges)."""
     numbers = list(numbers); pos = list(positions_bohr)
     if len(pos) != 3 * len(numbers):
         raise SpecError("positions must be flat 3N (bohr)")
@@ -344,7 +379,7 @@ def molecule(label: str, numbers, positions_bohr, *, theory: str = "HF", functio
     open_shell = multiplicity is not None and multiplicity > 1
     physics = Physics(theory=theory, functional=functional if theory == "DFT" else None, core=core,
                       spin=Spin(polarized=open_shell, multiplicity=multiplicity), relativity="none")
-    return RunSpec(label, Structure("molecule", sites), physics, **kw).validate()
+    return RunSpec(label, Structure("molecule", sites, charge=charge), physics, **kw).validate()
 
 
 def atom(element: str, *, charge: int = 0, theory: str = "HF", functional: Optional[str] = None, polarized: bool = True,
@@ -353,5 +388,5 @@ def atom(element: str, *, charge: int = 0, theory: str = "HF", functional: Optio
     rules, the library's) in one channel or two, never a stated multiplicity; all-electron, non-relativistic."""
     physics = Physics(theory=theory, functional=functional if theory == "DFT" else None, core="all-electron",
                       spin=Spin(polarized=polarized), relativity="none")
-    label = element + ("" if charge == 0 else f"{'+' if charge > 0 else '-'}{abs(charge) if abs(charge) > 1 else ''}")
+    label = ion_label(element, charge)
     return RunSpec(label, Structure("atom", (Site(element, xyz=(0.0, 0.0, 0.0)),), charge=charge), physics, **kw).validate()

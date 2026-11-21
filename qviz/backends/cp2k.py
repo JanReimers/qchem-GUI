@@ -109,6 +109,8 @@ class Cp2kBackend:
                             why_absent=None if installed else f"{self.exe} or mpirun not found", features=[
             Capability("structure.kind: molecule or crystal", lambda s: s.structure.kind != "atom",
                        "the radial atom is SOLID²'s facade (a lone atom in CP2K is a one-atom molecule: state it as one)"),
+            Capability("structure.charge=0", lambda s: s.structure.charge == 0,
+                       "a charged structure is not translated (no &DFT CHARGE written yet): it would run neutral"),
             Capability("physics.theory=DFT", lambda s: s.physics.theory == "DFT", "Quickstep runs DFT here (no HF translated)"),
             Capability("physics.functional", lambda s: s.physics.functional in _XC, "functionals translated: LDA, PBE"),
             Capability("physics.core=pseudopotential", lambda s: s.physics.core == "pseudopotential",
