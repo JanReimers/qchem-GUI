@@ -72,9 +72,10 @@ class Structure:
     sites: tuple[Site, ...]
     lattice_bohr: Optional[tuple[tuple[float, float, float], ...]] = None   # rows a, b, c
     source: Optional[dict] = None                       # provenance only: {"materials": ...}, {"cif": path}, {"agent": ...}
+    charge: int = 0                                     # net charge (e): an atom's ion (Li+ = 1); the other kinds take none yet
 
     def __hash__(self) -> int:                          # `source` is a dict: hash the rest
-        return hash((self.kind, self.sites, self.lattice_bohr))
+        return hash((self.kind, self.sites, self.lattice_bohr, self.charge))
 
 
 @dataclass(frozen=True)
@@ -149,8 +150,8 @@ class RunSpec:
     # -- derived -----------------------------------------------------------
     @property
     def num_electrons(self) -> int:
-        """All-electron count (a back end's pseudopotential decides its valence count)."""
-        return sum(s.Z for s in self.structure.sites)
+        """All-electron count, net of the charge (a back end's pseudopotential decides its valence count)."""
+        return sum(s.Z for s in self.structure.sites) - self.structure.charge
 
     @property
     def summary(self) -> str:
@@ -170,6 +171,9 @@ class RunSpec:
         _check(problems, st.kind in STRUCTURE_KINDS, f"structure.kind {st.kind!r} not in {STRUCTURE_KINDS}")
         _check(problems, len(st.sites) > 0, "structure.sites is empty")
         _check(problems, st.kind != "atom" or len(st.sites) == 1, "an atom has exactly one site")
+        _check(problems, st.charge == 0 or st.kind == "atom",
+               "structure.charge is an atom's (an ion); a molecule's or a crystal's charge is not wired yet")
+        _check(problems, self.num_electrons >= 1, f"charge {st.charge} leaves no electron")
         for i, s in enumerate(st.sites):
             _check(problems, s.element in Z_OF, f"structure.sites[{i}].element {s.element!r} is not an element")
             if st.kind == "crystal":
@@ -343,9 +347,11 @@ def molecule(label: str, numbers, positions_bohr, *, theory: str = "HF", functio
     return RunSpec(label, Structure("molecule", sites), physics, **kw).validate()
 
 
-def atom(element: str, *, theory: str = "HF", functional: Optional[str] = None, polarized: bool = True, **kw) -> RunSpec:
+def atom(element: str, *, charge: int = 0, theory: str = "HF", functional: Optional[str] = None, polarized: bool = True,
+         **kw) -> RunSpec:
     """A lone atom at the origin: the radial atom facade (spherical, radial bases).  Its spin is its configuration (Hund's
     rules, the library's) in one channel or two, never a stated multiplicity; all-electron, non-relativistic."""
     physics = Physics(theory=theory, functional=functional if theory == "DFT" else None, core="all-electron",
                       spin=Spin(polarized=polarized), relativity="none")
-    return RunSpec(element, Structure("atom", (Site(element, xyz=(0.0, 0.0, 0.0)),)), physics, **kw).validate()
+    label = element + ("" if charge == 0 else f"{'+' if charge > 0 else '-'}{abs(charge) if abs(charge) > 1 else ''}")
+    return RunSpec(label, Structure("atom", (Site(element, xyz=(0.0, 0.0, 0.0)),), charge=charge), physics, **kw).validate()

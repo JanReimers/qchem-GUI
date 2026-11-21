@@ -13,7 +13,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6 import QtWidgets                                     # noqa: E402
 
-from qviz import molecules                                        # noqa: E402
+from qviz import basismenu, molecules                                        # noqa: E402
 from qviz.agent.tools import Toolset                              # noqa: E402
 from qviz.backends import FakeBackend, solid2_atom as A          # noqa: E402
 from qviz.backends import solid2_deck                             # noqa: E402
@@ -39,6 +39,21 @@ class TheSpec(unittest.TestCase):
             RunSpec("He2", two).validate()
         d = atom("Li").to_dict(); d["physics"]["spin"]["multiplicity"] = 2
         with self.assertRaisesRegex(SpecError, "configuration"):
+            RunSpec.from_dict(d).validate()
+
+
+class TheCharge(unittest.TestCase):
+    def test_an_ion_is_an_atom_with_a_charge(self):
+        s = atom("Li", charge=1)
+        self.assertEqual((s.label, s.structure.charge, s.num_electrons), ("Li+", 1, 2))
+        self.assertEqual(atom("O", charge=-2).label, "O-2")
+        self.assertEqual(RunSpec.from_dict(s.to_dict()), s)
+
+    def test_no_electron_left_or_a_charged_molecule_is_refused(self):
+        with self.assertRaisesRegex(SpecError, "no electron"):
+            atom("He", charge=2)
+        d = molecules.preset_spec("Water (H2O)").to_dict(); d["structure"]["charge"] = 1
+        with self.assertRaisesRegex(SpecError, "not wired"):
             RunSpec.from_dict(d).validate()
 
 
@@ -79,6 +94,12 @@ class BuildRunContinue(unittest.TestCase):
         self.assertIsNone(r.orbital, "the radial atom draws no per-orbital 3-D field")
         self.assertIn("radial atom", be.why_no_snapshot(atom("He")))
 
+    def test_a_cation_runs(self):
+        be = solid2()
+        r = be.run(be.translate(atom("Li", charge=1, polarized=False)))
+        self.assertTrue(r.converged)
+        self.assertAlmostEqual(r.energy_Ha, -7.2364, places=3)          # Li+ HF limit -7.23642 (Clementi-Roetti)
+
     def test_li_polarized_saves_and_continues_exactly(self):
         be = solid2()
         s = atom("Li")
@@ -114,9 +135,45 @@ class TheSetupPanel(unittest.TestCase):
         self.assertEqual(self.draft.spec.accuracy.representation["basis"], "Gaussian")
         self.assertFalse(self.panel.mult_spin.isVisibleTo(self.panel), "an atom's spin is its configuration")
 
+    def test_the_charge_box_makes_an_ion(self):
+        self.draft.set(molecules.atom_spec("Li"), "user", "Li")
+        self.panel.charge_spin.setValue(1)
+        self.assertEqual((self.draft.spec.label, self.draft.spec.structure.charge), ("Li+", 1))
+
     def test_a_one_atom_xyz_imports_as_the_radial_atom(self):
         self.panel.set_structure("neon", [10], [0.0, 0.0, 0.0])
         self.assertEqual((self.draft.spec.structure.kind, self.draft.spec.label), ("atom", "Ne"))
+
+
+QC = solid2()._qc
+
+
+@unittest.skipUnless(QC is not None and hasattr(QC, "basis_offers"), "qchem_py with basis_offers not built (QCHEM_BUILD)")
+class TheLibrarysMenu(unittest.TestCase):
+    """The Basis box is the library's answer (qchem::OrbitalBasisOffers); the GUI only orders and shows it."""
+    def setUp(self):
+        self.draft = SpecDraft()
+        self.panel = SetupPanel(self.draft, BackendRegistry([FakeBackend()]), qc=QC)
+
+    def test_the_fallback_list_is_the_librarys(self):
+        got = basismenu.offers(atom("Ne"), QC)
+        self.assertEqual([o["name"] for o in got if o["route"] == "atom"], list(A.RADIAL_TYPES))
+        self.assertEqual([o for o in got if o["optIn"]][0]["route"], "molecule")
+
+    def test_an_atom_shows_the_rkb_note_and_the_opt_in_molecule_leads_to_the_gaussian_menu(self):
+        self.draft.set(molecules.atom_spec("Ne"), "user", "Ne")
+        box = self.panel.basis_box
+        texts = [box.itemText(k) for k in range(box.count())]
+        self.assertIn("Slater_RKB  — four-component (RKB): relativistic", texts)
+        k = next(k for k in range(box.count()) if box.itemData(k)["offer"]["optIn"])
+        self.assertEqual(k, box.count() - 1, "the opt-in route sorts after the admitted families")
+        box.setCurrentIndex(k); box.activated.emit(k)
+        self.assertEqual(self.draft.spec.structure.kind, "molecule")
+        offers = {box.itemData(i)["offer"]["name"]: i for i in range(box.count()) if isinstance(box.itemData(i), dict)}
+        self.assertIn("dzvp", offers)
+        vb = box.model().item(offers["valence_lowq_vb"])                 # F Na Al Mn O: no Ne block
+        self.assertFalse(vb.isEnabled())
+        self.assertIn("has no block for Ne", vb.toolTip())
 
 
 class TheAgent(unittest.TestCase):

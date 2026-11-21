@@ -340,7 +340,7 @@ class Solid2Backend:
                        files={"deck": text.encode()})
         if spec.structure.kind == "atom":
             site = spec.structure.sites[0]
-            a = {"Z": site.Z, "charge": 0, "options": solid2_atom.options_text(spec),
+            a = {"Z": site.Z, "charge": spec.structure.charge, "options": solid2_atom.options_text(spec),
                  "max_iter": int((spec.accuracy.scf or {}).get("max_iter", 100)),
                  "threads": int(code_block(spec, "solid2").get("threads") or 0)}
             native = {"atom": a, "threads": a["threads"]}

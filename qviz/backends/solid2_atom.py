@@ -8,8 +8,8 @@ drop: so the per-code deck block (accuracy.representation.solid2.deck) is merged
 
 The radial atom's orbital basis is its `atom.type`: the spec's shared representation.basis names it ("Slater", "Gaussian",
 "BSpline6", ...), the GUI's basis menu offers them for a one-site structure (the user, 2026-11-21: "for a single atom structure the
-user should automatically see only atom friendly orbital basis sets").  RADIAL_TYPES is a STUB until the library answers which
-bases a structure admits (lane G's design note laneG-basis-menu-design.md, `OrbitalBasisOffers`).
+user should automatically see only atom friendly orbital basis sets").  The menu is the LIBRARY's answer (qviz.basismenu, over
+qchem_py.basis_offers); RADIAL_TYPES is its fallback when qchem_py is absent, held equal to it by test.
 """
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ from ..spec import RunSpec
 from .base import code_block, shared_representation
 from .solid2_deck import LIB_EPS, _merge
 
-#: the radial atom's basis families (deck atom.type, RunOptions::Atom::type), the menu's order.  STUB: the library's query
-#: replaces it.  The four-component RKB types are not offered: the GUI has no relativity knob yet.
-RADIAL_TYPES = ("Slater", "Gaussian", "BSpline6", "BSpliner6")
+#: the radial atom's basis families (deck atom.type), the FALLBACK when qchem_py is absent: the menu itself is the library's
+#: answer (qchem_py.basis_offers, qchem::OrbitalBasisOffers), RKB types included with their relativistic note (user ruling Q3).
+RADIAL_TYPES = ("Slater", "Gaussian", "BSpline6", "BSpliner6", "Gaussian_RKB", "Slater_RKB")
 #: the preset exponent pools (atom.basisPool); the library's default is Medium
 POOLS = ("Low", "Medium", "High")
 DEFAULT_TYPE = "Slater"           # RunOptions::Atom::type's default
@@ -83,7 +83,9 @@ def resolved(spec: RunSpec) -> dict:
     """The settings a person reads beside the run."""
     o = to_options(spec)
     a = o.get("atom") or {}
+    q = spec.structure.charge
     return {"facade": "the radial atom (spherical; radial bases, blocked by l)",
+            "ion": f"charge {q:+d} ({spec.num_electrons} electrons)" if q else "neutral",
             "basis": f"{a.get('type')} radial, pool {a.get('basisPool', 'Medium (default)')}"
                      + (f", N={a['N']}" if a.get("N") else ""),
             "model": o["model"],

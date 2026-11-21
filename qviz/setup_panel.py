@@ -25,7 +25,7 @@ from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import basisinfo, bse, geometry, gridinfo, materials, molecules, policyinfo, states, symmetry
+from . import basisinfo, basismenu, bse, geometry, gridinfo, materials, molecules, policyinfo, states, symmetry
 from .backends import solid2_deck
 from .backends.base import BackendRegistry, code_block, data_structure
 from .backends.solid2 import mesh_for
@@ -241,6 +241,10 @@ class SetupPanel(QtWidgets.QWidget):
         self.sites.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.sites.verticalHeader().setVisible(False)
         f.addRow(self.sites)
+        self.charge_spin = QtWidgets.QSpinBox(); self.charge_spin.setRange(-3, 0)
+        self.charge_spin.setToolTip("The atom's net charge: a cation (Li+ = 1) or an anion (O- = -1), a normal radial-atom run")
+        self.charge_spin.valueChanged.connect(self._on_charge)
+        f.addRow("Charge (ion)", self.charge_spin)
         self.lattice = QtWidgets.QLabel(); self.lattice.setFont(_mono())
         self.lattice.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         f.addRow("Lattice (bohr)", self.lattice)
@@ -558,6 +562,16 @@ class SetupPanel(QtWidgets.QWidget):
             self.refused.emit(str(e))
             self._render()                               # the widgets show the draft, which did not change
 
+    def _on_charge(self, q: int) -> None:
+        """The atom's charge, and its label with it (Li -> Li+): a new ion is a new state file."""
+        s = self.draft.spec
+        if s is None or s.structure.kind != "atom":
+            return
+        el = s.structure.sites[0].element
+        from .spec import atom
+        label = atom(el, charge=q).label if s.label.startswith(el) else s.label
+        self._edit({"label": label, "structure": {"charge": q}}, f"charge {q:+d}")
+
     def _on_mult(self, v: int) -> None:
         self._edit({"physics": {"spin": {"multiplicity": v or None, "polarized": v > 1}}}, "multiplicity")
 
@@ -810,7 +824,7 @@ class SetupPanel(QtWidgets.QWidget):
             self._render()
 
     _rendering = False
-    _EDITORS = ("mix_box", "alpha", "alpha_min", "alpha_max", "ladder_switch", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "method_box", "basis_box", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
+    _EDITORS = ("mix_box", "alpha", "alpha_min", "alpha_max", "ladder_switch", "diis_depth", "diis_sv", "diis_engage", "mom_check", "mom_start", "method_box", "basis_box", "charge_spin", "pp_check", "pol_check", "mult_spin", "sym_check", "eps_box",
                 "acc_box", "maxit", "mesh_radial", "mesh_angular", "density_ecut", "spins_edit", "trim_box", "angular_box", "seed_box", "threads_box")
 
     def _render(self) -> None:
@@ -850,6 +864,10 @@ class SetupPanel(QtWidgets.QWidget):
             for w in (self.method_box, self.pp_check):
                 w.setToolTip(CRYSTAL_PHYSICS if crystal else "")
             self.mult_spin.setVisible(s is None or (mol and not atom))
+            self._sform.setRowVisible(self.charge_spin, atom)
+            if atom:
+                self.charge_spin.setRange(-3, s.structure.sites[0].Z - 1)
+                self.charge_spin.setValue(s.structure.charge)
             if s is not None:
                 self._render_values(s, mol)
             else:
@@ -1043,12 +1061,20 @@ class SetupPanel(QtWidgets.QWidget):
         basis, file = (s.accuracy.representation or {}).get("basis"), basisinfo.basis_file(s)
         self.basis_box.blockSignals(True)
         self.basis_box.clear()
+        try:
+            menu = basismenu.offers(s, self._qc)      # the library's answer (atom, molecule); None: it cannot be asked
+        except Exception as e:                        # noqa: BLE001 -- the library's refusal: say it, keep the fallback list
+            menu, self._menu_error = None, str(e)
         if s.structure.kind == "atom":            # a lone atom: the radial bases only (the user, 2026-11-21)
-            self.basis_box.addItems(solid2_atom.RADIAL_TYPES)
-            self.basis_box.setCurrentText(solid2_atom.radial_type(s))
-            self.basis_box.setToolTip("The radial atom's basis families (radial functions × Y_lm, blocked by l).  The library "
-                                      "fills the exponents from its pool (Medium) unless the deck block's atom.N / emin / emax "
-                                      "or exponents say otherwise")
+            if menu is None:
+                menu = [{"route": "atom", "key": f"atom.type={n}", "name": n, "admitted": True, "reason": "", "blockGroup": "",
+                         "note": "", "optIn": False} for n in solid2_atom.RADIAL_TYPES]
+            self._add_offers(menu)
+            self._select_offer(solid2_atom.radial_type(s))
+            self.basis_box.setToolTip("The radial atom's basis families (radial functions × Y_lm, blocked by l), as the library "
+                                      "offers them.  It fills the exponents from its pool (Medium) unless the deck block's atom.N / "
+                                      "emin / emax or exponents say otherwise.  The greyed last entry runs the atom as a one-atom "
+                                      "MOLECULE on 3-D Gaussians instead")
         elif s.structure.kind == "crystal":
             names = solid2_deck.periodic_bases({site.element for site in s.structure.sites})
             self.basis_box.addItems(names)
@@ -1061,7 +1087,10 @@ class SetupPanel(QtWidgets.QWidget):
             self.basis_box.setToolTip("The periodic (pseudopotential valence) bases that cover " + ", ".join(
                 sorted({site.element for site in s.structure.sites})) + (": " + ", ".join(names) if names else ": none"))
         else:
-            self.basis_box.addItems(BASES)
+            if menu is None:
+                self.basis_box.addItems(BASES)
+            else:
+                self._add_offers(menu)
             for side in bse.installed():
                 self.basis_box.addItem(f"{side['name']} v{side['version']} (downloaded)", side["path"])
             if file:
@@ -1070,9 +1099,10 @@ class SetupPanel(QtWidgets.QWidget):
                     self.basis_box.addItem(f"{basis} (missing: {file})", file); i = self.basis_box.count() - 1
                 self.basis_box.setCurrentIndex(i)
             elif basis:
-                if self.basis_box.findText(basis) < 0:
-                    self.basis_box.addItem(basis)
-                self.basis_box.setCurrentText(basis)
+                if not self._select_offer(basis):
+                    if self.basis_box.findText(basis) < 0:
+                        self.basis_box.addItem(basis)
+                    self.basis_box.setCurrentText(basis)
             self.basis_box.setToolTip(BASIS_TIP)
         self.basis_box.blockSignals(False)
         side = next((x for x in bse.installed() if x["path"] == file), None) if file else None
@@ -1085,10 +1115,44 @@ class SetupPanel(QtWidgets.QWidget):
                 lines.append(f"⚠ no Coulomb fit set (A1_coul) covers {', '.join(gaps)}: a DFT run's Hartree fit cannot be built")
         self.bse_note.setText("\n".join(lines) or "none (a shipped basis)")
 
+    def _add_offers(self, menu: list[dict]) -> None:
+        """The library's offers into the Basis box, in the GUI's order: an inadmissible one GREYED and unpickable, its reason the
+        tooltip; an opt-in one greyed but pickable (user ruling Q1).  Each item's data is its offer."""
+        grey = self.palette().color(QtGui.QPalette.Disabled, QtGui.QPalette.Text)
+        for o in basismenu.ordered(menu):
+            self.basis_box.addItem(o["name"] + (f"  — {o['note']}" if o["note"] else ""), {"offer": o})
+            it = self.basis_box.model().item(self.basis_box.count() - 1)
+            tip = "; ".join(x for x in (o["reason"], o["note"], f"blocks: {o['blockGroup']}" if o["blockGroup"] else "") if x)
+            it.setToolTip(tip)
+            if not o["admitted"]:
+                it.setEnabled(False)
+            elif o["optIn"]:
+                it.setForeground(grey)
+
+    def _select_offer(self, name: str) -> bool:
+        """Select the offer named `name`; False when the box has none."""
+        for k in range(self.basis_box.count()):
+            d = self.basis_box.itemData(k)
+            if isinstance(d, dict) and d["offer"]["name"] == name:
+                self.basis_box.setCurrentIndex(k)
+                return True
+        return False
+
     def _on_basis_pick(self, _i: int) -> None:
         i = self.basis_box.currentIndex()             # the box's own selection (what the person sees picked)
         file = self.basis_box.itemData(i)
         if self.basis_box.itemText(i) == _CHOOSE_BASIS:
+            return
+        if isinstance(file, dict):                    # the library's offer
+            o, s = file["offer"], self.draft.spec
+            if o["route"] == "molecule" and not o["key"]:          # the opt-in route: the same atom as a one-atom molecule
+                from .spec import molecule
+                site = s.structure.sites[0]
+                self.draft.set(molecule(s.label, [site.Z], list(site.xyz)), "user", f"Setup: {s.label} as a one-atom molecule")
+                return
+            name = o["key"].split("=", 1)[1]
+            patch = {"basis": name} if o["route"] == "atom" else {"basis": name, "solid2": {"basis_file": None}}
+            self._edit({"accuracy": {"representation": patch}}, "basis")
             return
         if self.draft.spec is not None and self.draft.spec.structure.kind in ("crystal", "atom"):
             self._edit({"accuracy": {"representation": {"basis": self.basis_box.itemText(i)}}}, "basis")
