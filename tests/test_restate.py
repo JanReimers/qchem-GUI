@@ -27,10 +27,10 @@ KEYS = {"accuracy": 0, "solid": {"cutoffFactor": 2.0, "tolerances": {"rasterX": 
                                                                       "vlocEps": 1.0000000000000002e-06}}}
 GRIDS = {"densityEcut": 20.0, "cutoffFactor": 2.0, "vlocEps": {"value": 1.0000000000000002e-06, "source": "derived",
                                                                "rigorous": 1e-05, "etaRouting": 10.0}}
-PILOTED = {"inline build@1": {"grids": GRIDS, "hamiltonian": {"xcQuadrature": {"kind": "Uniform", "N": [17, 17, 17]}}},
+PILOTED = {"inline build@1": {"grids": GRIDS, "hamiltonian": {"nonlinearMesh": {"kind": "Uniform", "N": [17, 17, 17]}}},
            "inline@2": {"rasterPilot": {"settled": True, "restate": KEYS}}}
 RESTATED = {"inline build@3": {"grids": {**GRIDS, "vlocEps": {"value": 1.0000000000000002e-06, "source": "stated"}},
-                               "hamiltonian": {"xcQuadrature": {"kind": "Uniform", "N": [17, 17, 17]}}},
+                               "hamiltonian": {"nonlinearMesh": {"kind": "Uniform", "N": [17, 17, 17]}}},
             "inline@4": {}}
 
 
@@ -77,8 +77,8 @@ class Reading(unittest.TestCase):
 
     def test_a_stated_value_is_the_grid_it_restates_and_a_changed_grid_is_named(self):
         self.assertEqual(gridinfo.grid_differences(PILOTED, RESTATED), [], "stated vs derived: the same value, the same grid")
-        moved = copy.deepcopy(RESTATED); moved["inline build@3"]["hamiltonian"]["xcQuadrature"]["N"] = [18, 18, 18]
-        self.assertEqual(gridinfo.grid_differences(PILOTED, moved), ["hamiltonian.xcQuadrature.N"])
+        moved = copy.deepcopy(RESTATED); moved["inline build@3"]["hamiltonian"]["nonlinearMesh"]["N"] = [18, 18, 18]
+        self.assertEqual(gridinfo.grid_differences(PILOTED, moved), ["hamiltonian.nonlinearMesh.N"])
 
 
 class TheButton(unittest.TestCase):

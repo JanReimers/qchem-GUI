@@ -127,7 +127,7 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
     lines, rows = [], []
     h, g = _section(record, "hamiltonian"), _section(record, "grids")
     hartree, vxc = h.get("Hartree") or {}, h.get("Vxc_DFT") or {}
-    q = h.get("xcQuadrature") or {}
+    q = h.get("nonlinearMesh") or {}
     for what, m in (("XC mesh", q), ("PP mesh", h.get("ppQuadrature")), ("Vxc fit mesh", vxc.get("auxiliaryFit"))):
         if m and "points" in m:                 # each integration mesh's own report (a Coulomb fit has none: see the top)
             lines.append(_mesh_line(what, m))
@@ -151,7 +151,7 @@ def built(record: Optional[dict]) -> tuple[list[str], list[tuple]]:
         else:
             lines.append(f"rasters: {what}" + (f" ({RASTER_SOURCES.get(src, src)})" if src else ""))
     if q.get("kind") and "points" not in q:
-        lines.append(f"XC quadrature: {q['kind']}")
+        lines.append(f"nonlinear mesh: {q['kind']}")
     for what, f in (("Vxc fit", vxc.get("vxcFitGrid")), ("mixer's Vxc fit", _section(record, "densityMixer").get("vxcFitGrid"))):
         if f and "N" in f:
             n = f["N"]
@@ -226,7 +226,7 @@ def restated_by(deck: dict, keys: dict) -> bool:
 
 #: what "the same grids" means: the grids section and the meshes the Hamiltonian was built on (a restated run converges
 #: COLD, so its energy agrees with the pilot's only to the SCF's gate: the grids are what must be identical)
-GRID_FACTS = (("grids", None), ("hamiltonian", "xcQuadrature"), ("hamiltonian", "ppQuadrature"))
+GRID_FACTS = (("grids", None), ("hamiltonian", "nonlinearMesh"), ("hamiltonian", "ppQuadrature"))
 #: entries of the grids section that report WORK done on the grids, not the grids: boxTasks (the collocation's task count) is
 #: filed root-anchored by the evaluator into whichever run is open, so one run of two identical grids may lack it
 #: and rasterSource says WHO set the rasters, not what they are: a deck restating a pilot's rasters states the same grids
