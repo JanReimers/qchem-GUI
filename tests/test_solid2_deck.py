@@ -104,12 +104,25 @@ class Refusals(unittest.TestCase):
         base = crystal("Si", *SI, materials="Si_diamond", accuracy={"representation": {"basis": "sipp_sr"}}).to_dict()
         cases = {"kmesh": ({"accuracy": base["accuracy"] | {"kmesh": None}}, "kmesh"),
                  "basis": ({"accuracy": base["accuracy"] | {"representation": None}}, "basis"),
-                 "all-electron basis": ({"accuracy": base["accuracy"] | {"representation": {"basis": "dzvp"}}}, "valence"),
                  "smearing": ({"physics": base["physics"] | {"occupations": {"smearing": "gaussian", "kT_Ha": 1e-3}}}, "Fermi-Dirac"),
                  "molecular mesh": ({"accuracy": base["accuracy"] | {"representation": {"basis": "sipp_sr", "solid2": {"mesh_radial": 80}}}}, "solid2")}
         for what, (patch, word) in cases.items():
             with self.subTest(what):
                 self.assertIn(word, D.why_not(RunSpec.from_dict(base | patch)) or "")
+
+    def test_an_all_electron_basis_is_refused_in_the_librarys_words(self):
+        """The file states its KIND; the library's crystal menu greys an all-electron one, and why_not says its reason."""
+        from qviz.backends.solid2 import Solid2Backend
+        qc = Solid2Backend()._qc
+        if qc is None or not hasattr(qc, "basis_offers"):
+            self.skipTest("qchem_py with basis_offers not built (QCHEM_BUILD)")
+        base = crystal("Si", *SI, materials="Si_diamond", accuracy={"kmesh": [1, 1, 1], "representation": {"basis": "sipp_sr"}}).to_dict()
+        self.assertIsNone(D.why_not(RunSpec.from_dict(base), qc))
+        ae = RunSpec.from_dict(base | {"accuracy": base["accuracy"] | {"representation": {"basis": "dzvp"}}})
+        self.assertEqual(D.why_not(ae, qc), "dzvp is an all-electron basis: a crystal runs on a pseudopotential and needs a "
+                                            "pseudopotential-valence basis")
+        nope = RunSpec.from_dict(base | {"accuracy": base["accuracy"] | {"representation": {"basis": "no_such_file"}}})
+        self.assertIn("not a basis file the library offers", D.why_not(nope, qc))
 
 
 @unittest.skipUnless(RUNDECK.exists() and (BENCH / "Si_Gamma_parity.json").exists(), "rundeck / qchem's decks not found")

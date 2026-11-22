@@ -38,24 +38,6 @@ from .base import code_block, shared_representation
 
 #: functional -> the pp set its run reads (pseudopotentials.json).  PADE is the GTH LDA set's OWN fit (lane H, Model::PADE): same set.
 _PP_SET = {"LDA": "gth-lda-valence", "PADE": "gth-lda-valence"}
-_BASES = ("SIPP", "SIPP_SR", "VALENCE_LOWQ", "VALENCE_LOWQ_SR", "VALENCE_LOWQ_SR2", "VALENCE_LOWQ_SPH",
-          "VALENCE_LOWQ_VA", "VALENCE_LOWQ_VB")       # BasisSetData values with a pseudopotential valence block
-
-
-def periodic_bases(elements) -> list[str]:
-    """The periodic (pseudopotential valence) bases that cover every one of `elements`, as the Basis box spells them."""
-    from . import gaussian_basis
-    want = {e.upper() for e in elements}
-    out = []
-    for b in _BASES:
-        try:
-            if want <= set(gaussian_basis.read_bsd(b.lower())):
-                out.append(b.lower())
-        except (OSError, ValueError):                 # a basis file this checkout lacks: not offered
-            pass
-    return out
-
-
 _PROJECTOR = {"ortho-atomic": {"orthoAtomic": True}, "pseudo-atomic": {"projector": "pseudoAtomic"},
               "lowdin": {"projector": "siteShells"}}
 _SOLID2_KEYS = {"deck", "threads"}                    # representation["solid2"] keys a crystal reads
@@ -96,8 +78,10 @@ def _material_mismatch(spec: RunSpec, name: str) -> Optional[str]:
     return None
 
 
-def why_not(spec: RunSpec) -> Optional[str]:
-    """None when the spec translates to a deck, else the reason (for a capability)."""
+def why_not(spec: RunSpec, qc=None) -> Optional[str]:
+    """None when the spec translates to a deck, else the reason (for a capability).  `qc`: qchem_py, whose crystal basis menu
+    (qchem::OrbitalBasisOffers) judges the stated basis file -- its KIND must be pseudopotential valence; without it (no binding,
+    so no run) the basis is not judged here."""
     ph, ac, tk = spec.physics, spec.accuracy, spec.task
     if spec.structure.kind != "crystal":
         return "the deck drives periodic runs only (a molecule goes through MoleculeSetup)"
@@ -114,8 +98,13 @@ def why_not(spec: RunSpec) -> Optional[str]:
         return f"representation {sorted(set(rep) - {'basis', 'spherical'})} not read by the periodic facade"
     if "basis" not in rep:
         return "Orbital basis must be user selected"
-    if rep["basis"].upper() not in _BASES:
-        return f"basis {rep['basis']} has no pseudopotential valence block (periodic bases: {', '.join(b.lower() for b in _BASES)})"
+    if qc is not None:
+        from .. import basismenu
+        o = basismenu.crystal_offer(spec, qc, rep["basis"])
+        if o is None:
+            return f"basis {rep['basis']} is not a basis file the library offers a crystal"
+        if not o["admitted"]:
+            return o["reason"]
     if set(code_block(spec, "solid2")) - _SOLID2_KEYS:
         return f"representation.solid2 {sorted(set(code_block(spec, 'solid2')) - _SOLID2_KEYS)} not read by a periodic run"
     for h in ph.hubbard:
@@ -170,7 +159,7 @@ def structure_entry(spec: RunSpec) -> str | dict:
 def to_deck(spec: RunSpec) -> dict:
     """The deck for `spec` (asserts why_not(spec) is None).  Only what the spec STATES or derives is written: the deck's
     defaults are the library's, and its revision file records them."""
-    assert why_not(spec) is None, why_not(spec)
+    assert why_not(spec) is None, why_not(spec)           # the structural refusals (the basis file is the library's: why_not(spec, qc))
     ph, ac, tk = spec.physics, spec.accuracy, spec.task
     tags = {s.tag: i for i, s in enumerate(spec.structure.sites) if s.tag}
     deck: dict = {"schema": deck_schema.SCHEMA, "structure": structure_entry(spec), "kmesh": list(ac.kmesh),

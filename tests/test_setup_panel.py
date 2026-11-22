@@ -173,14 +173,22 @@ class CrystalBasis(unittest.TestCase):
                                  "accuracy": {"kmesh": [1, 1, 1]}}).validate()
         draft = SpecDraft(nio)
         be = Solid2Backend()
-        panel = SetupPanel(draft, BackendRegistry([FakeBackend(), be]))
+        if be._qc is None or not hasattr(be._qc, "basis_offers"):
+            self.skipTest("qchem_py with basis_offers not built (QCHEM_BUILD): the crystal menu is the library's")
+        panel = SetupPanel(draft, BackendRegistry([FakeBackend(), be]), qc=be._qc)
         box = panel.basis_box
         self.assertTrue(box.isEnabled())
         items = [box.itemText(i) for i in range(box.count())]
         self.assertEqual(items[0], "— choose a basis —")
         self.assertIn("valence_lowq_va", items)
-        self.assertNotIn("dzvp", items, "a molecular basis has no pseudopotential valence block")
-        self.assertNotIn("sipp_sr", items, "sipp_sr covers Si and O, not Ni")
+        enabled = lambda name: box.model().item(items.index(name)).isEnabled()
+        tip = lambda name: box.model().item(items.index(name)).toolTip()
+        self.assertTrue(enabled("valence_lowq_va"))
+        self.assertFalse(enabled("dzvp"), "an all-electron file is listed greyed, never dropped")
+        self.assertIn("all-electron", tip("dzvp"))
+        self.assertFalse(enabled("sipp_sr"))
+        self.assertIn("has no block for Ni", tip("sipp_sr"), "sipp_sr covers Si and O, not Ni")
+        self.assertFalse(enabled("plane waves"), "the crystal deck the GUI writes names a Gaussian file")
         self.assertFalse(panel.method_box.isEnabled())
         self.assertIn("periodic facade", panel.method_box.toolTip(), "a disabled control says why")
         if be.why_no_build(nio) != "Orbital basis must be user selected":

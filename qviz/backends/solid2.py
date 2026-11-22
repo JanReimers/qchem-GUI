@@ -244,7 +244,7 @@ class Solid2Backend:
             return None                               # MoleculeCalculation::Prepare (the translate refuses what it cannot run)
         if spec.structure.kind == "atom":
             return solid2_atom.why_not(spec)          # AtomCalculation::Prepare
-        return solid2_deck.why_not(spec)
+        return solid2_deck.why_not(spec, self._qc)
 
     def build(self, job: Job) -> dict:
         """Every pre-SCF step alone and the build run's record: a crystal's deck::Build (basis, grids, pseudopotentials, audits),
@@ -284,12 +284,12 @@ class Solid2Backend:
             return lambda s: s.structure.kind != "molecule" or check(s)
 
         def crystal(s: RunSpec) -> bool:
-            return s.structure.kind != "crystal" or solid2_deck.why_not(s) is None
+            return s.structure.kind != "crystal" or solid2_deck.why_not(s, self._qc) is None
 
         def atom(s: RunSpec) -> bool:
             return s.structure.kind != "atom" or solid2_atom.why_not(s) is None
         return Capabilities(NAME, installed=self._qc is not None, why_absent=self._why_absent, features=[
-            Capability("structure.kind=crystal -> deck", crystal, lambda s: solid2_deck.why_not(s) or ""),
+            Capability("structure.kind=crystal -> deck", crystal, lambda s: solid2_deck.why_not(s, self._qc) or ""),
             Capability("structure.kind=atom -> the radial atom", atom, lambda s: solid2_atom.why_not(s) or ""),
             Capability("task.kind=energy", lambda s: s.task.kind == "energy",
                        "single points only (MoleculeSession relax is not bound; a crystal's compute_U runs in rundeck: "

@@ -1002,7 +1002,7 @@ class SetupPanel(QtWidgets.QWidget):
                 self.trim_box.addItem(f"stated (orthoTol {tol:g})", tol); i = self.trim_box.count() - 1
         self.trim_box.setCurrentIndex(i)
         self._bform.setRowVisible(self._trim_row, not mol)    # a molecule's basis is never trimmed here
-        self.shells_btn.setEnabled(not mol and self._run is None and self._qc is not None and hasattr(self._qc, "BasisShells") and solid2_deck.why_not(s) is None)
+        self.shells_btn.setEnabled(not mol and self._run is None and self._qc is not None and hasattr(self._qc, "BasisShells") and solid2_deck.why_not(s, self._qc) is None)
         self.kmesh.setText("×".join(map(str, ac.kmesh)) if ac.kmesh else ("—" if mol else "not stated"))
         start = solid2_deck.continues_from(s)
         self.start_label.setText(f"the saved state {pathlib.Path(start).name}"
@@ -1083,13 +1083,14 @@ class SetupPanel(QtWidgets.QWidget):
     # -- back ends ----------------------------------------------------------------
     # -- the basis: shipped files and the downloaded ones (qviz.bse) ------------------------------------------
     def _fill_basis_box(self, s: RunSpec) -> None:
-        """The Basis box: a molecule's shipped bases, then every downloaded set (its path as item data); a crystal's periodic
-        bases that cover its elements.  The spec's choice selected (a crystal with none: "choose a basis" first)."""
+        """The Basis box: the library's offers for the structure (an atom's radial families, a molecule's or a crystal's basis
+        files, the inadmissible ones greyed with the reason), a molecule's downloaded sets after them (each path as item data).
+        The spec's choice selected (a crystal with none: "choose a basis" first)."""
         basis, file = (s.accuracy.representation or {}).get("basis"), basisinfo.basis_file(s)
         self.basis_box.blockSignals(True)
         self.basis_box.clear()
         try:
-            menu = basismenu.offers(s, self._qc)      # the library's answer (atom, molecule); None: it cannot be asked
+            menu = basismenu.offers(s, self._qc)      # the library's answer (atom, molecule, crystal); None: it cannot be asked
         except Exception as e:                        # noqa: BLE001 -- the library's refusal: say it, keep the fallback list
             menu, self._menu_error = None, str(e)
         if s.structure.kind == "atom":            # a lone atom: the radial bases only (the user, 2026-11-21)
@@ -1102,17 +1103,17 @@ class SetupPanel(QtWidgets.QWidget):
                                       "offers them.  It fills the exponents from its pool (Medium) unless the deck block's atom.N / "
                                       "emin / emax or exponents say otherwise.  The greyed last entry runs the atom as a one-atom "
                                       "MOLECULE on 3-D Gaussians instead")
-        elif s.structure.kind == "crystal":
-            names = solid2_deck.periodic_bases({site.element for site in s.structure.sites})
-            self.basis_box.addItems(names)
+        elif s.structure.kind == "crystal":            # the library's crystal menu: an all-electron file greyed, with the reason
+            if menu is not None:
+                self._add_offers(menu)
             if not basis:
                 self.basis_box.insertItem(0, _CHOOSE_BASIS); self.basis_box.setCurrentIndex(0)
-            else:
-                if self.basis_box.findText(basis) < 0:
-                    self.basis_box.addItem(basis)
-                self.basis_box.setCurrentText(basis)
-            self.basis_box.setToolTip("The periodic (pseudopotential valence) bases that cover " + ", ".join(
-                sorted({site.element for site in s.structure.sites})) + (": " + ", ".join(names) if names else ": none"))
+            elif not self._select_offer(basis.lower()):
+                self.basis_box.addItem(basis); self.basis_box.setCurrentText(basis)
+            self.basis_box.setToolTip("The basis files the library offers this crystal: a pseudopotential-valence file that covers "
+                                      + ", ".join(sorted({site.element for site in s.structure.sites}))
+                                      + " is admitted; the others are greyed with the library's reason"
+                                      + ("" if menu is not None else " (qchem_py is not loaded: no menu)"))
         else:
             if menu is None:
                 self.basis_box.addItems(BASES)
@@ -1178,7 +1179,7 @@ class SetupPanel(QtWidgets.QWidget):
                 self.draft.set(molecule(s.label, [site.Z], list(site.xyz)), "user", f"Setup: {s.label} as a one-atom molecule")
                 return
             name = o["key"].split("=", 1)[1]
-            patch = {"basis": name} if o["route"] == "atom" else {"basis": name, "solid2": {"basis_file": None}}
+            patch = {"basis": name} if o["route"] in ("atom", "crystal") else {"basis": name, "solid2": {"basis_file": None}}
             self._edit({"accuracy": {"representation": patch}}, "basis")
             return
         if self.draft.spec is not None and self.draft.spec.structure.kind in ("crystal", "atom"):
