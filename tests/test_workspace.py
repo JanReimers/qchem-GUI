@@ -263,7 +263,7 @@ class Solid2EndToEnd(unittest.TestCase):
         self.assertEqual(run.backend_name, "SOLID²")
         run.compute(on_step=steps.append)
         self.assertIs(run.status, RunStatus.READY, run.error)
-        self.assertAlmostEqual(run.energy, -7.115067432, places=8)      # rundeck decks/Si_diamond_inline.json, same deck (lane-g 7c8f07cef = main bf7d7a05: -7.115067432; was -7.1150674706 before main 04fc3e043's rigorous 1E lattice-sum screens moved it 3.8e-8, pin-10 re-judged there; -7.1150676592 before lane S's 80fed9a8b)
+        self.assertAlmostEqual(run.energy, -7.115070075, places=8)      # rundeck decks/Si_diamond_inline.json, same deck (main 6be85f7eb, row 4cb017f0: -7.115070075 = lane A's absolute GPW level routing efdce930e, which routes diffuse pairs finer and moved the Si family -2.64 uHa, re-judged by lane A's routing eps scan; was -7.115067432 at lane-g 7c8f07cef = main bf7d7a05; was -7.1150674706 before main 04fc3e043's rigorous 1E lattice-sum screens moved it 3.8e-8, pin-10 re-judged there; -7.1150676592 before lane S's 80fed9a8b)
         self.assertEqual(steps[0].titles[:3], ("Etotal", "[F,D]", "ΔE/E"), "the periodic console's columns")
         # a cell whose stated electron count is not its valence sum: the setup refuses it, in its own words, before any SCF
         bad = RunSpec.from_dict(spec.to_dict() | {"accuracy": {"kmesh": [1, 1, 1], "representation": {
