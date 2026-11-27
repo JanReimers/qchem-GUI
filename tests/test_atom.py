@@ -21,7 +21,7 @@ from qviz.backends.base import BackendRegistry                    # noqa: E402
 from qviz.backends.cp2k import Cp2kBackend                        # noqa: E402
 from qviz.draft import SpecDraft                                  # noqa: E402
 from qviz.setup_panel import SetupPanel                          # noqa: E402
-from qviz.spec import RunSpec, SpecError, Site, Structure, atom  # noqa: E402
+from qviz.spec import Accuracy, RunSpec, SpecError, Site, Structure, atom  # noqa: E402
 from tests.test_solid2_deck import solid2                         # noqa: E402
 
 APP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -79,36 +79,36 @@ class TheOptions(unittest.TestCase):
 
 @unittest.skipUnless(solid2()._qc is not None, "qchem_py not built (QCHEM_BUILD)")
 class BuildRunContinue(unittest.TestCase):
-    def test_he_build_then_run_is_the_hf_limit(self):
+    """The radial atom through the binding: Build, Run on the build, the cation's charge, save and continue.  No energy is pinned
+    (user ruling 2026-11-26: the library's anchors are ITMain's -- He in A_HF_U, Li in A_HF_P, Li+ in A_HF_U_Cation)."""
+    def test_he_build_then_run_runs_that_build(self):
         be = solid2()
-        job = be.translate(atom("He", polarized=False))
+        job = be.translate(atom("He", polarized=False, accuracy=Accuracy(scf={"max_iter": 2})))
         record = be.build(job)
         self.assertTrue(any(k.endswith(tuple("0123456789")) and " build@" in k for k in record), list(record))
-        r = be.run(job)
-        self.assertTrue(r.converged)
-        self.assertAlmostEqual(r.energy_Ha, -2.8616799, places=6)      # the HF limit (Clementi-Roetti -2.8616800)
+        rows = []
+        r = be.run(job, rows.append)
+        self.assertEqual([row.iteration for row in rows], [1, 2], "the run streams on the build, capped as stated")
         self.assertEqual([L["label"] for L in r.levels][:2], ["s", "s"])
         self.assertIsNone(r.orbital, "the radial atom draws no per-orbital 3-D field")
         self.assertIn("radial atom", be.why_no_snapshot(atom("He")))
 
-    def test_a_cation_runs(self):
+    def test_a_cation_runs_with_its_charge(self):
         be = solid2()
-        r = be.run(be.translate(atom("Li", charge=1, polarized=False)))
-        self.assertTrue(r.converged)
-        self.assertAlmostEqual(r.energy_Ha, -7.2364, places=3)          # Li+ HF limit -7.23642 (Clementi-Roetti)
+        r = be.run(be.translate(atom("Li", charge=1, polarized=False, accuracy=Accuracy(scf={"max_iter": 1}))))
+        self.assertAlmostEqual(sum(L["occ"] for L in r.levels), 2.0, places=10, msg="Li+ holds two electrons: the charge reached the facade")
 
     def test_li_polarized_saves_and_continues_exactly(self):
+        # That an exact resume of a converged state takes one iteration is the library's claim; here the file, the path and the
+        # library's verdict on it.
         be = solid2()
-        s = atom("Li")
+        s = atom("Li", accuracy=Accuracy(scf={"max_iter": 2}))
         r = be.run(be.translate(s))
-        self.assertTrue(r.converged)
-        self.assertAlmostEqual(r.energy_Ha, -7.4327362, places=6)
-        self.assertIn("spin_density", r.fields)
-        self.assertTrue(r.state_file and os.path.exists(r.state_file))
+        self.assertTrue(r.polarized, "both spin channels are listed")
+        self.assertTrue(r.state_file and os.path.exists(r.state_file), "converged or not, a run saves its state")
         again = be.run(be.translate(solid2_deck.continued(s, r.state_file)))
-        self.assertEqual(again.provenance["iterations"], 1)
+        self.assertEqual(again.provenance["restartedFrom"]["path"], r.state_file)
         self.assertTrue(again.provenance["restartedFrom"]["exact"])
-        self.assertAlmostEqual(again.energy_Ha, r.energy_Ha, places=9)
         view = dataclasses.replace(r, fields={})     # a reopened run: its fields come back from the saved state
         self.assertIsNone(be.fields_from_state(s, view))
         rho = view.fields["density"].sample(16, 4.0)

@@ -1,6 +1,10 @@
 """The Workspace/Run model on the Backend seam: a spec runs on the first back end that can run it, a refused spec
 FAILS with the strip's reasons, the trace streams once and is kept, the project round-trips specs and back ends,
-and SOLID² (when the qchem extension is built) reproduces the water anchor.
+and SOLID² (when the qchem extension is built) runs through it.
+
+SCOPE (user ruling 2026-11-26): the GUI suite tests the binding's and the workspace's CONTRACT, never the library's numbers -- no
+energy is pinned here (the library's anchors live in ITMain: water HF/dzvp in M_HF_U).  A workspace keeps only a FINISHED run, so
+the READY-flow cases converge water HF/dzvp (~0.1 s); anything costlier is capped at a couple of iterations.
 
     QCHEM_BUILD=~/Code/qchem-lane-g/build/Release .venv/bin/python -m unittest discover -s tests
 """
@@ -132,13 +136,13 @@ class Solid2EndToEnd(unittest.TestCase):
     def ws(self):
         return Workspace("t", registry=BackendRegistry([SOLID2, FakeBackend()]))
 
-    def test_water_HF_dzvp_reproduces_the_anchor_and_streams_from_iteration_1(self):
+    def test_water_HF_dzvp_streams_from_iteration_1_and_lists_its_orbitals(self):
         steps = []
         run = self.ws().add_run(water(accuracy=Accuracy(representation={"basis": "dzvp"})), compute=False)
         self.assertEqual(run.backend_name, "SOLID²", "SOLID² is the default when it can run the spec")
         run.compute(on_step=steps.append)
         self.assertIs(run.status, RunStatus.READY, run.error)
-        self.assertAlmostEqual(run.energy, -76.0229032, places=6)     # M_HF_U water anchor
+        self.assertEqual(run.energy, steps[-1].energy, "the run's energy is its last row's")
         self.assertEqual(steps[0].iteration, 1)
         self.assertEqual(len(steps), len(run.scf))
         rep = run.report("orbitals")
@@ -168,11 +172,12 @@ class Solid2EndToEnd(unittest.TestCase):
                                msg="an iterate holds about the same electrons on this grid as the answer")
         self.assertGreater(float(np.abs(f.values - final.values).max()), 0.0, "an iterate, not the answer")
 
-    def test_a_crystal_s_density_is_sampled_converged_and_live(self):
-        """SolidRun.field over the cell's bounding box: Si's conventional cube holds 8 atoms x 4 valence electrons, so its sampled
-        rho integrates to 32 (measured 32.000000 at 24^3, 15 us/point); a snapshot asked at iteration 2 arrives at 3."""
+    def test_a_crystal_s_density_is_sampled_live(self):
+        """SolidRun.field over the cell's bounding box: Si's conventional cube holds 8 atoms x 4 valence electrons, so a sampled
+        iterate integrates to 32 (measured 32.000000 at 24^3, 15 us/point); a snapshot asked at iteration 2 arrives at 3.  Capped
+        at 3 iterations: the converged field is the library's (and a reopened crystal's, test_solid2_deck)."""
         from tests.test_solid2_deck import si_inline
-        run = self.ws().add_run(si_inline(), compute=False)
+        run = self.ws().add_run(si_inline(max_iter=3), compute=False)
         self.assertIsNone(SOLID2.why_no_snapshot(run.spec))
         got = []
 
@@ -180,17 +185,13 @@ class Solid2EndToEnd(unittest.TestCase):
             if row.iteration == 2:
                 self.assertIsNone(run.snapshot(lambda it, f, err: got.append((it, f, err)), n=24))
         run.compute(on_step=watch)
-        self.assertIs(run.status, RunStatus.READY, run.error)
+        self.assertIn("not converged after 3 iterations", run.error)
         it, f, err = got[0]
         self.assertIsNone(err)
         self.assertEqual(it, 3)
-        rho = run.density(n=24)
-        self.assertEqual(rho.values.shape, (24, 24, 24), "the fcc cell's bounding box is the conventional cube")
-        self.assertAlmostEqual(float(rho.values.sum()) * float(np.prod(rho.spacing)), 32.0, places=4)
+        self.assertEqual(f.values.shape, (24, 24, 24), "the fcc cell's bounding box is the conventional cube")
         self.assertAlmostEqual(float(f.values.sum()) * float(np.prod(f.spacing)), 32.0, places=4,
                                msg="every iterate holds the cell's electrons")
-        self.assertGreater(float(np.abs(f.values - rho.values).max()), 0.0, "an iterate, not the answer")
-        self.assertFalse(run.offers("spin_density"), "an unpolarized crystal offers no m(r)")
 
     def test_stop_ends_the_scf_at_the_next_iteration(self):
         steps = []
@@ -208,10 +209,10 @@ class Solid2EndToEnd(unittest.TestCase):
     def test_alpha_max_caps_the_linear_mixing_step(self):
         steps = []
         spec = water(theory="DFT", functional="LDA",
-                     accuracy=Accuracy(representation={"basis": "dzvp"}, scf={"mixing_alpha": 0.2, "mixing_alpha_max": 0.3}))
+                     accuracy=Accuracy(representation={"basis": "dzvp"}, scf={"mixing_alpha": 0.2, "mixing_alpha_max": 0.3,
+                                                                              "max_iter": 4}))
         run = self.ws().add_run(spec, compute=False)
-        run.compute(on_step=steps.append)
-        self.assertIs(run.status, RunStatus.READY, run.error)
+        run.compute(on_step=steps.append)                       # capped: the step each iteration printed is the claim
         alphas = [float(c.text.split()[1]) for r in steps for c in r.cells if c.title == "ρ_mix" and c.text.strip().startswith("Lin")]
         self.assertTrue(alphas, "a linear-mixing run prints its step")
         self.assertAlmostEqual(alphas[0], 0.2)
@@ -247,7 +248,6 @@ class Solid2EndToEnd(unittest.TestCase):
         d = polarized.to_dict(); d["physics"]["spin"]["polarized"] = True
         run = self.ws().add_run(RunSpec.from_dict(d).validate())
         self.assertIs(run.status, RunStatus.READY, run.error)
-        self.assertAlmostEqual(run.energy, -76.0229032, places=6)
         self.assertTrue(run.result.polarized, "both spin channels are listed")
         self.assertLess(np.abs(run.spin_density(16).values).max(), 1e-8)
 
@@ -257,13 +257,13 @@ class Solid2EndToEnd(unittest.TestCase):
             "label": "Si cell", "structure": {"kind": "crystal", "lattice_bohr": [[0, h, h], [h, 0, h], [h, h, 0]],
                                               "sites": [{"element": "Si", "frac": [0, 0, 0]}, {"element": "Si", "frac": [0.25, 0.25, 0.25]}]},
             "physics": {"theory": "DFT", "functional": "LDA", "core": "pseudopotential", "spin": {"polarized": False}},
-            "accuracy": {"kmesh": [1, 1, 1], "representation": {"basis": "sipp_sr", "solid2": {"deck": {"solid": {"densityEcut": 20.0}}}}}})
+            "accuracy": {"kmesh": [1, 1, 1], "scf": {"max_iter": 2},
+                         "representation": {"basis": "sipp_sr", "solid2": {"deck": {"solid": {"densityEcut": 20.0}}}}}})
         steps = []
         run = self.ws().add_run(spec, compute=False)
         self.assertEqual(run.backend_name, "SOLID²")
-        run.compute(on_step=steps.append)
-        self.assertIs(run.status, RunStatus.READY, run.error)
-        self.assertAlmostEqual(run.energy, -7.115070075, places=8)      # rundeck decks/Si_diamond_inline.json, same deck (main 6be85f7eb, row 4cb017f0: -7.115070075 = lane A's absolute GPW level routing efdce930e, which routes diffuse pairs finer and moved the Si family -2.64 uHa, re-judged by lane A's routing eps scan; was -7.115067432 at lane-g 7c8f07cef = main bf7d7a05; was -7.1150674706 before main 04fc3e043's rigorous 1E lattice-sum screens moved it 3.8e-8, pin-10 re-judged there; -7.1150676592 before lane S's 80fed9a8b)
+        run.compute(on_step=steps.append)                       # capped: the deck path, not the answer (the library's GPW_Si gates)
+        self.assertEqual([r.iteration for r in steps], [1, 2])
         self.assertEqual(steps[0].titles[:3], ("Etotal", "[F,D]", "ΔE/E"), "the periodic console's columns")
         # a cell whose stated electron count is not its valence sum: the setup refuses it, in its own words, before any SCF
         bad = RunSpec.from_dict(spec.to_dict() | {"accuracy": {"kmesh": [1, 1, 1], "representation": {

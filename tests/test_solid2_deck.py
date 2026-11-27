@@ -1,8 +1,12 @@
 """The RunSpec -> qchem deck translator (qviz.backends.solid2_deck; doc/RunSpecPlan.md §9 route (b)).
 
 GOLDEN DECKS: a spec stating what qchem's banked bench decks state translates to exactly that deck; the decks it writes are
-accepted by `rundeck --check`, and one runs end to end.  THE BRIDGE: the same deck through `qchem_py.SolidRun` (deck::Build)
-lands on rundeck's energy to the last digit, and a refusal / an unconverged SCF comes back in the library's words.
+accepted by `rundeck --check`.  THE BRIDGE: the same deck through `qchem_py.SolidRun` (deck::Build) runs the same iterates as
+rundeck to the last digit, and a refusal / an unconverged SCF comes back in the library's words.
+
+SCOPE (user ruling 2026-11-26): these test the BINDING'S CONTRACT -- what reaches the deck, the record and the rows -- never the
+library's numbers.  A run here is CAPPED at a couple of iterations (an unconverged run still saves its state, lists its levels and
+files its record); no test asserts an energy or depends on convergence.  The library's anchors live in its own ITMain gates.
 
     QCHEM_BUILD=~/Code/qchem-lane-g/build/Release .venv/bin/python -m unittest tests.test_solid2_deck
 """
@@ -10,6 +14,7 @@ import os as _os, tempfile as _tempfile
 _os.environ.setdefault("QCHEM_GUI_STATES", _tempfile.mkdtemp(prefix="qchem-gui-states-"))   # saved SCF states: never ~
 import json
 import locale
+import re
 import os
 import pathlib
 import subprocess
@@ -144,9 +149,10 @@ class RundeckReadsThem(unittest.TestCase):
 
     def test_si_gamma_runs_and_records_the_deck_it_was_given(self):
         deck = D.to_deck(from_bench("Si_Gamma_parity.json", *SI))
+        deck.setdefault("scf", {})["NMaxIter"] = 2                    # capped: the record, not the answer, is the claim
         r, rev = self.rundeck(deck)
-        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-        self.assertIn("[rundeck] CONVERGED", r.stdout)
+        self.assertIn("[rundeck] NOT converged", r.stdout, r.stderr[-2000:])
+        self.assertIsNotNone(rev, "a capped run still files its record")
 
         def within(ours, record, path="run"):          # every value the GUI stated is the value the record says ran
             if isinstance(ours, dict):
@@ -155,9 +161,11 @@ class RundeckReadsThem(unittest.TestCase):
             else:
                 self.assertEqual(ours, record, path)
         within(deck, rev["run"])
-        energies = [float(l.split()[3]) for l in r.stdout.splitlines() if l.startswith("[rundeck] Etot =")]
-        self.assertEqual(len(energies), 1, r.stdout[-2000:])
-        self.assertAlmostEqual(energies[0], -7.11506, delta=2e-5)    # CP2K's si_fcc_gpw.inp (doc/Records/CP2Kresults.md); ran -7.1150674
+
+
+def rundeck_iterates(stdout: str) -> list[float]:
+    """The Etotal column of rundeck's SCF table, one per iteration."""
+    return [float(m.group(2)) for m in (re.match(r"^\s+(\d+)\s+(-\d+\.\d+)\s", l) for l in stdout.splitlines()) if m]
 
 
 def si_inline(**scf) -> RunSpec:
@@ -199,23 +207,21 @@ class Continuation(unittest.TestCase):
 @unittest.skipUnless(solid2()._qc is not None and RUNDECK.exists(), "qchem_py / rundeck not built (QCHEM_BUILD)")
 class SavedStates(unittest.TestCase):
     def test_a_run_saves_its_state_and_a_continuation_under_gdm_resumes_from_it(self):
+        # That an exact resume's first iterate IS the saved answer is the library's claim (GPW_NaF.Γ_Imp_eqExactResume); here:
+        # the file is written, the path reaches the deck, and the library says it resumed from it.
         be = solid2()
-        first = be.run(be.translate(si_inline()))          # the facade's Auto (stated DIIS on Si Γ: 100 iterations, no convergence)
-        self.assertTrue(first.converged, first.failure)
-        self.assertTrue(first.state_file and os.path.exists(first.state_file))
+        first = be.run(be.translate(si_inline(max_iter=2)))
+        self.assertFalse(first.converged)
+        self.assertTrue(first.state_file and os.path.exists(first.state_file), "converged or not, a run saves its state")
         rows = []
-        then = be.run(be.translate(D.continued(si_inline(accelerator="GDM"), first.state_file)), rows.append)
-        self.assertTrue(then.converged, then.failure)
-        self.assertLessEqual(len(rows), 4, "a continuation starts at the answer, not from scratch")
-        self.assertAlmostEqual(rows[0].energy, first.energy_Ha, delta=1e-6, msg="its first iterate is the saved state")
-        # the first run stopped at [F,D] ~5e-6 (its gate); the resume, on the saved D, reads [F,D] ~1e-14 in one iteration -- the
-        # energies agree to the FIRST run's convergence (measured 1.9e-7 Ha), not tighter
-        self.assertAlmostEqual(then.energy_Ha, first.energy_Ha, delta=1e-6)
+        then = be.run(be.translate(D.continued(si_inline(accelerator="GDM", max_iter=2), first.state_file)), rows.append)
+        self.assertEqual(then.provenance["restartedFrom"]["path"], first.state_file)
+        self.assertTrue(rows, "the continuation streams its rows")
         self.assertNotEqual(then.state_file, first.state_file, "the continuation banks its own state")
 
     def test_a_state_of_another_crystal_is_refused_in_the_library_s_words(self):
         be = solid2()
-        si = be.run(be.translate(si_inline()))
+        si = be.run(be.translate(si_inline(max_iter=1)))
         strained = crystal("Si strained", fcc(10.5), SI[1],
                            accuracy={"representation": {"basis": "sipp_sr", "solid2": {"deck": {"solid": {"densityEcut": 20.0}}}}})
         with self.assertRaisesRegex(RuntimeError, "refused"):
@@ -223,8 +229,8 @@ class SavedStates(unittest.TestCase):
 
     def test_a_continued_crystal_says_it_resumed_exactly(self):
         be = solid2()
-        first = be.run(be.translate(si_inline()))
-        then = be.run(be.translate(D.continued(si_inline(accelerator="GDM"), first.state_file)))
+        first = be.run(be.translate(si_inline(max_iter=1)))
+        then = be.run(be.translate(D.continued(si_inline(accelerator="GDM", max_iter=1), first.state_file)))
         how = then.provenance["restartedFrom"]
         self.assertTrue(how["exact"], how)
         self.assertEqual(how["path"], first.state_file)
@@ -232,8 +238,7 @@ class SavedStates(unittest.TestCase):
         self.assertIsNone(first.provenance["restartedFrom"], "a fresh run restarted from nothing")
 
     def test_a_crystal_lists_its_levels_at_their_k(self):
-        res = solid2().run(solid2().translate(si_inline()))
-        self.assertTrue(res.converged, res.failure)
+        res = solid2().run(solid2().translate(si_inline(max_iter=1)))       # an iterate's levels marshal as the answer's do
         self.assertTrue(res.levels, "a crystal answers the structure-neutral levels (Calculation::MakeLevels)")
         es = [L["e"] for L in res.levels]
         self.assertEqual(es, sorted(es))
@@ -263,27 +268,21 @@ class MolecularSavedStates(unittest.TestCase):
 
     def test_a_molecule_saves_and_a_continuation_under_gdm_resumes_exactly(self):
         be = solid2()
-        first = be.run(be.translate(water()))
-        self.assertTrue(first.converged, first.failure)
-        self.assertTrue(first.state_file and os.path.exists(first.state_file))
-        rows = []
-        then = be.run(be.translate(D.continued(water(accelerator="GDM"), first.state_file)), rows.append)
-        self.assertTrue(then.converged, then.failure)
+        first = be.run(be.translate(water(max_iter=2)))
+        self.assertTrue(first.state_file and os.path.exists(first.state_file), "converged or not, a run saves its state")
+        then = be.run(be.translate(D.continued(water(accelerator="GDM", max_iter=2), first.state_file)))
         how = then.provenance["restartedFrom"]
         self.assertTrue(how["exact"], how)
+        self.assertEqual(how["path"], first.state_file)
         self.assertAlmostEqual(how["electrons"], 10.0, places=8)
-        self.assertLessEqual(len(rows), 4, "a continuation starts at the answer, not from scratch")
-        self.assertAlmostEqual(rows[0].energy, first.energy_Ha, delta=1e-6, msg="its first iterate is the saved state")
-        self.assertAlmostEqual(then.energy_Ha, first.energy_Ha, delta=1e-6)
         self.assertTrue(then.resolved["starts from"].startswith("exact resume"), then.resolved["starts from"])
         self.assertNotEqual(then.state_file, first.state_file, "the continuation banks its own state")
 
     def test_moved_atoms_are_a_warm_start_that_names_the_move(self):
         be = solid2()
-        first = be.run(be.translate(water()))
-        moved = water(xyz=(0, 0, 0, 0, 1.431, 1.171, 0, -1.431, 1.107))      # one H 0.064 bohr
+        first = be.run(be.translate(water(max_iter=1)))
+        moved = water(xyz=(0, 0, 0, 0, 1.431, 1.171, 0, -1.431, 1.107), max_iter=1)      # one H 0.064 bohr
         then = be.run(be.translate(D.continued(moved, first.state_file)))
-        self.assertTrue(then.converged, then.failure)
         how = then.provenance["restartedFrom"]
         self.assertFalse(how["exact"], how)
         self.assertAlmostEqual(how["maxDisplacement"], 0.064, places=6)
@@ -291,13 +290,13 @@ class MolecularSavedStates(unittest.TestCase):
 
     def test_a_state_of_another_basis_is_refused_in_the_library_s_words(self):
         be = solid2()
-        first = be.run(be.translate(water()))
+        first = be.run(be.translate(water(max_iter=1)))
         with self.assertRaisesRegex(RuntimeError, "restart refused \\(mismatch\\)"):
             be.run(be.translate(D.continued(water(basis="tzvp"), first.state_file)))
 
     def test_judge_state_answers_without_running(self):
         be = solid2()
-        first = be.run(be.translate(water()))
+        first = be.run(be.translate(water(max_iter=1)))
         n = be.translate(water()).native
         calc = be._qc.Calculator(n["numbers"], n["positions"], basis="dzvp", model="HF")
         self.assertEqual(calc.judge_state(first.state_file), {"exact": True, "warm": []})
@@ -388,23 +387,25 @@ class TheTrimIsReported(unittest.TestCase):
 
 
 class TheBridgeRunsThem(unittest.TestCase):
-    def test_the_inline_cell_lands_on_rundeck_s_energy(self):
-        be, spec = solid2(), si_inline()
+    def test_the_inline_cell_runs_rundeck_s_iterates(self):
+        """THE SMOKE (the one end-to-end run, user ruling 2026-11-26): the in-process bridge and rundeck, on one deck, run the same
+        iterates to rundeck's printed digits.  Capped at 3: every iterate is the same calculation, so no converged number is needed
+        and none is pinned (the library's GPW_Si gates own the answer)."""
+        be, spec = solid2(), si_inline(max_iter=3)
         self.assertTrue(be.capabilities().can_run(spec))
         job = be.translate(spec)
         self.assertIsInstance(json.loads(job.native["deck"])["structure"], dict, "a built cell goes inline")
         rows, host = [], locale.setlocale(locale.LC_ALL)
         res = be.run(job, rows.append)
         self.assertEqual(locale.setlocale(locale.LC_ALL), host, "the lib's console tables reset LC_ALL to C; the bridge puts it back")
-        self.assertTrue(res.converged, res.failure)
-        self.assertIsNone(res.failure)
         self.assertEqual(len(rows), res.provenance["iterations"])
         self.assertEqual(rows[0].titles[:2], ("Etotal", "[F,D]"), "the periodic console's own columns")
         self.assertEqual(res.provenance["deck"]["Nelec"], 8, "the resolved deck derives Nelec (schema 2: top level)")
         r, _ = RundeckReadsThem.rundeck(self, json.loads(job.native["deck"]))
-        etot = [float(l.split()[3]) for l in r.stdout.splitlines() if l.startswith("[rundeck] Etot =")]
-        self.assertEqual(len(etot), 1, r.stdout[-2000:])
-        self.assertAlmostEqual(res.energy_Ha, etot[0], delta=1e-9, msg="one deck, one path: the bridge IS rundeck")
+        theirs = rundeck_iterates(r.stdout)
+        self.assertEqual(len(theirs), 3, r.stdout[-2000:])
+        for i, (ours, rd) in enumerate(zip((row.energy for row in rows), theirs), 1):
+            self.assertAlmostEqual(ours, rd, delta=1e-11, msg=f"iterate {i}: one deck, one path -- the bridge IS rundeck")
 
     def test_a_capped_scf_says_why_and_hands_back_no_energy(self):
         be = solid2()
@@ -459,14 +460,19 @@ class TheBridgeRunsThem(unittest.TestCase):
         from qviz import molecules
         import dataclasses
         be, spec = solid2(), molecules.preset_spec("Methane (CH4)")
+        spec = dataclasses.replace(spec, accuracy=dataclasses.replace(spec.accuracy, scf={**spec.accuracy.scf, "max_iter": 1}))
         base = be.run(be.translate(spec))
+        sad, first = dataclasses.replace(spec, accuracy=dataclasses.replace(spec.accuracy, scf={**spec.accuracy.scf, "seed": "SAD"})), []
+        be.run(be.translate(sad), first.append)
         core = dataclasses.replace(spec, accuracy=dataclasses.replace(spec.accuracy, scf={**spec.accuracy.scf, "seed": "CoreGuess"}))
         sph = dataclasses.replace(spec, accuracy=dataclasses.replace(spec.accuracy,
                                                                     representation={**spec.accuracy.representation, "spherical": True}))
         self.assertEqual((be.translate(core).native["seed"], be.translate(sph).native["angular"]), ("CoreGuess", "spherical"))
-        rc, rs = be.run(be.translate(core)), be.run(be.translate(sph))
-        self.assertTrue(base.converged and rc.converged and rs.converged)
-        self.assertAlmostEqual(rc.energy_Ha, base.energy_Ha, places=7, msg="the seed moves the start, not the answer")
+        cored = []
+        rc, rs = be.run(be.translate(core), cored.append), be.run(be.translate(sph))
+        # the run report does not file the seed a run took (flagged to the library, 2026-11-26), so its EFFECT is the evidence:
+        # rho = 0 and SAD are different first iterates (a different start, not a pinned number; Auto is the core guess here)
+        self.assertGreater(abs(cored[0].energy - first[0].energy), 1e-3, "the stated seed reached the library")
         self.assertLess(len(rs.levels), len(base.levels), "spherical Gaussians drop each d shell's s contaminant")
 
     def test_a_pade_crystal_states_its_model_and_the_library_takes_it(self):
@@ -497,9 +503,9 @@ class TheBridgeRunsThem(unittest.TestCase):
         r, _ = RundeckReadsThem.rundeck(self, deck, "--check")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         be, m = solid2(), molecules.preset_spec("Methane (CH4)")
-        m = dataclasses.replace(m, accuracy=dataclasses.replace(m.accuracy, representation={**m.accuracy.representation, "solid2": {"threads": 2}}))
+        m = dataclasses.replace(m, accuracy=dataclasses.replace(m.accuracy, representation={**m.accuracy.representation, "solid2": {"threads": 2}},
+                                                              scf={**m.accuracy.scf, "max_iter": 1}))
         res = be.run(be.translate(m))
-        self.assertTrue(res.converged, res.failure)
         thr = next(r["scf"]["advanced"]["threads"] for r in res.record.values() if (r.get("scf") or {}).get("advanced"))
         self.assertEqual(thr["openmp"], 2, "the run's report files the count it ran on")
 
@@ -529,10 +535,9 @@ class TheBridgeRunsThem(unittest.TestCase):
         from qviz.spec import Accuracy, molecule
         be = solid2()
         w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
-                     accuracy=Accuracy(scf={"gate_de": 1e-8, "gate_drho": "off"}))
+                     accuracy=Accuracy(scf={"gate_de": 1e-8, "gate_drho": "off", "max_iter": 2}))
         rows = []
         res = be.run(be.translate(w), rows.append)
-        self.assertTrue(res.converged, res.failure)
         std = next(r["scf"]["standard"] for k, r in res.record.items() if (r.get("scf") or {}).get("standard"))
         self.assertEqual((std["minDE"], std["minDrho"], std["minFD"]), (1e-8, "off", 1e-5))
         tol = {c.title: c.tolerance for c in rows[-1].cells}
@@ -568,6 +573,7 @@ class TheBridgeRunsThem(unittest.TestCase):
         d = accelerator_defaults(si_inline(), mol=False)
         self.assertEqual((diis["nProj"], diis["svTol"], diis["engageBelowFD"]), (d["depth"], d["sv"], float(d["engage"])))
         spec = molecules.preset_spec("Methane (CH4)")                      # HF all-electron: the Z-scaled engage gate
+        spec = RunSpec.from_dict(spec.to_dict() | {"accuracy": spec.to_dict()["accuracy"] | {"scf": {**spec.accuracy.scf, "max_iter": 1}}})
         rec = next(iter(be.run(be.translate(spec)).record.values()))["accelerators"][0]
         d = accelerator_defaults(spec, mol=True)
         self.assertEqual((rec["nProj"], rec["svTol"], rec["svTolRel"]), (d["depth"], d["sv"], d["sv_rel"]))
@@ -577,23 +583,25 @@ class TheBridgeRunsThem(unittest.TestCase):
         from qviz import molecules
         from qviz.spec import RunSpec
         d = molecules.preset_spec("Methane (CH4)").to_dict()
-        d["accuracy"]["scf"] = {"impose_symmetry": True}
+        d["accuracy"]["scf"] = {"impose_symmetry": True, "max_iter": 2}      # an iterate's levels carry the same irrep labels
         res = solid2().run(solid2().translate(RunSpec.from_dict(d)))
         occ = [f"{L['n']}{L['label']}" for L in res.levels if L["occ"] > 0.5]
         self.assertEqual(sorted(occ), ["1A1", "1B1", "1B2", "2A1", "3A1"], "C2v blocking: t2 splits into 3A1 + 1B1 + 1B2")
 
-    def test_a_molecular_ladder_hands_over_to_gdm(self):
+    def test_a_molecular_ladder_s_switch_reaches_the_library(self):
+        # WHEN the Ladder hands over to GDM is the library's behaviour (its accelerator unit tests); the binding's part is that the
+        # stated switch reaches the facade, and the BUILD record (no SCF) files the Ladder it built.
         from qviz.spec import Accuracy, molecule
         be = solid2()
-        for switch, hands in ((None, True), (0.0, False)):
+        for switch, recorded in ((None, 1e-6), (1e-5, 1e-5), (0.0, 0.0)):
             with self.subTest(switch_at=switch):
-                w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
+                w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107],
                              accuracy=Accuracy(scf={"accelerator": "Ladder", **({} if switch is None else {"ladder_switch_at": switch})}))
-                rows = []
-                res = be.run(be.translate(w), rows.append)
-                self.assertTrue(res.converged, res.failure)
-                accel = [c.text for r in rows for c in r.cells if c.title == "accel"]
-                self.assertEqual(any("GDM" in a for a in accel), hands, accel)
+                job = be.translate(w)
+                self.assertEqual(job.native["ladder_switch_at"], -1.0 if switch is None else switch, "unstated: the lib's default")
+                record = be.build(job)
+                ladder = next(a for r in record.values() for a in r.get("accelerators", []) if a.get("type") == "Ladder")
+                self.assertEqual(ladder["switchAt"], recorded, "the record files the Ladder the build made, with its switch")
 
     def test_the_library_refuses_a_molecule_s_g_space_mixer_and_runs_its_smearing(self):
         from qviz.backends.base import Refused
@@ -607,8 +615,10 @@ class TheBridgeRunsThem(unittest.TestCase):
         self.assertIn("periodic (G-space) run", str(got.exception))
         smeared = RunSpec.from_dict(w.to_dict() | {"accuracy": {"epsilon_Ha_per_atom": 1e-5},
                                                    "physics": w.to_dict()["physics"] | {"occupations": {"smearing": "fermi-dirac", "kT_Ha": 0.01}}})
+        smeared = RunSpec.from_dict(smeared.to_dict() | {"accuracy": smeared.to_dict()["accuracy"] | {"scf": {"max_iter": 1}}})
         res = be.run(be.translate(smeared))
-        self.assertTrue(res.converged, res.failure)
+        std = next(r["scf"]["standard"] for r in res.record.values() if (r.get("scf") or {}).get("standard"))
+        self.assertEqual(std["smearingkT"], 0.01, "the run's record files the smearing it ran")
 
     def test_compute_u_is_rundeck_s(self):
         s = mno_plus_u()
@@ -651,7 +661,8 @@ class TheSetupRefusesAsAValue(unittest.TestCase):
 @unittest.skipUnless(solid2()._qc is not None, "qchem_py not built (QCHEM_BUILD)")
 class ReopenedRunsDraw(unittest.TestCase):
     """A run reopened from a workspace file draws its 3D fields from its SAVED STATE (qchem_py.StateView: the basis and the
-    saved D / C, no SCF) -- the same fields the live run drew -- and says so when the state is gone."""
+    saved D / C, no SCF) -- the same fields the live run drew -- and says so when the state is gone.  A workspace keeps only a
+    FINISHED run, so the workspace cases converge water HF/dzvp (~0.1 s); no number of it is asserted."""
 
     def reopened(self, spec):
         """`spec` computed in a workspace, saved, and reopened: (the live run, the reopened run)."""
@@ -681,10 +692,18 @@ class ReopenedRunsDraw(unittest.TestCase):
         np.testing.assert_allclose(back.orbital(homo, n=16).values, live.orbital(homo, n=16).values, rtol=1e-10, atol=1e-12)
 
     def test_a_reopened_crystal_draws_its_density_from_its_saved_state(self):
+        # The back end's reopen path on a capped run's state (a workspace keeps only finished runs, and a crystal converges in
+        # seconds, not here): the view the library builds from the file samples the cell's electrons over its bounding box.
+        import dataclasses
         import numpy as np
-        live, back = self.reopened(si_inline())
-        self.assertIsNone(back.fields_why_not, back.fields_why_not)
-        np.testing.assert_allclose(back.density(n=16).values, live.density(n=16).values, rtol=1e-11, atol=1e-13)
+        be = solid2()
+        res = be.run(be.translate(si_inline(max_iter=1)))
+        back = dataclasses.replace(res, fields={})
+        self.assertIsNone(be.fields_from_state(si_inline(max_iter=1), back))
+        rho = back.fields["density"].sample(24, 0.0)
+        self.assertEqual(rho.values.shape, (24, 24, 24), "the fcc cell's bounding box is the conventional cube")
+        self.assertAlmostEqual(float(rho.values.sum()) * float(np.prod(rho.spacing)), 32.0, places=4,
+                               msg="8 Si x 4 valence electrons in the conventional cube")
 
     def test_a_reopened_run_whose_state_is_gone_says_so(self):
         from qviz import project
@@ -702,7 +721,7 @@ class ReopenedRunsDraw(unittest.TestCase):
 
     def test_a_state_that_is_not_the_spec_s_is_refused_in_the_library_s_words(self):
         be = solid2()
-        first = be.run(be.translate(water()))
+        first = be.run(be.translate(water(max_iter=1)))
         n = be.translate(water(xyz=(0, 0, 0, 0, 1.431, 1.171, 0, -1.431, 1.107))).native      # one H moved 0.064 bohr
         with self.assertRaisesRegex(RuntimeError, "view refused \\(mismatch\\).*reopen the run's own spec"):
             be._qc.StateView.molecule(n["numbers"], n["positions"], basis="dzvp", model=n["model"], path=first.state_file)

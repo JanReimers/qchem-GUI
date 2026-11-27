@@ -418,12 +418,12 @@ class GridsTab(unittest.TestCase):
         self.assertEqual(basisinfo.fits(lda, rec)[:2], ["Hartree ρ fit: A1_coul, 70 functions", "Vxc fit: DeltaFit, 900 functions"],
                          "read by key: the record's member order is construction order")
 
-    def test_build_fills_the_tabs_and_run_converges_that_build(self):
+    def test_build_fills_the_tabs_and_run_runs_that_build(self):
         if self.qc is None:
             self.skipTest(self.why)
         from qviz.backends.solid2 import Solid2Backend
         from tests.test_solid2_deck import SI, crystal
-        si = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}})
+        si = crystal("Si", *SI, accuracy={"representation": {"basis": "sipp_sr"}, "scf": {"max_iter": 1}})   # Build -> Run, not the answer
         be = Solid2Backend()
         panel = SetupPanel(SpecDraft(si), BackendRegistry([FakeBackend(), be]), qc=self.qc)
         self.assertTrue(panel.build_btn.isEnabled())
@@ -441,7 +441,7 @@ class GridsTab(unittest.TestCase):
         self.qc.SolidRun = lambda deck: made.append(deck) or real(deck)
         try:
             job = be.translate(si)
-            res = be.run(job)                          # the kept Build of this deck: converged, not rebuilt
+            res = be.run(job)                          # the kept Build of this deck: run on, not rebuilt
             self.assertEqual(made, [])
             self.assertTrue(any(k.split("@")[0].endswith(" build") for k in res.record), "the build run stays in the record")
             self.assertIn("density Ecut floor", "\n".join(gridinfo_built(job.live)))
@@ -465,14 +465,14 @@ class GridsTab(unittest.TestCase):
         self.assertIn("from the run of this spec", panel.grids_source.text())
         self.assertIn("29,100 points", panel.grids_built.text())
 
-    def test_a_molecule_builds_and_run_converges_that_build(self):
+    def test_a_molecule_builds_and_run_runs_that_build(self):
         if self.qc is None:
             self.skipTest(self.why)
         from qviz import gridinfo
         from qviz.backends.solid2 import Solid2Backend
         from qviz.spec import Accuracy, molecule
         w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
-                     accuracy=Accuracy(representation={"basis": "dzvp"}))
+                     accuracy=Accuracy(representation={"basis": "dzvp"}, scf={"max_iter": 2}))      # Build -> Run, not the answer
         be = Solid2Backend()
         panel = SetupPanel(SpecDraft(w), BackendRegistry([FakeBackend(), be]), qc=self.qc)
         self.assertTrue(panel.build_btn.isEnabled(), panel.build_btn.toolTip())
@@ -488,15 +488,15 @@ class GridsTab(unittest.TestCase):
         self.qc.Calculator = lambda *a, **k: made.append(k) or real(*a, **k)
         try:
             rows = []
-            res = be.run(be.translate(w), rows.append)   # the kept Build of this job: converged, not rebuilt
+            res = be.run(be.translate(w), rows.append)   # the kept Build of this job: run on, not rebuilt
             self.assertEqual(made, [])
-            self.assertTrue(res.converged, res.failure)
             self.assertEqual(rows[0].iteration, 1, "the SCF on the built graph streams from its first iteration")
             self.assertTrue(any(k.split("@")[0].endswith(" build") for k in res.record), "the build run stays in the record")
             self.assertTrue(gridinfo.built(res.record)[0], "the SCF run's own mesh report")
-            fresh = be.run(be.translate(w))            # the Build was consumed: a second Run builds afresh
+            again = []
+            be.run(be.translate(w), again.append)      # the Build was consumed: a second Run builds afresh
             self.assertEqual(len(made), 1)
-            self.assertAlmostEqual(fresh.energy_Ha, res.energy_Ha, delta=1e-8, msg="Build -> Run is the same calculation")
+            self.assertEqual([r.energy for r in again], [r.energy for r in rows], "Build -> Run is the same calculation, iterate by iterate")
         finally:
             self.qc.Calculator = real
 
@@ -507,7 +507,7 @@ class GridsTab(unittest.TestCase):
         from qviz.backends.solid2 import Solid2Backend
         from qviz.spec import Accuracy, molecule
         w = molecule("water", [8, 1, 1], [0, 0, 0, 0, 1.431, 1.107, 0, -1.431, 1.107], theory="DFT", functional="LDA",
-                     accuracy=Accuracy(representation={"basis": "dzvp"}))
+                     accuracy=Accuracy(representation={"basis": "dzvp"}, scf={"max_iter": 1}))      # the record, not the answer
         be = Solid2Backend()
         job = be.translate(w)
         res = be.run(job)

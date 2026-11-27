@@ -180,11 +180,9 @@ class F2OnBothCodes(unittest.TestCase):
         self.assertEqual([r.backend_name for r in runs], ["SOLID²", "CP2K"])
         for r in runs:
             self.assertIs(r.status, RunStatus.READY, r.error)
-        # each leg against its own converged value (2026-10-30): SOLID² mesh-converged from 80/29 up; CP2K 800 Ry in its
-        # 22-bohr MT box (1200 Ry and a 40-bohr box move it < 40 μHa).  The 7.9 mHa BETWEEN them is an OPEN defect,
-        # localized to SOLID²'s molecular PP route (the crystal route matches CP2K on NaF to 0.1 mHa) -- not pinned here.
-        self.assertAlmostEqual(runs[0].energy, -48.19259, delta=1e-4)
-        self.assertAlmostEqual(runs[1].energy, -48.20058, delta=1e-5)
+        # No energy is pinned (user ruling 2026-11-26): F2 on this route is the library's M_DFT.F2_PP gate, which holds PySCF to
+        # 2e-5 and quotes CP2K -48.20058.  (The -48.19259 once pinned here was the molecular PP route's 7.9 mHa defect, fixed by
+        # lane S's delta-fit Hartree default, 2026-11-22; this LONG-gated case never ran to show it.)
         heads, rows = compare.code_table(runs)
         self.assertIn("XC mesh", dict(rows))
         self.assertIn("cutoff", dict(rows))
